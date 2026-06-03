@@ -1,3 +1,0 @@
-display_name: Glimpse
-short_description: Turn research into sourced Markdown and optional visual HTML maps.
-default_prompt: Use Glimpse to turn this policy or research topic into a clear sourced Markdown explanation. If I ask for HTML, create it only after the Markdown logic is finished.
