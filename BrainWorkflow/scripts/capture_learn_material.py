@@ -1,5 +1,6 @@
 import html
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,9 +10,7 @@ from urllib.parse import quote
 from wqb.client import WQBClient
 
 
-OUTPUT_DIR = Path("knowledge/rawmaterial/learn")
-WIKI_LEARN_PAGE = Path("knowledge/wiki/10_foundations/learn_material_index.md")
-WIKI_OPERATOR_PAGE = Path("knowledge/wiki/20_semantics/operator_catalog_official.md")
+KNOWLEDGE_ROOT_ENV = "BRAIN_KNOWLEDGE_ROOT"
 PAGE_LIMIT = 100
 MAX_RECORDS = 1000
 REQUEST_TIMEOUT_SECONDS = 12
@@ -66,6 +65,20 @@ PAGINATED_ENDPOINTS = {
     "recommended_readings": "/recommended-readings",
 }
 COURSE_TERMS = ["course", "courses"]
+
+
+def default_knowledge_root() -> Path:
+    """Input: none. Output: Path. Resolve the shared Obsidian knowledge vault root."""
+    configured = os.environ.get(KNOWLEDGE_ROOT_ENV, "").strip()
+    if configured:
+        return Path(configured)
+    return Path(__file__).resolve().parents[3] / "knowledge"
+
+
+KNOWLEDGE_ROOT = default_knowledge_root()
+OUTPUT_DIR = KNOWLEDGE_ROOT / "rawmaterial" / "learn"
+WIKI_LEARN_PAGE = KNOWLEDGE_ROOT / "wiki" / "10_foundations" / "learn_material_index.md"
+WIKI_OPERATOR_PAGE = KNOWLEDGE_ROOT / "wiki" / "20_semantics" / "operator_catalog_official.md"
 
 
 def write_json(path: Path, payload: Any) -> None:

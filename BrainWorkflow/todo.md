@@ -116,3 +116,28 @@
 - Ran the live read-only planner with `configs/stage1_usa_d1.yaml`.
 - Generated four current research option cards under `knowledge/wiki/70_decisions` without running simulations or submissions.
 - Verification passed: full unittest discovery ran 169 tests successfully, Learn raw JSON parsed, research option JSONL parsed, and compiled wiki placeholder scan was clean.
+
+## 2026-07-09 Shared Knowledge Vault Migration
+
+### Requirement Summary
+- Use `C:\Users\oytl\Desktop\pyproject\brain\knowledge` as the only Obsidian knowledge vault.
+- Move the BrainWorkflow knowledge material into that shared vault.
+- Remove the repository-local `BrainWorkflow\knowledge` copy after validation.
+
+### Confirmed Details
+- Keep `docs/knowledge` as compact repository documentation; it is not the Obsidian vault.
+- Preserve root vault `.obsidian` settings.
+- Future knowledge-writing commands should default to the shared vault and avoid recreating `BrainWorkflow\knowledge`.
+
+### Execution Plan
+- Merge the repository-local knowledge files into the root vault.
+- Change Learn capture and research option defaults to resolve the shared vault, with `BRAIN_KNOWLEDGE_ROOT` as an override.
+- Add a regression test for the shared-vault default.
+- Delete the repository-local knowledge copy and ignore accidental future recreation.
+- Run full verification.
+
+### Completion
+- Merged Learn raw material, official operator catalog, principles, decision cards, and wiki index updates into the root vault.
+- Updated `scripts/capture_learn_material.py` and `wqb/cli.py` to default to the shared vault.
+- Removed `BrainWorkflow\knowledge` and added `knowledge/` to `.gitignore`.
+- Verification passed: full unittest discovery ran 170 tests successfully.

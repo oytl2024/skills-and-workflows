@@ -22,8 +22,8 @@ docs/knowledge/cache/
 docs/knowledge/*snapshot*.json
 docs/knowledge/*details*.json
 docs/knowledge/platform_metadata_*.json
+knowledge/
 
 # Local editor state.
 .vscode/
 .idea/
-knowledge/.obsidian/workspace.json

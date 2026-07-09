@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -18,6 +19,8 @@ from wqb.cli import (
     config_overrides_from_args,
     complete_in_flight_simulations,
     dry_run,
+    default_knowledge_root,
+    default_option_output_dir,
     format_parallel_stage_plan,
     inspect_existing_alpha,
     is_http_status_error,
@@ -66,6 +69,17 @@ def cleanup_run_dir(run_dir: Path) -> None:
 
 
 class CliTests(unittest.TestCase):
+    def test_default_knowledge_root_uses_shared_workspace_vault(self):
+        expected = TESTS_DIR.parents[2] / "knowledge"
+
+        self.assertEqual(default_knowledge_root(), expected)
+        self.assertEqual(Path(default_option_output_dir()), expected / "wiki" / "70_decisions")
+
+        custom_root = TESTS_DIR / "_custom_knowledge"
+        with patch.dict(os.environ, {"BRAIN_KNOWLEDGE_ROOT": str(custom_root)}):
+            self.assertEqual(default_knowledge_root(), custom_root)
+            self.assertEqual(Path(default_option_output_dir()), custom_root / "wiki" / "70_decisions")
+
     def test_config_overrides_from_args_includes_request_hyperparameters(self):
         args = Namespace(
             max_alphas_per_round=30,

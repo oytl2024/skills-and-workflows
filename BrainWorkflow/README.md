@@ -20,7 +20,7 @@ This folder contains the maintainable code and documentation from the local Brai
 - `docs/superpowers/specs/`: design specs.
 - `docs/superpowers/plans/`: implementation plans.
 - `docs/knowledge/`: compact operational rules and foundation notes.
-- `knowledge/`: Obsidian-readable compiled wiki.
+- `../../knowledge/`: shared Obsidian vault for raw material, compiled wiki pages, decision cards, and long-term research memory.
 
 The following local artifacts are intentionally excluded:
 
@@ -38,6 +38,11 @@ Do not hardcode credentials. The workflow expects WorldQuant BRAIN credentials t
 $env:WQB_USERNAME="..."
 $env:WQB_PASSWORD="..."
 ```
+
+## Knowledge Vault
+
+The local Obsidian vault is outside this repository at `C:\Users\oytl\Desktop\pyproject\brain\knowledge`.
+Commands that write knowledge use `BRAIN_KNOWLEDGE_ROOT` when set; otherwise they resolve that shared vault from the current workspace layout.
 
 ## Basic Verification
 

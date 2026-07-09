@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import time
 from collections import Counter
 from dataclasses import asdict
@@ -39,6 +40,20 @@ FIELD_BATCH_API_MAX_RECORDS = 80
 FIELD_BATCH_SEED_FIELD_LIMIT = 40
 FIELD_BATCH_CANDIDATE_BUFFER_MULTIPLIER = 3
 DEFAULT_MULTI_CHUNK_SLEEP_SECONDS = 0.0
+KNOWLEDGE_ROOT_ENV = "BRAIN_KNOWLEDGE_ROOT"
+
+
+def default_knowledge_root() -> Path:
+    """Input: none. Output: Path. Resolve the shared Obsidian knowledge vault root."""
+    configured = os.environ.get(KNOWLEDGE_ROOT_ENV, "").strip()
+    if configured:
+        return Path(configured)
+    return Path(__file__).resolve().parents[3] / "knowledge"
+
+
+def default_option_output_dir() -> str:
+    """Input: none. Output: str path. Return the default research option card directory."""
+    return str(default_knowledge_root() / "wiki" / "70_decisions")
 
 
 def make_run_dir(config: dict[str, Any]) -> Path:
@@ -2909,7 +2924,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--request-max-retries", type=int, default=None)
     parser.add_argument("--request-base-backoff-seconds", type=int, default=None)
     parser.add_argument("--max-options", type=int, default=5)
-    parser.add_argument("--option-output-dir", default="knowledge/wiki/70_decisions")
+    parser.add_argument("--option-output-dir", default=default_option_output_dir())
     return parser.parse_args()
 
 
