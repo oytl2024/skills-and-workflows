@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from wqb.principle_model import IncentiveSnapshot, OptionCard, ScoreBreakdown, SourceEvidence, validate_option_card
 
 
@@ -7,6 +9,7 @@ POWER_POOL_BASE_SCORE = 7.5
 THEME_BASE_SCORE = 6.0
 COMPETITION_BASE_SCORE = 5.5
 REFRESH_RECOVERY_SCORE = 10.0
+STALE_REFRESH_PENALTY = 3.0
 
 
 # Input: IncentiveSnapshot, path fragment, fallback title; Output: SourceEvidence; Purpose: choose the most relevant evidence row for one option card.
@@ -21,6 +24,36 @@ def _source(snapshot: IncentiveSnapshot, path_fragment: str, fallback_title: str
 def _score(total: float, name: str, reason: str, penalty_name: str = "", penalty: float = 0.0) -> ScoreBreakdown:
     penalties = {penalty_name: penalty} if penalty_name else {}
     return ScoreBreakdown(total=total - penalty, components={name: total}, penalties=penalties, reasons=[reason])
+
+
+# Input: IncentiveSnapshot; Output: bool; Purpose: decide whether the snapshot contains any visible opportunity evidence beyond refresh errors.
+def _has_visible_opportunities(snapshot: IncentiveSnapshot) -> bool:
+    return bool(snapshot.activities or snapshot.competitions or snapshot.power_pool_boards or snapshot.rule_pages)
+
+
+# Input: OptionCard; Output: OptionCard; Purpose: mark cached opportunity cards as uncertain and apply a stale-refresh score penalty.
+def _apply_refresh_uncertainty(card: OptionCard) -> OptionCard:
+    stale_evidence = [
+        replace(
+            item,
+            stale=True,
+            note=item.note or "Displayed from cached evidence because the latest refresh failed.",
+        )
+        for item in card.evidence
+    ]
+    uncertain_score = ScoreBreakdown(
+        total=max(card.score.total - STALE_REFRESH_PENALTY, 0.0),
+        components=card.score.components,
+        penalties={**card.score.penalties, "stale_refresh_uncertainty": STALE_REFRESH_PENALTY},
+        reasons=[*card.score.reasons, "Latest refresh failed, so this opportunity is based on stale cached evidence."],
+    )
+    return replace(
+        card,
+        title=f"Stale snapshot: {card.title}",
+        why_now=f"{card.why_now} Current visibility is uncertain because the latest refresh failed and this card may rely on cached evidence.",
+        evidence=stale_evidence,
+        score=uncertain_score,
+    )
 
 
 # Input: IncentiveSnapshot; Output: OptionCard; Purpose: create a refresh-first fallback option when live evidence is too uncertain.
@@ -139,12 +172,15 @@ def _competition_option(snapshot: IncentiveSnapshot) -> OptionCard | None:
 
 # Input: IncentiveSnapshot and max option count; Output: list[OptionCard]; Purpose: score visible research directions and return ranked option cards before any concrete alpha planning.
 def generate_research_options(snapshot: IncentiveSnapshot, max_options: int = 5) -> list[OptionCard]:
-    if snapshot.refresh_errors and not (snapshot.activities or snapshot.competitions or snapshot.power_pool_boards or snapshot.rule_pages):
+    if snapshot.refresh_errors and not _has_visible_opportunities(snapshot):
         return [_refresh_recovery_option(snapshot)]
 
     options: list[OptionCard] = [_genius_osmosis_option(snapshot)]
     for maybe_option in (_power_pool_option(snapshot), _theme_option(snapshot), _competition_option(snapshot)):
         if maybe_option is not None:
             options.append(maybe_option)
+    if snapshot.refresh_errors:
+        options = [_apply_refresh_uncertainty(option) for option in options]
+        options.append(_refresh_recovery_option(snapshot))
     options.sort(key=lambda card: card.score.total, reverse=True)
     return options[: max(max_options, 1)]

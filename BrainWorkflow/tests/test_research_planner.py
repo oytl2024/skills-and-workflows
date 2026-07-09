@@ -56,6 +56,29 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertEqual(options[0].primary_incentive, "knowledge_refresh")
         self.assertIn("refresh", options[0].title.lower())
 
+    def test_generate_research_options_penalizes_stale_visible_opportunities(self):
+        snapshot = IncentiveSnapshot(
+            generated_at="2026-07-09T00:00:00Z",
+            account={"geniusLevel": "GOLD"},
+            activities=[{"id": "E1", "title": "Power Pool activity", "description": "Visible cached activity"}],
+            competitions=[],
+            power_pool_boards=[{"value": "lyvRddy", "label": "USA/D1 Power Pool July'26"}],
+            rule_pages={
+                "brain-genius": "signal submissions pyramids Combined Alpha Performance",
+                "osmosis-allocation-guide-consultants": "Daily Osmosis Rank Combined Osmosis Performance",
+                "getting-started-power-pool-alphas": "Power Pool Alphas are simpler",
+            },
+            evidence=[SourceEvidence("cache", "knowledge/raw/last_snapshot.json", "Cached snapshot", "2026-07-01T00:00:00Z", stale=True)],
+            refresh_errors=[{"path": "/events", "error": "Timeout", "message": "network timeout"}],
+        )
+
+        options = generate_research_options(snapshot, max_options=5)
+        power_pool_option = next(option for option in options if option.primary_incentive == "power_pool")
+
+        self.assertIn("stale", power_pool_option.title.lower())
+        self.assertIn("uncertain", power_pool_option.why_now.lower())
+        self.assertGreater(power_pool_option.score.penalties.get("stale_refresh_uncertainty", 0.0), 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
