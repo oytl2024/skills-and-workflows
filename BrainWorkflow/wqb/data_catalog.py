@@ -1,0 +1,201 @@
+from typing import Any
+from urllib.parse import quote
+
+
+GROUPING_FIELD_IDS = {"country", "industry", "subindustry", "currency", "market", "sector", "exchange"}
+
+
+def fetch_data_fields(
+    client,
+    instrument_type: str,
+    region: str,
+    delay: int,
+    universe: str,
+    dataset_id: str = "",
+    search: str = "",
+    limit: int = 50,
+    max_records: int = 300,
+) -> list[dict[str, Any]]:
+    """Input: WQB client and field filters. Output: data-field records. Fetch a bounded field pool."""
+    fields: list[dict[str, Any]] = []
+    offset = 0
+    page_limit = min(max(int(limit), 1), 50)
+    while offset < max_records:
+        path = (
+            f"/data-fields?instrumentType={instrument_type}&region={region}&delay={delay}"
+            f"&universe={universe}&limit={page_limit}&offset={offset}"
+        )
+        if dataset_id:
+            path += f"&dataset.id={quote(dataset_id)}"
+        if search:
+            path += f"&search={quote(search)}"
+        result = client.get_json(path)
+        batch = result.get("results", [])
+        fields.extend(batch)
+        if len(batch) < page_limit:
+            break
+        offset += page_limit
+    return fields[:max_records]
+
+
+def select_seed_fields(fields: list[dict[str, Any]], max_fields: int = 40) -> list[dict[str, Any]]:
+    """Input: data-field records. Output: ranked seed fields. Prefer high coverage and non-grouping fields."""
+    usable = []
+    for field in fields:
+        field_id = field.get("id")
+        if not field_id:
+            continue
+        if field_id in GROUPING_FIELD_IDS:
+            continue
+        usable.append(field)
+
+    def score(field: dict[str, Any]) -> tuple[float, float, str]:
+        """Input: data-field record. Output: sortable tuple. Rank by coverage, alpha count, then id."""
+        coverage = field.get("coverage") or 0
+        alpha_count = field.get("alphaCount") or 0
+        return (float(coverage), float(alpha_count), str(field.get("id")))
+
+    return sorted(usable, key=score, reverse=True)[:max_fields]
+
+
+def filter_fields_by_suffix(fields: list[dict[str, Any]], suffix: str) -> list[dict[str, Any]]:
+    """Input: data-field records and suffix. Output: fields whose ids end with suffix."""
+    if not suffix:
+        return list(fields)
+    return [field for field in fields if str(field.get("id", "")).endswith(suffix)]
+
+
+def field_ids(fields: list[dict[str, Any]]) -> set[str]:
+    """Input: data-field records. Output: set of field ids. Support expression complexity checks."""
+    return {str(field["id"]) for field in fields if field.get("id")}
+
+
+def result_rows(payload: Any) -> list[dict[str, Any]]:
+    """Input: API payload. Output: result rows. Normalize list and {'results': list} shapes."""
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+        return [item for item in payload["results"] if isinstance(item, dict)]
+    return []
+
+
+def fetch_operators(client) -> list[dict[str, Any]]:
+    """Input: WQB client. Output: operator metadata rows. Fetch the operator catalog once."""
+    return result_rows(client.get_json("/operators"))
+
+
+def fetch_data_sets(
+    client,
+    instrument_type: str,
+    region: str,
+    delay: int,
+    universe: str,
+    limit: int = 100,
+    max_records: int = 1000,
+) -> list[dict[str, Any]]:
+    """Input: client and setting filters. Output: dataset rows. Fetch a bounded dataset catalog."""
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    page_limit = min(max(int(limit), 1), 50)
+    while offset < max_records:
+        path = (
+            f"/data-sets?instrumentType={instrument_type}&region={region}&delay={delay}"
+            f"&universe={universe}&limit={page_limit}&offset={offset}"
+        )
+        batch = result_rows(client.get_json(path))
+        rows.extend(batch)
+        if len(batch) < page_limit:
+            break
+        offset += page_limit
+    return rows[:max_records]
+
+
+def build_metadata_cache(
+    client,
+    config: dict[str, Any],
+    dataset_ids: list[str],
+    field_searches: list[str],
+    field_suffix: str,
+    max_fields_per_query: int,
+    include_data_sets: bool = True,
+) -> dict[str, Any]:
+    """Input: client, config, dataset/search filters. Output: cache dict. Fetch metadata for local reuse."""
+    clean_dataset_ids = [item.strip() for item in dataset_ids if item and item.strip()]
+    if not clean_dataset_ids:
+        clean_dataset_ids = [""]
+    clean_searches = [item.strip() for item in field_searches if item and item.strip()] or [""]
+    data_sets = []
+    if include_data_sets:
+        data_sets = fetch_data_sets(
+            client,
+            config["instrument_type"],
+            config["region"],
+            int(config["delay"]),
+            config["universe"],
+        )
+    cache: dict[str, Any] = {
+        "config": {
+            "instrument_type": config["instrument_type"],
+            "region": config["region"],
+            "delay": int(config["delay"]),
+            "universe": config["universe"],
+        },
+        "operators": fetch_operators(client),
+        "data_sets": data_sets,
+        "field_queries": [],
+    }
+    for dataset_id in clean_dataset_ids:
+        for search in clean_searches:
+            fields = fetch_data_fields(
+                client,
+                config["instrument_type"],
+                config["region"],
+                int(config["delay"]),
+                config["universe"],
+                dataset_id=dataset_id,
+                search=search,
+                limit=min(max(int(max_fields_per_query), 1), 100),
+                max_records=max(int(max_fields_per_query), 1),
+            )
+            if field_suffix:
+                fields = filter_fields_by_suffix(fields, field_suffix)
+            cache["field_queries"].append(
+                {
+                    "dataset_id": dataset_id,
+                    "field_search": search,
+                    "field_suffix": field_suffix,
+                    "fields": fields,
+                }
+            )
+    return cache
+
+
+def cached_fields(
+    cache: dict[str, Any],
+    dataset_id: str = "",
+    field_search: str = "",
+    field_suffix: str = "",
+) -> list[dict[str, Any]]:
+    """Input: cache and filters. Output: fields. Select cached fields without calling the API."""
+    rows: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for query in cache.get("field_queries", []):
+        query_dataset_id = str(query.get("dataset_id", ""))
+        if dataset_id and query_dataset_id and query_dataset_id != dataset_id:
+            continue
+        if field_search and query.get("field_search") != field_search:
+            continue
+        fields = query.get("fields", [])
+        if field_suffix:
+            fields = filter_fields_by_suffix(fields, field_suffix)
+        for field in fields:
+            field_dataset = field.get("dataset") if isinstance(field.get("dataset"), dict) else {}
+            field_dataset_id = str(field_dataset.get("id") or field.get("dataset_id") or "")
+            if dataset_id and not query_dataset_id and field_dataset_id != dataset_id:
+                continue
+            field_id = str(field.get("id", ""))
+            if not field_id or field_id in seen_ids:
+                continue
+            seen_ids.add(field_id)
+            rows.append(field)
+    return rows
