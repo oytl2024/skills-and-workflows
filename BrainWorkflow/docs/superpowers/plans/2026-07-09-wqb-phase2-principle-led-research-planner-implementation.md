@@ -916,10 +916,9 @@ Expected: commit succeeds.
 
 - [ ] **Step 1: Add failing CLI tests**
 
-Extend `tests/test_cli.py` with:
+Extend `tests/test_cli.py` by adding this method inside the existing `CliTests(unittest.TestCase)` class:
 
 ```python
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
