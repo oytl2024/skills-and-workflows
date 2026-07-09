@@ -177,3 +177,11 @@ Ad hoc workflow changes are allowed only as emergency exceptions and must be con
 - Safe API probing on 2026-07-03 confirmed the final submit route shape as `POST /alphas/{alpha_id}/submit`; `/alphas/{alpha_id}/submission` returned 404. Do not call this endpoint without explicit user authorization.
 - Final submit API protocol mirrors the frontend: call `POST /alphas/{alpha_id}/submit`; if the response has `Retry-After`, keep calling `GET /alphas/{alpha_id}/submit` after that delay until the response has no `Retry-After` and returns JSON. Do not treat an empty HTTP 200 from POST as completed submission.
 - `rKoqa6E1` was submitted on 2026-07-03 Asia/Shanghai time. Final verification shows `stage=OS`, `status=ACTIVE`, and `dateSubmitted=2026-07-02T21:38:33-04:00`.
+
+## Phase 2 Principle-Led Planning
+
+- Before each workflow start, refresh platform rules, activities, competitions, Power Pool boards, themes, account state, and relevant data metadata.
+- Generate 3-5 option cards before any concrete alpha batch plan.
+- The user must choose one option before the system creates activity, region, delay, dataset, template, or batch instructions.
+- If refresh fails, show stale-cache warnings and prefer a refresh-recovery option.
+- Do not run simulations or submissions from the option-card planner.

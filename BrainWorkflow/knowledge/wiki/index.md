@@ -2,6 +2,7 @@
 
 ## Foundation
 
+- [[00_principles/principle_stack|Principle Stack]]
 - [[10_foundations/worldquant_brain_components]]
 - [[10_foundations/metrics_and_checks]]
 
@@ -27,6 +28,7 @@
 ## Workflows
 
 - [[60_workflows/correlation_aware_stage1]]
+- [[70_decisions/README|Decision Logs]]
 
 ## Indexes
 
