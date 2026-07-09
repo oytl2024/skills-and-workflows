@@ -80,6 +80,18 @@ class CliTests(unittest.TestCase):
             self.assertEqual(default_knowledge_root(), custom_root)
             self.assertEqual(Path(default_option_output_dir()), custom_root / "wiki" / "70_decisions")
 
+    def test_learn_capture_defaults_to_raw_layer(self):
+        from scripts import capture_learn_material
+
+        expected = TESTS_DIR.parents[2] / "knowledge"
+
+        self.assertEqual(capture_learn_material.KNOWLEDGE_ROOT, expected)
+        self.assertEqual(capture_learn_material.OUTPUT_DIR, expected / "raw" / "learn")
+        self.assertEqual(
+            capture_learn_material.WIKI_LEARN_PAGE,
+            expected / "wiki" / "10_foundations" / "learn_material_index.md",
+        )
+
     def test_config_overrides_from_args_includes_request_hyperparameters(self):
         args = Namespace(
             max_alphas_per_round=30,

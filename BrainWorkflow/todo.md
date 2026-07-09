@@ -72,7 +72,7 @@
 ### Requirement Summary
 - Continue the Phase 2 implementation despite the Task 5 subagent failing with an external usage-limit error before any code changes.
 - Implement Task 5 locally with the same red-green verification and no-touch constraint for existing backtest, repair, optimization, submission, submit-candidate, and Stage 1 sedimentation workflows.
-- After completing the planner implementation and verification, save all WorldQuant BRAIN Learn material except Courses into `knowledge/rawmaterial`, including Documentation and Operators, then compile the durable wiki.
+- After completing the planner implementation and verification, save all WorldQuant BRAIN Learn material except Courses into `knowledge/raw/learn`, including Documentation and Operators, then compile the durable wiki.
 
 ### Confirmed Details
 - The Task 5 worker produced no commit and no report; the working tree was clean before local takeover.
@@ -85,12 +85,12 @@
 - Implement only the read-only `plan-research-options` command path in `wqb/cli.py`.
 - Run focused, related, and full unittest suites before committing.
 - Implement Task 6 knowledge pages.
-- Fetch non-course Learn material through the platform API when credentials are available, store raw material under `knowledge/rawmaterial`, and compile summary wiki pages.
+- Fetch non-course Learn material through the platform API when credentials are available, store raw material under `knowledge/raw/learn`, and compile summary wiki pages.
 
 ### Completion
 - Implemented and committed the read-only `plan-research-options` CLI command after the Task 5 subagent hit an external usage-limit error.
 - Implemented and committed the Phase 2 principle/decision wiki pages.
-- Captured non-course Learn material into `knowledge/rawmaterial/learn`: Operators, Documentation tutorial pages, FAQs, Videos, Recommended Readings, and search discovery results.
+- Captured non-course Learn material into `knowledge/raw/learn`: Operators, Documentation tutorial pages, FAQs, Videos, Recommended Readings, and search discovery results.
 - Compiled `knowledge/wiki/10_foundations/learn_material_index.md` and `knowledge/wiki/20_semantics/operator_catalog_official.md`.
 - Validation passed: raw JSON parses, `scripts/capture_learn_material.py` compiles, compiled wiki placeholder scan is clean, and full unittest discovery passed 169 tests.
 
@@ -141,3 +141,29 @@
 - Updated `scripts/capture_learn_material.py` and `wqb/cli.py` to default to the shared vault.
 - Removed `BrainWorkflow\knowledge` and added `knowledge/` to `.gitignore`.
 - Verification passed: full unittest discovery ran 170 tests successfully.
+
+## 2026-07-09 Raw Layer Semantics Correction
+
+### Requirement Summary
+- Correct the knowledge vault structure after user clarification.
+- Store all unprocessed factual source material under the shared vault `raw/` layer.
+- Move Learn API captures from `rawmaterial/learn` to `raw/learn`.
+- Keep `wiki/` as the compiled knowledge layer.
+
+### Confirmed Details
+- `rawmaterial/` is not a desired top-level vault directory.
+- `raw/source_index.md` must describe each raw source file, its contents, and how to check updates on the next website refresh.
+- Future capture scripts must not recreate `rawmaterial/`.
+
+### Execution Plan
+- Move shared vault Learn raw files to `knowledge/raw/learn`.
+- Update capture script defaults and compiled wiki source references.
+- Update README/source index documentation.
+- Add a regression test for Learn capture path semantics.
+- Run full verification and push the branch.
+
+### Completion
+- Moved shared vault Learn captures to `knowledge/raw/learn` and removed the mistaken `knowledge/rawmaterial` directory.
+- Updated `scripts/capture_learn_material.py` so future Learn captures write to the raw layer.
+- Added a regression test for Learn capture raw-layer defaults.
+- Updated source-index documentation in the shared vault so each raw Learn file has source, contents, update-check, and wiki target notes.

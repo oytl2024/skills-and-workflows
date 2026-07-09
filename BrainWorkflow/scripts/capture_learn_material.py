@@ -76,7 +76,7 @@ def default_knowledge_root() -> Path:
 
 
 KNOWLEDGE_ROOT = default_knowledge_root()
-OUTPUT_DIR = KNOWLEDGE_ROOT / "rawmaterial" / "learn"
+OUTPUT_DIR = KNOWLEDGE_ROOT / "raw" / "learn"
 WIKI_LEARN_PAGE = KNOWLEDGE_ROOT / "wiki" / "10_foundations" / "learn_material_index.md"
 WIKI_OPERATOR_PAGE = KNOWLEDGE_ROOT / "wiki" / "20_semantics" / "operator_catalog_official.md"
 
@@ -184,7 +184,7 @@ def write_learn_wiki(capture: dict[str, Any]) -> None:
         "",
         f"Generated at: `{generated_at}`",
         "",
-        "This page indexes the locally captured non-course Learn material. Raw API payloads live under `knowledge/rawmaterial/learn/`.",
+        "This page indexes the locally captured non-course Learn material. Raw API payloads live under `knowledge/raw/learn/`.",
         "",
         "## Captured Sections",
         "",
@@ -237,7 +237,7 @@ def write_operator_wiki(operators: list[dict[str, Any]], generated_at: str) -> N
         "",
         f"Generated at: `{generated_at}`",
         "",
-        "Raw source: `knowledge/rawmaterial/learn/operators.json`.",
+        "Raw source: `knowledge/raw/learn/operators.json`.",
         "",
         "Use this catalog as the local source for operator names, categories, scopes, definitions, descriptions, documentation fields, and level restrictions.",
         "",
@@ -268,7 +268,7 @@ def write_operator_wiki(operators: list[dict[str, Any]], generated_at: str) -> N
 
 
 def main() -> None:
-    """Input: env credentials. Output: rawmaterial JSON and wiki pages. Capture non-course Learn material."""
+    """Input: env credentials. Output: raw JSON and wiki pages. Capture non-course Learn material."""
     generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     client = WQBClient(
         timeout_seconds=REQUEST_TIMEOUT_SECONDS,
