@@ -38,3 +38,31 @@
 - Commit the Task 5 plan correction that keeps CLI unittest discovery valid.
 - Dispatch Tasks 1-6 from `docs/superpowers/plans/2026-07-09-wqb-phase2-principle-led-research-planner-implementation.md`.
 - Run full verification and update the existing draft PR after review.
+
+## 2026-07-09 Task 2: Official Rule Refresh
+
+### Requirement Summary
+- Create `BrainWorkflow/wqb/rule_refresh.py`.
+- Create `BrainWorkflow/tests/test_rule_refresh.py`.
+- Implement `DEFAULT_RULE_PAGE_IDS` and `refresh_incentive_snapshot(client, generated_at)`.
+- Use `WQBClient.get_json`, `WQBClient.options_json`, `IncentiveSnapshot`, and `SourceEvidence`.
+
+### Confirmed Details
+- Follow the exact task brief values and normalize official rule sources only.
+- Generate option cards before any concrete alpha batch logic; do not submit or simulate alphas here.
+- If refresh fails, keep cached evidence visible with staleness and uncertainty instead of inventing data.
+- Use the existing unittest style and keep the implementation simple.
+
+### Execution Plan
+- Add the failing rule refresh test first and run it to confirm the red state.
+- Implement `wqb/rule_refresh.py` with safe source refresh helpers and rule page normalization.
+- Run the focused, related, and full unittest suites.
+- Commit the task changes with the brief-required message.
+
+### Notes
+- Task ownership is limited to `BrainWorkflow/wqb/rule_refresh.py` and `BrainWorkflow/tests/test_rule_refresh.py`.
+
+### Completion
+- Implemented the rule refresh snapshot loader and its focused regression test.
+- Verified red-to-green flow for the new test, then ran related and full unittest suites successfully.
+- No additional repository files were changed for this task.
