@@ -1,6 +1,7 @@
 import io
 import json
 import shutil
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from argparse import Namespace
@@ -80,6 +81,34 @@ class CliTests(unittest.TestCase):
         self.assertEqual(overrides["request_timeout_seconds"], 20)
         self.assertEqual(overrides["max_retries"], 1)
         self.assertEqual(overrides["base_backoff_seconds"], 2)
+
+    def test_plan_research_options_writes_cards_without_simulation(self):
+        from wqb.cli import plan_research_options
+        from wqb.principle_model import IncentiveSnapshot, SourceEvidence
+
+        snapshot = IncentiveSnapshot(
+            generated_at="2026-07-09T00:00:00Z",
+            account={"geniusLevel": "GOLD"},
+            activities=[],
+            competitions=[],
+            power_pool_boards=[{"value": "lyvRddy", "label": "USA/D1 Power Pool July'26"}],
+            rule_pages={"brain-genius": "signals pyramids", "getting-started-power-pool-alphas": "Power Pool"},
+            evidence=[SourceEvidence("api", "/users/self", "User account state", "2026-07-09T00:00:00Z")],
+            refresh_errors=[],
+        )
+
+        class FakeClient:
+            pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("wqb.cli.build_client", return_value=FakeClient()), patch(
+                "wqb.cli.refresh_incentive_snapshot", return_value=snapshot
+            ):
+                result = plan_research_options({"request_timeout_seconds": 1}, max_options=3, output_dir=tmp)
+
+            self.assertGreaterEqual(result["option_count"], 1)
+            self.assertTrue(Path(result["jsonl_path"]).exists())
+            self.assertTrue(Path(result["markdown_path"]).exists())
 
     def test_dry_run_prints_payloads_without_network(self):
         config = load_config(

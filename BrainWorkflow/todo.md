@@ -66,3 +66,23 @@
 - Implemented the rule refresh snapshot loader and its focused regression test.
 - Verified red-to-green flow for the new test, then ran related and full unittest suites successfully.
 - No additional repository files were changed for this task.
+
+## 2026-07-09 Task 5 Local Takeover And Learn Ingestion
+
+### Requirement Summary
+- Continue the Phase 2 implementation despite the Task 5 subagent failing with an external usage-limit error before any code changes.
+- Implement Task 5 locally with the same red-green verification and no-touch constraint for existing backtest, repair, optimization, submission, submit-candidate, and Stage 1 sedimentation workflows.
+- After completing the planner implementation and verification, save all WorldQuant BRAIN Learn material except Courses into `knowledge/rawmaterial`, including Documentation and Operators, then compile the durable wiki.
+
+### Confirmed Details
+- The Task 5 worker produced no commit and no report; the working tree was clean before local takeover.
+- The new Learn ingestion work is post-implementation work: finish the research planner CLI/docs first, then fetch and compile Learn material.
+- Do not hardcode credentials or secrets. Use existing environment/config paths.
+- Keep raw source material separate from compiled wiki pages.
+
+### Execution Plan
+- Add the Task 5 CLI test inside `CliTests`.
+- Implement only the read-only `plan-research-options` command path in `wqb/cli.py`.
+- Run focused, related, and full unittest suites before committing.
+- Implement Task 6 knowledge pages.
+- Fetch non-course Learn material through the platform API when credentials are available, store raw material under `knowledge/rawmaterial`, and compile summary wiki pages.

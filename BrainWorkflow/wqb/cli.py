@@ -3,7 +3,7 @@ import json
 import time
 from collections import Counter
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -21,13 +21,16 @@ from wqb.data_catalog import (
     filter_fields_by_suffix,
     select_seed_fields,
 )
+from wqb.decision_log import write_option_cards
 from wqb.expression import expression_hash, is_power_pool_complexity_ok, replace_operator_names
 from wqb.generator import build_settings, generate_seed_candidates, simulation_payload
 from wqb.knowledge import fetch_knowledge_snapshot
 from wqb.novelty import score_expression_novelty
 from wqb.optimizer import actions_for_check_summary
 from wqb.recorder import RunRecorder
+from wqb.research_planner import generate_research_options
 from wqb.research_workflow import build_parallel_stage_plan, cap_simulation_count, precheck_expression
+from wqb.rule_refresh import refresh_incentive_snapshot
 from wqb.simulator import extract_alpha_id, poll_simulation, resolve_multisimulation_alpha_ids, submit_multisimulation, submit_simulation
 
 
@@ -51,6 +54,23 @@ def build_client(config: dict[str, Any]) -> WQBClient:
         max_retries=int(config["max_retries"]),
         base_backoff_seconds=int(config["base_backoff_seconds"]),
     )
+
+
+def plan_research_options(config: dict[str, Any], max_options: int, output_dir: str) -> dict[str, Any]:
+    """Input: config, option limit, output dir. Output: summary dict. Generate read-only research option cards."""
+    generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    client = build_client(config)
+    snapshot = refresh_incentive_snapshot(client, generated_at=generated_at)
+    cards = generate_research_options(snapshot, max_options=max_options)
+    jsonl_path, markdown_path = write_option_cards(Path(output_dir), cards, generated_at)
+    return {
+        "generated_at": generated_at,
+        "option_count": len(cards),
+        "jsonl_path": str(jsonl_path),
+        "markdown_path": str(markdown_path),
+        "refresh_error_count": len(snapshot.refresh_errors),
+        "options": [card.title for card in cards],
+    }
 
 
 def is_http_status_error(err: Exception, status_code: int) -> bool:
@@ -2852,6 +2872,7 @@ def parse_args() -> argparse.Namespace:
             "complete-in-flight",
             "retry-planned",
             "run-expression-file",
+            "plan-research-options",
         ],
     )
     parser.add_argument("--config", default="configs/stage1_usa_d1.yaml")
@@ -2887,6 +2908,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--request-timeout-seconds", type=int, default=None)
     parser.add_argument("--request-max-retries", type=int, default=None)
     parser.add_argument("--request-base-backoff-seconds", type=int, default=None)
+    parser.add_argument("--max-options", type=int, default=5)
+    parser.add_argument("--option-output-dir", default="knowledge/wiki/70_decisions")
     return parser.parse_args()
 
 
@@ -3027,6 +3050,9 @@ def main() -> None:
         )
     elif args.command == "plan-stage":
         plan_stage(args.workflow_stage, args.dataset_id)
+    elif args.command == "plan-research-options":
+        result = plan_research_options(config, args.max_options, args.option_output_dir)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
