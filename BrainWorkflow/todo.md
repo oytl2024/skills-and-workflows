@@ -93,3 +93,26 @@
 - Captured non-course Learn material into `knowledge/rawmaterial/learn`: Operators, Documentation tutorial pages, FAQs, Videos, Recommended Readings, and search discovery results.
 - Compiled `knowledge/wiki/10_foundations/learn_material_index.md` and `knowledge/wiki/20_semantics/operator_catalog_official.md`.
 - Validation passed: raw JSON parses, `scripts/capture_learn_material.py` compiles, compiled wiki placeholder scan is clean, and full unittest discovery passed 169 tests.
+
+## 2026-07-09 Phase 2 Finalization
+
+### Requirement Summary
+- Continue the task through final verification and update the existing remote PR branch.
+- Run the read-only research planner once with current platform information so the decision-card output path is exercised against live data.
+- Preserve the existing backtest, repair, optimization, submission, submit-candidate, and Stage 1 sedimentation workflows.
+
+### Confirmed Details
+- Use the existing branch `agent/brainworkflow-phase2`.
+- Do not run simulations or submit alphas from the research planner.
+- If the live planner cannot refresh current platform information, record the failure clearly instead of fabricating option cards.
+
+### Execution Plan
+- Run `plan-research-options` with the Stage 1 config and write cards under `knowledge/wiki/70_decisions`.
+- Commit any generated decision-card artifacts and this finalization record.
+- Run the full unittest suite and concise repository checks.
+- Push the branch to the existing PR.
+
+### Completion
+- Ran the live read-only planner with `configs/stage1_usa_d1.yaml`.
+- Generated four current research option cards under `knowledge/wiki/70_decisions` without running simulations or submissions.
+- Verification passed: full unittest discovery ran 169 tests successfully, Learn raw JSON parsed, research option JSONL parsed, and compiled wiki placeholder scan was clean.
