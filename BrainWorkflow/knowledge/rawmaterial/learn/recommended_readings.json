@@ -1,0 +1,1766 @@
+[
+  {
+    "authors": [
+      "Ying Wang",
+      "Bohui Zhang",
+      "Xiaoneng Zhu"
+    ],
+    "category": "Finance 101",
+    "dateCreated": "2019-02-15T12:36:02.296421-05:00",
+    "id": "momentum-news",
+    "image": null,
+    "keywords": [
+      "News",
+      "Momentum",
+      "Fundamentals",
+      "Information Environments",
+      "Future Returns"
+    ],
+    "monthPosted": "2019-01",
+    "publicationYear": 2018,
+    "sequence": 2,
+    "title": "The Momentum of News",
+    "url": "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3267337"
+  },
+  {
+    "authors": [
+      "Rasekhschaffe",
+      "Jones"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-04-10T01:17:59.796648-04:00",
+    "id": "machine-learning-stock-selection",
+    "image": null,
+    "keywords": [
+      "Machine Learning",
+      "Return Prediction",
+      "Cross-Section of Returns",
+      "Gradient Boosting",
+      "SVM",
+      "AdaBoost",
+      "(Deep) Neural Networks",
+      "Feature Engineering",
+      "Fintech"
+    ],
+    "monthPosted": "2019-03",
+    "publicationYear": 2019,
+    "sequence": 3,
+    "title": "Machine Learning for Stock Selection",
+    "url": "https://ssrn.com/abstract=3330946"
+  },
+  {
+    "authors": [
+      "Horenstein"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-04-10T01:19:19.288159-04:00",
+    "id": "unintended-impact-academic-research-asset-returns-capm-alpha",
+    "image": null,
+    "keywords": [
+      "capm",
+      "alpha",
+      "benchmarking",
+      "mutual funds",
+      "smart beta",
+      "anomalies."
+    ],
+    "monthPosted": "2019-03",
+    "publicationYear": 2019,
+    "sequence": 4,
+    "title": "The Unintended Impact of Academic Research on Asset Returns: The CAPM Alpha",
+    "url": "https://ssrn.com/abstract=3054718"
+  },
+  {
+    "authors": [
+      "Healy",
+      "Osullivan"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-04-10T01:20:13.543063-04:00",
+    "id": "dividend-capture-returns-anomaly-or-risk-premium-evidence-equity-options-markets",
+    "image": null,
+    "keywords": [
+      "dividend",
+      "abnormal return"
+    ],
+    "monthPosted": "2019-03",
+    "publicationYear": 2019,
+    "sequence": 5,
+    "title": "Dividend Capture Returns: Anomaly or Risk Premium? Evidence from the Equity Options Markets",
+    "url": "https://ssrn.com/abstract=3337964"
+  },
+  {
+    "authors": [
+      "Zaremba"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-04-10T01:22:28.021582-04:00",
+    "id": "the-momentum-effect-in-country-level-stock-market-anomalies",
+    "image": null,
+    "keywords": [
+      "country-level patterns",
+      "equity anomalies",
+      "factor investing",
+      "intl diversification",
+      "momentum",
+      "returns predictability"
+    ],
+    "monthPosted": "2019-03",
+    "publicationYear": 2018,
+    "sequence": 6,
+    "title": "The Momentum Effect in Country-Level Stock Market Anomalies",
+    "url": "https://ssrn.com/abstract=2621236"
+  },
+  {
+    "authors": [
+      "Granger",
+      "Harvey",
+      "Rattray",
+      "Hement"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-04-10T01:23:37.348748-04:00",
+    "id": "strategic-rebalancing",
+    "image": null,
+    "keywords": [
+      "Asset Allocation",
+      "Smart Rebalancing",
+      "Market Timing",
+      "Active Management",
+      "Buy and Hold",
+      "Overlays",
+      "60–40 Portfolio",
+      "Balanced Portfolio",
+      "Stock-Bond Portfolio",
+      "Rebalancing",
+      "Drawdowns",
+      "Downside Loss",
+      "Skewness",
+      "Trend",
+      "Momentum",
+      "Derivatives",
+      "Futures",
+      "Behavioral Finance"
+    ],
+    "monthPosted": "2019-03",
+    "publicationYear": 2019,
+    "sequence": 7,
+    "title": "Strategic Rebalancing",
+    "url": "https://ssrn.com/abstract=3330134"
+  },
+  {
+    "authors": [
+      "Chan",
+      "Gareche",
+      "Landier",
+      "Wang"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-04-10T01:24:38.203095-04:00",
+    "id": "currencies-and-stock-returns-example-market-inattention",
+    "image": null,
+    "keywords": [
+      "Behavioral finance",
+      "Under-reaction",
+      "Informational efficiency",
+      "Inattention"
+    ],
+    "monthPosted": "2019-03",
+    "publicationYear": 2018,
+    "sequence": 8,
+    "title": "Currencies and Stock Returns: An Example of Market Inattention",
+    "url": "https://ssrn.com/abstract=3336554"
+  },
+  {
+    "authors": [
+      "Arnott",
+      "Harvey",
+      "Markowitz"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-04-10T01:25:53.529171-04:00",
+    "id": "backtesting-protocol-era-machine-learning",
+    "image": null,
+    "keywords": [
+      "Machine Learning",
+      "Data Science",
+      "Data Mining",
+      "Backtesting",
+      "Overfitting",
+      "Trading",
+      "Strategies",
+      "Anomalies",
+      "Selection Bias",
+      "Research Protocol"
+    ],
+    "monthPosted": "2019-03",
+    "publicationYear": 2018,
+    "sequence": 9,
+    "title": "A Backtesting Protocol in the Era of Machine Learning",
+    "url": "https://ssrn.com/abstract=3275654"
+  },
+  {
+    "authors": [
+      "Gipta",
+      "Kelly"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-04-10T01:26:27.444431-04:00",
+    "id": "factor-momentum-everywhere",
+    "image": null,
+    "keywords": [
+      "factor momentum",
+      "time series momentum",
+      "stock price momentum"
+    ],
+    "monthPosted": "2019-03",
+    "publicationYear": 2018,
+    "sequence": 10,
+    "title": "Factor Momentum Everywhere",
+    "url": "https://ssrn.com/abstract=3300728"
+  },
+  {
+    "authors": [
+      "Gutierrez",
+      "Rodriguez"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-04-10T01:27:17.785261-04:00",
+    "id": "measuring-earnings-quality-proposal-theoretical-framework-and-empirical-method",
+    "image": null,
+    "keywords": [
+      "Machine Learning",
+      "Data Science",
+      "Data Mining",
+      "Backtesting",
+      "Overfitting",
+      "Trading",
+      "Strategies",
+      "Anomalies",
+      "Selection Bias",
+      "Research Protocol"
+    ],
+    "monthPosted": "2019-03",
+    "publicationYear": 2017,
+    "sequence": 11,
+    "title": "Measuring Earnings Quality: A Proposal of a Theoretical Framework and an Empirical Method",
+    "url": "https://ssrn.com/abstract=3079680"
+  },
+  {
+    "authors": [
+      "Chen",
+      "Huang",
+      "Jiang"
+    ],
+    "category": "Finance 101",
+    "dateCreated": "2019-04-11T23:48:39.876644-04:00",
+    "id": "do-mutual-funds-trade-earnings-news-information-content-large-active-trades",
+    "image": null,
+    "keywords": [
+      "Mutual fund trading",
+      "Earnings news",
+      "Large active trades",
+      "Earnings response coeff.",
+      "Stockvaluation",
+      "Fund performance"
+    ],
+    "monthPosted": "2019-04",
+    "publicationYear": 2019,
+    "sequence": 12,
+    "title": "Do Mutual Funds Trade on Earnings News? The Information Content of Large Active Trades",
+    "url": "https://ssrn.com/abstract=3337928"
+  },
+  {
+    "authors": [
+      "Khan",
+      "Peddireddy",
+      "Rajgopal"
+    ],
+    "category": "Finance 101",
+    "dateCreated": "2019-04-11T23:49:39.420315-04:00",
+    "id": "earnings-quality-street",
+    "image": null,
+    "keywords": [
+      "Earnings Quality",
+      "Dechow-Dichev",
+      "F-Score",
+      "Jones Model",
+      "M-Score",
+      "Wall Street",
+      "Restatements",
+      "Aaers",
+      "Lawsuits",
+      "Sales Quality",
+      "Margin Quality",
+      "Cash Flow Quality",
+      "Stock Returns"
+    ],
+    "monthPosted": "2019-04",
+    "publicationYear": 2019,
+    "sequence": 14,
+    "title": "Earnings Quality on the Street",
+    "url": "https://ssrn.com/abstract=3347217"
+  },
+  {
+    "authors": [
+      "Cremers",
+      "Goyenko",
+      "Schultz",
+      "Szaura"
+    ],
+    "category": "Finance 101",
+    "dateCreated": "2019-04-11T23:51:12.115967-04:00",
+    "id": "informed-trading-of-options-option-expiration-risk-and-stock-return-predictability",
+    "image": null,
+    "keywords": [
+      "options stock prices",
+      "expiration risk",
+      "stockreturnpredictability"
+    ],
+    "monthPosted": "2019-04",
+    "publicationYear": 2019,
+    "sequence": 15,
+    "title": "Informed Trading of Options, Option Expiration Risk, and Stock Return Predictability",
+    "url": "https://ssrn.com/abstract=3347194"
+  },
+  {
+    "authors": [
+      "Chiu",
+      "Haight"
+    ],
+    "category": "Finance 101",
+    "dateCreated": "2019-04-11T23:52:36.418960-04:00",
+    "id": "investor-learning-earnings-signals-and-stock-returns",
+    "image": null,
+    "keywords": [
+      "investor learning",
+      "earnings properties",
+      "market efficiency",
+      "stock returns"
+    ],
+    "monthPosted": "2019-04",
+    "publicationYear": 2019,
+    "sequence": 13,
+    "title": "Investor Learning, Earnings Signals, and Stock Returns",
+    "url": "https://ssrn.com/abstract=3348325"
+  },
+  {
+    "authors": [
+      "Jiang",
+      "Zaynutdinova",
+      "Zhang"
+    ],
+    "category": "Finance 101",
+    "dateCreated": "2019-04-11T23:55:47.252097-04:00",
+    "id": "stock-selection-timing",
+    "image": null,
+    "keywords": [
+      "Mutual Funds",
+      "Active Trading",
+      "StockSelectionOpportunity",
+      "Stock Selection Timing"
+    ],
+    "monthPosted": "2019-04",
+    "publicationYear": 2018,
+    "sequence": 16,
+    "title": "Stock Selection Timing",
+    "url": "https://ssrn.com/abstract=3344478"
+  },
+  {
+    "authors": [
+      "Pandher",
+      "Sun",
+      "Currie"
+    ],
+    "category": "Finance 101",
+    "dateCreated": "2019-04-11T23:57:11.014665-04:00",
+    "id": "firm-performance-and-managing-downside-business-risk",
+    "image": null,
+    "keywords": [
+      "Risk Management",
+      "Firm Valuation",
+      "Profitability",
+      "Hedging Profile",
+      "Tobin’s Q",
+      "Excess Stock Returns",
+      "ROE",
+      "ShareholderMaximizeTheory",
+      "Signaling Theory"
+    ],
+    "monthPosted": "2019-04",
+    "publicationYear": 2018,
+    "sequence": 17,
+    "title": "Firm Performance and Managing Downside Business Risk",
+    "url": "https://ssrn.com/abstract=3337795"
+  },
+  {
+    "authors": [
+      "Konstantinidi"
+    ],
+    "category": "Finance 101",
+    "dateCreated": "2019-04-11T23:58:02.904277-04:00",
+    "id": "firm-life-cycle-expectation-errors-and-future-stock-returns",
+    "image": null,
+    "keywords": [
+      "Firm Life Cycle",
+      "Stock Returns",
+      "Expectation Errors",
+      "Limits to Arbitrage"
+    ],
+    "monthPosted": "2019-04",
+    "publicationYear": 2019,
+    "sequence": 18,
+    "title": "Firm Life Cycle, Expectation Errors and Future Stock Returns",
+    "url": "https://ssrn.com/abstract=3332513"
+  },
+  {
+    "authors": [
+      "Goergen",
+      "Renneboog",
+      "Zhao"
+    ],
+    "category": "Finance 101",
+    "dateCreated": "2019-07-10T04:50:56.891510-04:00",
+    "id": "insider-trading-and-networked-directors",
+    "image": {
+      "fileSize": 143153,
+      "height": 680,
+      "title": "Insider Trading and Networked Directors.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/vEDTJwj0t1AJXdYRRoqSYSW9R8c=/85/original/Insider_Trading_and_Networked_Directors.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "Insider Trading",
+      "Director Networks",
+      "Network Analysis",
+      "Centrality",
+      "Opportunistic Trading",
+      "Routine Trading"
+    ],
+    "monthPosted": "2019-04",
+    "publicationYear": 2018,
+    "sequence": 19,
+    "title": "Insider Trading and Networked Directors",
+    "url": "https://ssrn.com/abstract=3229606"
+  },
+  {
+    "authors": [
+      "Utrera"
+    ],
+    "category": "Available Data and Operators",
+    "dateCreated": "2019-07-10T04:52:08.790247-04:00",
+    "id": "mispricing-asymmetries-announcement-days",
+    "image": {
+      "fileSize": 340342,
+      "height": 680,
+      "title": "Mispricing Asymmetries on Announcement Days.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/ntbHcI9g3U_RM5SQSUpzjQVfqBg=/87/original/Mispricing_Asymmetries_on_Announcement_Days.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "Regularization",
+      "factors",
+      "anomalies",
+      "risk",
+      "arbitrage"
+    ],
+    "monthPosted": "2019-04",
+    "publicationYear": 2018,
+    "sequence": 20,
+    "title": "Mispricing Asymmetries on Announcement Days",
+    "url": "https://ssrn.com/abstract=3238208"
+  },
+  {
+    "authors": [
+      "Hirshleifer",
+      "Lourie",
+      "Ruchti",
+      "Truong"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-12T23:30:30.065494-04:00",
+    "id": "first-impressions-and-analyst-forecast-bias",
+    "image": null,
+    "keywords": [
+      "First Impressions",
+      "Equity Analysts",
+      "Behavioral Finance"
+    ],
+    "monthPosted": "2019-05",
+    "publicationYear": 2019,
+    "sequence": 21,
+    "title": "First Impressions and Analyst Forecast Bias",
+    "url": "https://ssrn.com/abstract=3359354"
+  },
+  {
+    "authors": [
+      "Jeon",
+      "Kan",
+      "Li"
+    ],
+    "category": "Finance 101",
+    "dateCreated": "2019-07-10T04:51:40.232441-04:00",
+    "id": "stock-return-autocorrelations-and-the-cross-section-of-option-returns",
+    "image": {
+      "fileSize": 247284,
+      "height": 680,
+      "title": "Stock return auto correction and  Cross Section Option returns.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/M1DTNX0mpZ2oHyKVdplGIDUkUgA=/86/original/Stock_return_auto_correction_and__Cross_Section_Option_returns.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "stock return autocorr",
+      "xsection option returns",
+      "expected option returns",
+      "option portfolios"
+    ],
+    "monthPosted": "2019-05",
+    "publicationYear": 2019,
+    "sequence": 22,
+    "title": "Stock Return Autocorrelations and the Cross Section of Option Returns",
+    "url": "https://ssrn.com/abstract=3363331"
+  },
+  {
+    "authors": [
+      "Caom Titman",
+      "Zhan",
+      "Zhang"
+    ],
+    "category": "Finance 101",
+    "dateCreated": "2019-07-10T04:49:38.388114-04:00",
+    "id": "esg-preference-and-market-efficiency-evidence-mispricing-and-institutional-trading",
+    "image": {
+      "fileSize": 188123,
+      "height": 680,
+      "title": "ESG preference and Market Efficiency.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/cCWvZEbCyPshOZBEmcMY14cM3sY=/84/original/ESG_preference_and_Market_Efficiency.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "Social responsible inst.",
+      "stock mispricing",
+      "ESG preference",
+      "market efficiency"
+    ],
+    "monthPosted": "2019-05",
+    "publicationYear": 2019,
+    "sequence": 23,
+    "title": "ESG Preference and Market Efficiency: Evidence from Mispricing and Institutional Trading",
+    "url": "https://ssrn.com/abstract=3353623"
+  },
+  {
+    "authors": [
+      "Ahmed",
+      "McMartin",
+      "Safdar"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-12T23:34:50.022697-04:00",
+    "id": "earnings-volatility-ambiguity-and-crisis-period-stockreturns",
+    "image": null,
+    "keywords": [
+      "earnings volatility",
+      "ambiguity",
+      "financial crisis",
+      "stock returns"
+    ],
+    "monthPosted": "2019-05",
+    "publicationYear": 2018,
+    "sequence": 24,
+    "title": "Earnings Volatility, Ambiguity, and Crisis-Period StockReturns",
+    "url": "https://ssrn.com/abstract=3357232"
+  },
+  {
+    "authors": [
+      "Roh",
+      "Zarowin"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-12T23:35:33.881117-04:00",
+    "id": "disclosure-financial-statement-line-items-and-insider-trading-around-earnings-announcements",
+    "image": null,
+    "keywords": [
+      "financial statement",
+      "line items",
+      "insider trading",
+      "earnings announcements"
+    ],
+    "monthPosted": "2019-05",
+    "publicationYear": 2019,
+    "sequence": 25,
+    "title": "Disclosure of Financial Statement Line Items and Insider Trading Around Earnings Announcements",
+    "url": "https://ssrn.com/abstract=3365212"
+  },
+  {
+    "authors": [
+      "Hsu",
+      "Li",
+      "Teoh",
+      "Tseng"
+    ],
+    "category": "Interpreting Results",
+    "dateCreated": "2019-07-10T04:54:23.036411-04:00",
+    "id": "misvaluation-new-trademarks",
+    "image": {
+      "fileSize": 323605,
+      "height": 680,
+      "title": "Misvaluation of New Trademarks.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/ux87VbKQx0j0JzVRc4nf_sq5FDI=/88/original/Misvaluation_of_New_Trademarks.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "Trademarks",
+      "Exploratory Trademarks",
+      "Stock Returns",
+      "Limited Attention",
+      "Uncertainty",
+      "Market Efficiency"
+    ],
+    "monthPosted": "2019-05",
+    "publicationYear": 2019,
+    "sequence": 26,
+    "title": "Misvaluation of New Trademarks",
+    "url": "https://ssrn.com/abstract=3224187"
+  },
+  {
+    "authors": [
+      "Ribeiro",
+      "Shan",
+      "Taylor"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-12T23:36:44.192838-04:00",
+    "id": "non-gaap-earnings-and-earnings-quality-trade-",
+    "image": null,
+    "keywords": [
+      "Non-GAAP disclosures",
+      "Earnings quality"
+    ],
+    "monthPosted": "2019-05",
+    "publicationYear": 2018,
+    "sequence": 27,
+    "title": "Non-GAAP Earnings and the Earnings Quality Trade-off",
+    "url": "https://ssrn.com/abstract=3277318"
+  },
+  {
+    "authors": [
+      "Akbas",
+      "Eoehmer",
+      "Jiang",
+      "Koch"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-12T23:37:24.996246-04:00",
+    "id": "overnight-returns-daytime-reversals-and-future-stock-returns-risk-investing-tug-war-noise-traders",
+    "image": null,
+    "keywords": [
+      "Noise Trader Risk",
+      "Opening Price",
+      "Overnight Return",
+      "Heterogeneous Investors",
+      "Retail Traders"
+    ],
+    "monthPosted": "2019-05",
+    "publicationYear": 2019,
+    "sequence": 28,
+    "title": "Overnight Returns, Daytime Reversals, and Future Stock Returns: The Risk of Investing in a Tug of War With Noise Traders",
+    "url": "https://ssrn.com/abstract=3324880"
+  },
+  {
+    "authors": [
+      "Dong",
+      "Hirshleifer",
+      "Teoh"
+    ],
+    "category": "Finance 101",
+    "dateCreated": "2019-07-10T04:49:02.688483-04:00",
+    "id": "overvalued-equity-and-financing-decisions",
+    "image": {
+      "fileSize": 137576,
+      "height": 680,
+      "title": "Overvalued Equity and Financial Decisions.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/lld8-n9JtjGvyBKWWisH_J2b9sA=/83/original/Overvalued_Equity_and_Financial_Decisions.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "financing decisions",
+      "equity issuance",
+      "overvalued equity",
+      "behavioral finance",
+      "market efficiency"
+    ],
+    "monthPosted": "2019-05",
+    "publicationYear": 2012,
+    "sequence": 29,
+    "title": "Overvalued Equity and Financing Decisions",
+    "url": "https://ssrn.com/abstract=1874726"
+  },
+  {
+    "authors": [
+      "Grullon",
+      "Kaba",
+      "Nunez-Torres"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-17T07:15:56.331637-04:00",
+    "id": "when-low-beats-high-riding-sales-seasonality-premium",
+    "image": null,
+    "keywords": [
+      "Sales Seasonality",
+      "Stock Returns",
+      "Investor Attention"
+    ],
+    "monthPosted": "2019-01",
+    "publicationYear": 2018,
+    "sequence": 30,
+    "title": "When Low Beats High: Riding the Sales Seasonality Premium",
+    "url": "https://ssrn.com/abstract=3174181"
+  },
+  {
+    "authors": [
+      "Soupe",
+      "Xiao",
+      "Carvalho",
+      "2018"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-17T07:19:23.417476-04:00",
+    "id": "factor-investing-get-your-exposures-right",
+    "image": null,
+    "keywords": [
+      "Factor investing",
+      "Portfolio Optimization",
+      "Robust Optimization",
+      "Meanvariance Optimization",
+      "Smart Beta",
+      "Black-Litterman"
+    ],
+    "monthPosted": "2019-01",
+    "publicationYear": 2018,
+    "sequence": 31,
+    "title": "Factor Investing: Get Your Exposures Right!",
+    "url": "https://ssrn.com/abstract=3276006"
+  },
+  {
+    "authors": [
+      "Lanfear",
+      "Lioui",
+      "Siebert",
+      "2018"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-17T07:20:49.872278-04:00",
+    "id": "market-anomalies-and-disaster-risk-evidence-extreme-weather-events",
+    "image": null,
+    "keywords": [
+      "Event study",
+      "Extreme weather events",
+      "Hurricanes",
+      "Illiquidity",
+      "Rare disasters",
+      "Anomalies",
+      "tail risk"
+    ],
+    "monthPosted": "2019-01",
+    "publicationYear": 2018,
+    "sequence": 32,
+    "title": "Market Anomalies and Disaster Risk: Evidence from Extreme Weather Events.",
+    "url": "https://ssrn.com/abstract=3272093"
+  },
+  {
+    "authors": [
+      "Wang",
+      "Zhang",
+      "Zhu",
+      "2018"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-17T07:22:22.084800-04:00",
+    "id": "the-momentum-news",
+    "image": null,
+    "keywords": [
+      "News",
+      "Momentum",
+      "Fundamentals",
+      "Information Environments",
+      "Future Returns"
+    ],
+    "monthPosted": "2019-01",
+    "publicationYear": 2018,
+    "sequence": 33,
+    "title": "The Momentum of News",
+    "url": "https://ssrn.com/abstract=3267337"
+  },
+  {
+    "authors": [
+      "Lyle",
+      "Yohn",
+      "2018"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-17T07:23:02.193425-04:00",
+    "id": "optimized-fundamental-portfolios",
+    "image": null,
+    "keywords": [
+      "Fundamental Analysis",
+      "Portfolio Optimization",
+      "Return Prediction"
+    ],
+    "monthPosted": "2019-01",
+    "publicationYear": 2018,
+    "sequence": 34,
+    "title": "Optimized Fundamental Portfolios",
+    "url": "https://ssrn.com/abstract=3300976"
+  },
+  {
+    "authors": [
+      "Dichtl",
+      "Drobetz",
+      "Lohre",
+      "Rother",
+      "Vosskamp",
+      "2018"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-17T07:24:56.361018-04:00",
+    "id": "optimal-timing-and-tilting-equity-factors",
+    "image": null,
+    "keywords": [
+      "Asset allocation",
+      "Factor Investing",
+      "Factor Timing",
+      "Parametric portfolio",
+      "Factor Tilting  policy"
+    ],
+    "monthPosted": "2019-01",
+    "publicationYear": 2018,
+    "sequence": 35,
+    "title": "Optimal Timing and Tilting of Equity Factors",
+    "url": "https://ssrn.com/abstract=3277887"
+  },
+  {
+    "authors": [
+      "Verdickt",
+      "2018"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-17T07:26:01.265080-04:00",
+    "id": "is-bad-news-ever-good-for-stocks-the-importance-of-time-varying-war-risk-and-stock-returns",
+    "image": null,
+    "keywords": [
+      "Rare disasters",
+      "Wars",
+      "Equity Premium",
+      "Media Coverage",
+      "The economist"
+    ],
+    "monthPosted": "2019-01",
+    "publicationYear": 2018,
+    "sequence": 36,
+    "title": "Is Bad News Ever Good for Stocks? The Importance of Time-varying War Risk and Stock Returns",
+    "url": "https://ssrn.com/abstract=3289059"
+  },
+  {
+    "authors": [
+      "Chen",
+      "Liu",
+      "2018"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-17T07:27:25.204795-04:00",
+    "id": "bid-and-ask-prices-index-put-options-which-predicts-underlying-stock-returns",
+    "image": null,
+    "keywords": [
+      "Implied Volatility",
+      "Option Bid Price",
+      "Option Ask Price",
+      "Stock Return",
+      "Predictability"
+    ],
+    "monthPosted": "2019-01",
+    "publicationYear": 2018,
+    "sequence": 37,
+    "title": "Bid and Ask Prices of Index Put Options: Which Predicts the Underlying Stock Returns?",
+    "url": "https://ssrn.com/abstract=3285854"
+  },
+  {
+    "authors": [
+      "Kottimukkalur",
+      "2018"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-17T07:28:41.576423-04:00",
+    "id": "earnings-uncertainty-and-attention",
+    "image": null,
+    "keywords": [
+      "Limited Attention",
+      "Post-Earnings Ann Drift",
+      "Bounded Rationality",
+      "Behavioral Finance",
+      "Anomalies",
+      "Earnings Volatility",
+      "Textual Analysis",
+      "Uncertain Language",
+      "Earnings Uncertainty"
+    ],
+    "monthPosted": "2019-01",
+    "publicationYear": 2018,
+    "sequence": 38,
+    "title": "Earnings Uncertainty and Attention",
+    "url": "https://ssrn.com/abstract=3287470"
+  },
+  {
+    "authors": [
+      "Winkler",
+      "Cockayne",
+      "Lichtendahl",
+      "Jose",
+      "2018"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-17T07:29:56.170201-04:00",
+    "id": "probability-forecasts-and-their-combination-research-perspective",
+    "image": null,
+    "keywords": [
+      "Probability Forecast",
+      "Decision making"
+    ],
+    "monthPosted": "2019-02",
+    "publicationYear": 2018,
+    "sequence": 39,
+    "title": "Probability Forecasts and Their Combination: A Research Perspective",
+    "url": "https://ssrn.com/abstract=3258627"
+  },
+  {
+    "authors": [
+      "Liu",
+      "Lu",
+      "Shu",
+      "Wei",
+      "2018"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-17T07:30:34.395972-04:00",
+    "id": "being-different-together-distinct-relatedness-and-synergies-mergers-and-acquisitions",
+    "image": null,
+    "keywords": [
+      "Distinct Relatedness",
+      "Synergies",
+      "Mergers and Acquisitions",
+      "Asset Complementarity",
+      "Conditional Dependence",
+      "Stock-Return Correlation"
+    ],
+    "monthPosted": "2019-02",
+    "publicationYear": 2018,
+    "sequence": 40,
+    "title": "Being Different Together Distinct Relatedness and Synergies in Mergers and Acquisitions",
+    "url": "https://ssrn.com/abstract=3257994"
+  },
+  {
+    "authors": [
+      "Fedyk",
+      "Khimich",
+      "2018"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-17T07:31:45.162376-04:00",
+    "id": "hidden-woodshed-big-bath-herding",
+    "image": null,
+    "keywords": [
+      "Big Bath",
+      "Herding",
+      "Write-offs",
+      "Restructuring Charges",
+      "Restructuring Charges"
+    ],
+    "monthPosted": "2019-02",
+    "publicationYear": 2018,
+    "sequence": 41,
+    "title": "Hidden in the Woodshed: Big Bath Herding",
+    "url": "https://ssrn.com/abstract=3224962"
+  },
+  {
+    "authors": [
+      "Chung",
+      "Kim",
+      "Lim",
+      "Yang",
+      "2018"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-17T07:32:29.261223-04:00",
+    "id": "new-metric-market-underreaction-earnings-announcements-empirical-test",
+    "image": null,
+    "keywords": [
+      "Strategic arbitrage",
+      "information asymmetry",
+      "market underreaction",
+      "liquidity demander",
+      "liquidity provider",
+      "order imbalance"
+    ],
+    "monthPosted": "2019-02",
+    "publicationYear": 2018,
+    "sequence": 42,
+    "title": "A New Metric of Market Underreaction to Earnings Announcements: An Empirical Test",
+    "url": "https://ssrn.com/abstract=3101491"
+  },
+  {
+    "authors": [
+      "Alquist",
+      "Israel",
+      "Moskowitz",
+      "2018"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-17T07:33:24.596856-04:00",
+    "id": "fact-fiction-and-size-effect",
+    "image": null,
+    "keywords": [
+      "Fundamental",
+      "size effect"
+    ],
+    "monthPosted": "2019-02",
+    "publicationYear": 2018,
+    "sequence": 43,
+    "title": "Fact, Fiction, and the Size Effect",
+    "url": "https://jpm.iijournals.com/content/iijpormgmt/45/1/34.full.pdf"
+  },
+  {
+    "authors": [
+      "Atilgan",
+      "Bali",
+      "Demirtas",
+      "Gunaydin",
+      "2018"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-17T07:34:04.322404-04:00",
+    "id": "downside-beta-and-equity-returns-around-world",
+    "image": null,
+    "keywords": [
+      "Beta",
+      "equity returns",
+      "global market"
+    ],
+    "monthPosted": "2019-02",
+    "publicationYear": 2018,
+    "sequence": 44,
+    "title": "Downside Beta and Equity Returns around the World",
+    "url": "https://jpm.iijournals.com/content/iijpormgmt/44/7/39.full.pdf"
+  },
+  {
+    "authors": [
+      "Starks",
+      "Venkat",
+      "Zhu",
+      "2017"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-17T07:35:08.895709-04:00",
+    "id": "corporate-esg-profiles-and-investor-horizons",
+    "image": null,
+    "keywords": [
+      "Corporate ESG",
+      "Investor Horizons",
+      "Corporate Short-Termism"
+    ],
+    "monthPosted": "2019-02",
+    "publicationYear": 2017,
+    "sequence": 45,
+    "title": "Corporate ESG Profiles and Investor Horizons",
+    "url": "https://ssrn.com/abstract=3049943"
+  },
+  {
+    "authors": [
+      "Atmaz",
+      "2019"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-05-17T07:35:57.784624-04:00",
+    "id": "stock-return-extrapolation-option-prices-and-variance-risk-premium",
+    "image": null,
+    "keywords": [
+      "Extrapolation",
+      "sentiment",
+      "stochastic volatility",
+      "option prices",
+      "variance risk premium",
+      "predictability"
+    ],
+    "monthPosted": "2019-02",
+    "publicationYear": 2019,
+    "sequence": 46,
+    "title": "Stock Return Extrapolation, Option Prices, and Variance Risk Premium",
+    "url": "https://ssrn.com/abstract=3319502"
+  },
+  {
+    "authors": [
+      "Chowdhury",
+      "Faff",
+      "Hoang"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-06-18T11:23:42.302900-04:00",
+    "id": "using-abnormal-analyst-coverage-to-unlock-new-evidence-on-stock-price-crash-risk",
+    "image": null,
+    "keywords": [
+      "abnormal analyst coverage",
+      "ex-ante crash risk"
+    ],
+    "monthPosted": "2019-06",
+    "publicationYear": 2019,
+    "sequence": 47,
+    "title": "Using Abnormal Analyst Coverage to Unlock New Evidence on Stock Price Crash Risk",
+    "url": "https://ssrn.com/abstract=3364003"
+  },
+  {
+    "authors": [
+      "Callen",
+      "Kaniel",
+      "Segal"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-06-18T11:24:34.879282-04:00",
+    "id": "filing-speed-information-leakage-and-price-formation",
+    "image": null,
+    "keywords": [
+      "Filing Lag",
+      "Institutional Trading",
+      "8-K Reports",
+      "Private Information"
+    ],
+    "monthPosted": "2019-06",
+    "publicationYear": 2019,
+    "sequence": 48,
+    "title": "Filing Speed, Information Leakage, and Price Formation",
+    "url": "https://ssrn.com/abstract=3363056"
+  },
+  {
+    "authors": [
+      "Ma",
+      "Pratt"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-06-18T11:25:19.511440-04:00",
+    "id": "payday-anomaly",
+    "image": null,
+    "keywords": [
+      "Abnormal Return",
+      "Anomaly",
+      "Payday",
+      "Mid-Month",
+      "Market Efficiency"
+    ],
+    "monthPosted": "2019-06",
+    "publicationYear": 2018,
+    "sequence": 49,
+    "title": "Payday Anomaly",
+    "url": "https://ssrn.com/abstract=3257064"
+  },
+  {
+    "authors": [
+      "Maletic"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-06-18T11:27:54.549322-04:00",
+    "id": "profitability-rd-investments-and-cross-section-stock-returns",
+    "image": null,
+    "keywords": [
+      "R&D expenditures",
+      "profitability",
+      "small stocks",
+      "asset pricing model",
+      "earnings momentum",
+      "Fama MacBeth regression"
+    ],
+    "monthPosted": "2019-06",
+    "publicationYear": 2018,
+    "sequence": 50,
+    "title": "Profitability, R&D Investments and the Cross-Section of Stock Returns",
+    "url": "https://ssrn.com/abstract=3178186"
+  },
+  {
+    "authors": [
+      "Bock"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-07-10T09:41:18.357580-04:00",
+    "id": "quantifying-macroeconomic-expectations-stock-markets-using-google-trends",
+    "image": {
+      "fileSize": 126341,
+      "height": 680,
+      "title": "Quantifying macroeconomics expectations in stock markets using Google Trends.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/CIIB1O1VyFnWA4GuHPx6mAMt7U0=/89/original/Quantifying_macroeconomics_expectations_in_stock_markets_using_Google_Tren.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "Investment strategy",
+      "Forecasting",
+      "Google Trends"
+    ],
+    "monthPosted": "2019-06",
+    "publicationYear": 2018,
+    "sequence": 51,
+    "title": "Quantifying macroeconomic expectations in stock markets using Google Trends",
+    "url": "https://ssrn.com/abstract=3218912"
+  },
+  {
+    "authors": [
+      "Eremenko"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-07-10T04:45:23.820316-04:00",
+    "id": "quantitative-fundamentals-application-piotroski-f-score-non-us-markets",
+    "image": {
+      "fileSize": 379380,
+      "height": 680,
+      "title": "Quantitative Fundamentals, Application of Piotroski F-Score on Non-US Markets.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/NHKXuHbrgzgHs0Hp5TUfPQkFmc0=/82/original/Quantitative_Fundamentals_Application_of_Piotroski_F-Score_on_Non-US_Marke.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "quantitative fundamentals",
+      "piotroski f-score",
+      "BRIC",
+      "alpha",
+      "Pnl"
+    ],
+    "monthPosted": "2019-06",
+    "publicationYear": 2017,
+    "sequence": 52,
+    "title": "Quantitative Fundamentals. Application of Piotroski F-Score on Non-U.S. Markets.",
+    "url": "https://ssrn.com/abstract=3262154"
+  },
+  {
+    "authors": [
+      "Trunong"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-07-10T04:44:25.966677-04:00",
+    "id": "rational-inattention-and-analyst-forecast-accuracy",
+    "image": {
+      "fileSize": 136949,
+      "height": 680,
+      "title": "Rational Inattention and Analyst Forecast Accuracy.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/TeepgdScYFa8mtnmioICAJVSv54=/81/original/Rational_Inattention_and_Analyst_Forecast_Accuracy.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "Inattention",
+      "Analysts",
+      "Earnings Forecasts",
+      "Forecast Accuracy",
+      "Behavioral Finance"
+    ],
+    "monthPosted": "2019-06",
+    "publicationYear": 2018,
+    "sequence": 54,
+    "title": "Rational Inattention and Analyst Forecast Accuracy",
+    "url": "https://ssrn.com/abstract=3257433"
+  },
+  {
+    "authors": [
+      "Cohen",
+      "Haghbin",
+      "Malloy",
+      "Schilling"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-07-10T04:44:04.635687-04:00",
+    "id": "revisiting-fundamental-indexation-deep-dive-revenue",
+    "image": {
+      "fileSize": 261219,
+      "height": 680,
+      "title": "Revisiting Fundamental Indexation.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/t6AKVMHD_X4nZGqAanPwNOAmDeo=/80/original/Revisiting_Fundamental_Indexation.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "Fundamental Indexation",
+      "Revenue",
+      "Smart Beta"
+    ],
+    "monthPosted": "2019-06",
+    "publicationYear": 2019,
+    "sequence": 53,
+    "title": "Revisiting fundamental indexation: a deep dive into revenue",
+    "url": "https://ssrn.com/abstract=3345291"
+  },
+  {
+    "authors": [
+      "Guan",
+      "Li",
+      "Lu",
+      "Wong"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-07-10T04:46:44.841864-04:00",
+    "id": "regulations-and-brain-drain-evidence-from-wall-street-star-analysts-career-choices",
+    "image": {
+      "fileSize": 437893,
+      "height": 680,
+      "title": "Regulations and brain drain.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/KEpXkBqYrbv8b19mFxSEIxDkC5I=/79/original/Regulations_and_brain_drain.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "Analysts",
+      "Turnover",
+      "Brain Drain",
+      "The Global Settlement",
+      "Policy and Regulations",
+      "Investment Banks"
+    ],
+    "monthPosted": "2019-06",
+    "publicationYear": 2018,
+    "sequence": 55,
+    "title": "Regulations and Brain Drain: Evidence From Wall Street Star Analysts’ Career Choices",
+    "url": "https://ssrn.com/abstract=3243135"
+  },
+  {
+    "authors": [
+      "Farago",
+      "Hjalmarsson"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-07-16T05:33:57.310221-04:00",
+    "id": "compound-returns",
+    "image": null,
+    "keywords": [
+      "Compound returns",
+      "Diversification",
+      "Long-run returns",
+      "Skewness"
+    ],
+    "monthPosted": "2019-07",
+    "publicationYear": 2019,
+    "sequence": 56,
+    "title": "Compound Returns",
+    "url": "https://ssrn.com/abstract=3398501"
+  },
+  {
+    "authors": [
+      "Wang"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-07-16T05:34:45.650427-04:00",
+    "id": "institutional-ownership-and-insider-trading-behavior-evidence-from-index-rebalance",
+    "image": null,
+    "keywords": [
+      "institutional investors",
+      "insider trading",
+      "corporate governance",
+      "regression discontinuity",
+      "information asymmetry"
+    ],
+    "monthPosted": "2019-07",
+    "publicationYear": 2019,
+    "sequence": 57,
+    "title": "Institutional Ownership and Insider-Trading Behavior: Evidence From Index Rebalance",
+    "url": "https://ssrn.com/abstract=3415521"
+  },
+  {
+    "authors": [
+      "Gormsen",
+      "Lazarus"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-07-16T05:35:43.213122-04:00",
+    "id": "duration-driven-returns",
+    "image": null,
+    "keywords": [
+      "asset pricing",
+      "cross-section of returns",
+      "cash-flow growth",
+      "duration",
+      "survey expectations",
+      "dividend strips"
+    ],
+    "monthPosted": "2019-07",
+    "publicationYear": 2019,
+    "sequence": 58,
+    "title": "Duration-Driven Returns",
+    "url": "https://ssrn.com/abstract=3359027"
+  },
+  {
+    "authors": [
+      "Hu",
+      "Pan",
+      "Wang",
+      "Zhu"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-07-16T05:36:27.232414-04:00",
+    "id": "premium-heightened-uncertainty-solving-fomc-puzzle",
+    "image": null,
+    "keywords": [
+      "FOMC",
+      "Pre-Announcement Drift",
+      "Heightened Uncertainty"
+    ],
+    "monthPosted": "2019-07",
+    "publicationYear": 2019,
+    "sequence": 59,
+    "title": "Premium for Heightened Uncertainty: Solving the FOMC Puzzle",
+    "url": "https://ssrn.com/abstract=3290649"
+  },
+  {
+    "authors": [
+      "Mizrach",
+      "Swanson",
+      "Yu"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-07-16T05:37:39.108733-04:00",
+    "id": "disentangling-effects-news-small-jumps-and-large-jumps-stock-return-predictability",
+    "image": null,
+    "keywords": [
+      "Forecasting",
+      "Integrated Volatility",
+      "High-Frequency Data",
+      "Jumps",
+      "Realized Skewness",
+      "Cross-Sectional Returns",
+      "Signed Jump Variation"
+    ],
+    "monthPosted": "2019-07",
+    "publicationYear": 2018,
+    "sequence": 60,
+    "title": "Disentangling the Effects of News, Small Jumps, and Large Jumps on Stock Return Predictability",
+    "url": "https://ssrn.com/abstract=3208859"
+  },
+  {
+    "authors": [
+      "Jiao"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-07-29T10:35:13.631828-04:00",
+    "id": "corrective-trading-an-analysis-of-institutional-investors-information-advantages",
+    "image": {
+      "fileSize": 484016,
+      "height": 680,
+      "title": "Disentangling the Effects of News, Small Jumps, and Large Jumps on Stock Return Predictability.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/FEas4ImRwmHlOGREHSe5BAbKOCc=/93/original/Disentangling_the_Effects_of_News_Small_Jumps_and_Large_Jumps_on_Stock_Ret.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "institutional investors",
+      "informational advantages",
+      "trading strategies"
+    ],
+    "monthPosted": "2019-07",
+    "publicationYear": 2019,
+    "sequence": 61,
+    "title": "Corrective Trading: An Analysis of Institutional Investors’ Information Advantages",
+    "url": "https://ssrn.com/abstract=3389091"
+  },
+  {
+    "authors": [
+      "Dwivedi",
+      "Gore"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-07-29T10:33:06.120744-04:00",
+    "id": "fibonacci-heap-based-ensemble-model-stock-price-prediction",
+    "image": {
+      "fileSize": 859709,
+      "height": 680,
+      "title": "Corrective Trading An Analysis of Institutional Investors’ Information Advantages.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/-79HjLmKqniwX18T0q8c-avNg7I=/92/original/Corrective_Trading_An_Analysis_of_Institutional_Investors_Information_Adva.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "Accuracy",
+      "Consistency",
+      "Ensemble",
+      "Fibonacci Heap",
+      "Prediction",
+      "Stock Price"
+    ],
+    "monthPosted": "2019-07",
+    "publicationYear": 2019,
+    "sequence": 62,
+    "title": "A Fibonacci Heap Based Ensemble Model for Stock Price Prediction",
+    "url": "https://ssrn.com/abstract=3368764"
+  },
+  {
+    "authors": [
+      "Wu",
+      "Xu",
+      "Zhao"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-07-29T10:30:54.957571-04:00",
+    "id": "online-reviews-can-predict-long-term-returns-individual-stocks",
+    "image": {
+      "fileSize": 582405,
+      "height": 680,
+      "title": "A Fibonacci Heap Based Ensemble Model for Stock Price Prediction.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/lC8fAGJykjBkl36h6ZTLj6UZSOE=/91/original/A_Fibonacci_Heap_Based_Ensemble_Model_for_Stock_Price_Prediction.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "Online reviews",
+      "predicting model",
+      "long-term returns",
+      "individual stocks"
+    ],
+    "monthPosted": "2019-07",
+    "publicationYear": 2019,
+    "sequence": 63,
+    "title": "Online reviews can predict long-term returns of individual stocks",
+    "url": "https://arxiv.org/abs/1905.03189"
+  },
+  {
+    "authors": [
+      "Rapach",
+      "Zhou"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-08-09T05:55:48.594356-04:00",
+    "id": "time-series-and-cross-sectional-stock-return-forecasting-new-machine-learning-methods",
+    "image": null,
+    "keywords": [
+      "Expected stock returns",
+      "Time series",
+      "Cross section",
+      "Forecast combination",
+      "Shrinkage",
+      "Elastic net"
+    ],
+    "monthPosted": "2019-01",
+    "publicationYear": 2019,
+    "sequence": 64,
+    "title": "Time-Series and Cross-Sectional Stock Return Forecasting: New Machine Learning Methods",
+    "url": "https://ssrn.com/abstract=3428095"
+  },
+  {
+    "authors": [
+      "Hussain",
+      "Murthy",
+      "Singh"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-08-09T05:56:43.895487-04:00",
+    "id": "stock-market-volatility-a-review-of-the-empirical-literature",
+    "image": null,
+    "keywords": [
+      "Stock Market",
+      "Heterscedasticity",
+      "Asymmetric Effect",
+      "Conditional Volatility",
+      "GARCH"
+    ],
+    "monthPosted": "2019-08",
+    "publicationYear": 2019,
+    "sequence": 65,
+    "title": "Stock Market Volatility: A Review of the Empirical Literature",
+    "url": "https://ssrn.com/abstract=3418148"
+  },
+  {
+    "authors": [
+      "Harvey",
+      "Hoyle",
+      "Rattray",
+      "Sargaison",
+      "Taylor",
+      "Hemert"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-08-09T05:57:43.380918-04:00",
+    "id": "best-strategies-worst-times-can-portfolios-be-crisis-proofed",
+    "image": null,
+    "keywords": [
+      "Crisis hedge",
+      "Crisis alpha",
+      "Recessions",
+      "Flight to quality",
+      "Drawdown",
+      "Downside risk",
+      "Portfolio protection",
+      "Portfolio hedging",
+      "Insurance",
+      "Put options",
+      "Option-based hedging",
+      "Portfolio insurance",
+      "Futures",
+      "Trend following",
+      "Momentum",
+      "Quality",
+      "Profitability",
+      "Gold",
+      "Positive convex"
+    ],
+    "monthPosted": "2019-08",
+    "publicationYear": 2019,
+    "sequence": 66,
+    "title": "The Best of Strategies for the Worst of Times: Can Portfolios be Crisis Proofed?",
+    "url": "https://ssrn.com/abstract=3383173"
+  },
+  {
+    "authors": [
+      "Hameed",
+      "Wu"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-08-09T06:37:05.106679-04:00",
+    "id": "decomposing-momentum",
+    "image": {
+      "fileSize": 582405,
+      "height": 680,
+      "title": "A Fibonacci Heap Based Ensemble Model for Stock Price Prediction.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/lC8fAGJykjBkl36h6ZTLj6UZSOE=/91/original/A_Fibonacci_Heap_Based_Ensemble_Model_for_Stock_Price_Prediction.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "Momentum",
+      "Reversal",
+      "Market Conditions"
+    ],
+    "monthPosted": "2019-08",
+    "publicationYear": 2019,
+    "sequence": 67,
+    "title": "Decomposing Momentum",
+    "url": "https://ssrn.com/abstract=3401656"
+  },
+  {
+    "authors": [
+      "Meng"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-08-09T06:36:39.428923-04:00",
+    "id": "dynamic-mean-variance-portfolio-optimisation",
+    "image": {
+      "fileSize": 247284,
+      "height": 680,
+      "title": "Stock return auto correction and  Cross Section Option returns.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/M1DTNX0mpZ2oHyKVdplGIDUkUgA=/86/original/Stock_return_auto_correction_and__Cross_Section_Option_returns.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "mean-variance",
+      "portfolio",
+      "optimisation"
+    ],
+    "monthPosted": "2019-08",
+    "publicationYear": 2019,
+    "sequence": 68,
+    "title": "Dynamic Mean-Variance Portfolio Optimisation",
+    "url": "https://arxiv.org/abs/1907.03093"
+  },
+  {
+    "authors": [
+      "Keloharju",
+      "Linnainmaa",
+      "Nyberg"
+    ],
+    "category": "Finance 101",
+    "dateCreated": "2019-08-09T06:27:00.322456-04:00",
+    "id": "are-return-seasonalities-due-risk-or-mispricing-evidence-seasonal-reversals",
+    "image": null,
+    "keywords": [
+      "seasonalities",
+      "seasonal reversals",
+      "expected returns"
+    ],
+    "monthPosted": "2019-08",
+    "publicationYear": 2019,
+    "sequence": 69,
+    "title": "Are Return Seasonalities Due to Risk or Mispricing? Evidence from Seasonal Reversals",
+    "url": "https://ssrn.com/abstract=3276334"
+  },
+  {
+    "authors": [
+      "Kumar",
+      "Motahari",
+      "Taffler"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-08-09T06:25:51.956616-04:00",
+    "id": "skewness-preference-and-market-anomalies",
+    "image": {
+      "fileSize": 484016,
+      "height": 680,
+      "title": "Disentangling the Effects of News, Small Jumps, and Large Jumps on Stock Return Predictability.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/FEas4ImRwmHlOGREHSe5BAbKOCc=/93/original/Disentangling_the_Effects_of_News_Small_Jumps_and_Large_Jumps_on_Stock_Ret.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "Anomalies",
+      "commonality",
+      "skewness preference",
+      "mispricing",
+      "trading strategies."
+    ],
+    "monthPosted": "2019-08",
+    "publicationYear": 2019,
+    "sequence": 70,
+    "title": "Skewness Preference and Market Anomalies",
+    "url": "https://ssrn.com/abstract=3166638"
+  },
+  {
+    "authors": [
+      "Zaremba"
+    ],
+    "category": "Data",
+    "dateCreated": "2019-08-09T06:02:12.696827-04:00",
+    "id": "small-minus-big-predicts-betting-against-beta-implications-international-equity-allocation-and-market-timing",
+    "image": {
+      "fileSize": 323605,
+      "height": 680,
+      "title": "Misvaluation of New Trademarks.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/ux87VbKQx0j0JzVRc4nf_sq5FDI=/88/original/Misvaluation_of_New_Trademarks.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "Small-Firm Premium",
+      "Size Effect",
+      "Low-Beta Anomaly",
+      "Small-Minus-Big",
+      "Betting-Against-Beta",
+      "SMB",
+      "BAB",
+      "Asset Pricing",
+      "Factor Timing"
+    ],
+    "monthPosted": "2019-08",
+    "publicationYear": 2018,
+    "sequence": 71,
+    "title": "Small-Minus-Big Predicts Betting-Against-Beta: Implications for International Equity Allocation and Market Timing",
+    "url": "https://ssrn.com/abstract=3227047"
+  },
+  {
+    "authors": [
+      "Chen",
+      "Fengler",
+      "Hardle",
+      "Liu"
+    ],
+    "category": "Finance 101",
+    "dateCreated": "2022-12-29T23:54:46.804143-05:00",
+    "id": "textual-sentiment-option-characteristics-and-stock-return-predictability",
+    "image": {
+      "fileSize": 188123,
+      "height": 680,
+      "title": "ESG preference and Market Efficiency.jpg",
+      "url": "https://api.worldquantbrain.com/content/images/cCWvZEbCyPshOZBEmcMY14cM3sY=/84/original/ESG_preference_and_Market_Efficiency.jpg",
+      "width": 1170
+    },
+    "keywords": [
+      "investor disagreement",
+      "option markets",
+      "overnight information",
+      "return predictability",
+      "textual sentiment",
+      "topic model",
+      "trading-time information"
+    ],
+    "monthPosted": "2019-08",
+    "publicationYear": 2018,
+    "sequence": 72,
+    "title": "Textual Sentiment, Option Characteristics, and Stock Return Predictability",
+    "url": "https://ssrn.com/abstract=3210585"
+  }
+]

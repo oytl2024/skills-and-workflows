@@ -86,3 +86,10 @@
 - Run focused, related, and full unittest suites before committing.
 - Implement Task 6 knowledge pages.
 - Fetch non-course Learn material through the platform API when credentials are available, store raw material under `knowledge/rawmaterial`, and compile summary wiki pages.
+
+### Completion
+- Implemented and committed the read-only `plan-research-options` CLI command after the Task 5 subagent hit an external usage-limit error.
+- Implemented and committed the Phase 2 principle/decision wiki pages.
+- Captured non-course Learn material into `knowledge/rawmaterial/learn`: Operators, Documentation tutorial pages, FAQs, Videos, Recommended Readings, and search discovery results.
+- Compiled `knowledge/wiki/10_foundations/learn_material_index.md` and `knowledge/wiki/20_semantics/operator_catalog_official.md`.
+- Validation passed: raw JSON parses, `scripts/capture_learn_material.py` compiles, compiled wiki placeholder scan is clean, and full unittest discovery passed 169 tests.

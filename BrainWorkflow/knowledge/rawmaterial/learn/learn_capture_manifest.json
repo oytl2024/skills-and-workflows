@@ -1,0 +1,16 @@
+{
+  "counts": {
+    "documentation_errors": 14,
+    "documentation_pages": 39,
+    "excluded": 1,
+    "faqs": 173,
+    "operators": 107,
+    "recommended_readings": 71,
+    "videos": 69
+  },
+  "excluded": [
+    "courses"
+  ],
+  "generated_at": "2026-07-09T10:03:26+00:00",
+  "search_query_count": 25
+}

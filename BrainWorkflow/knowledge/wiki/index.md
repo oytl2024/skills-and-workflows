@@ -3,6 +3,7 @@
 ## Foundation
 
 - [[00_principles/principle_stack|Principle Stack]]
+- [[10_foundations/learn_material_index|Learn Material Index]]
 - [[10_foundations/worldquant_brain_components]]
 - [[10_foundations/metrics_and_checks]]
 
@@ -10,6 +11,7 @@
 
 - [[20_semantics/data_fields_and_datasets]]
 - [[20_semantics/operators]]
+- [[20_semantics/operator_catalog_official|Official Operator Catalog]]
 
 ## Templates
 

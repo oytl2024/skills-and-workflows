@@ -5,6 +5,7 @@ This directory is the durable knowledge base for the WQB alpha research workflow
 ## Layout
 
 - `raw/`: source inventories and minimally processed source notes.
+- `rawmaterial/learn/`: raw non-course Learn API captures, including Documentation, Operators, FAQs, Videos, and Recommended Readings.
 - `wiki/`: compiled operating knowledge.
 - `wiki/10_foundations/`: platform concepts, alpha lifecycle, metrics, checks, and activities.
 - `wiki/20_semantics/`: data fields, datasets, operators, and expression syntax.
@@ -17,4 +18,3 @@ This directory is the durable knowledge base for the WQB alpha research workflow
 ## Operating Rule
 
 Every reusable lesson from documentation, forums, simulations, errors, or submissions should be filed here. The wiki is not a passive notebook; it is the control layer for the alpha generation workflow.
-
