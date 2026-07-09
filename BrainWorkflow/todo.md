@@ -15,3 +15,9 @@
 - Implement the Phase 2 principle-led research planner from:
   `docs/superpowers/specs/2026-07-09-wqb-phase2-principle-led-research-workflow-design.md`
 
+### Repository Status
+- Branch: `agent/brainworkflow-phase2`
+- Initial commit: `f42c5da`
+- Draft PR: https://github.com/oytl2024/skills-and-workflows/pull/1
+- Verification: `python -m unittest discover -s tests -v` passed 160 tests inside `BrainWorkflow/`.
+- GitHub CLI `gh` is not installed locally; the PR was opened through the GitHub connector.
