@@ -70,24 +70,46 @@ def _page_text(page: Any) -> str:
     return " ".join(parts)
 
 
+# Input: evidence list, source metadata, and fetched payload; Output: None; Purpose: append a visible stale marker when one refresh source fails.
+def _append_evidence(
+    evidence: list[SourceEvidence],
+    path: str,
+    title: str,
+    generated_at: str,
+    payload: Any,
+) -> None:
+    if payload is None:
+        evidence.append(
+            SourceEvidence(
+                "api",
+                path,
+                title,
+                generated_at,
+                stale=True,
+                note="refresh failed",
+            )
+        )
+        return
+    evidence.append(SourceEvidence("api", path, title, generated_at))
+
+
 # Input: WQB-like client and ISO timestamp; Output: IncentiveSnapshot; Purpose: refresh official rule and incentive sources into a normalized snapshot.
 def refresh_incentive_snapshot(client: Any, generated_at: str) -> IncentiveSnapshot:
     errors: list[dict[str, str]] = []
     evidence: list[SourceEvidence] = []
 
-    account = _safe_get(client, "/users/self", errors)
-    if not isinstance(account, dict):
-        account = {}
-    evidence.append(SourceEvidence("api", "/users/self", "User account state", generated_at))
+    account_payload = _safe_get(client, "/users/self", errors)
+    account = account_payload if isinstance(account_payload, dict) else {}
+    _append_evidence(evidence, "/users/self", "User account state", generated_at, account_payload)
 
     events_payload = _safe_get(client, "/events?limit=50&offset=0", errors)
-    evidence.append(SourceEvidence("api", "/events?limit=50&offset=0", "Events", generated_at))
+    _append_evidence(evidence, "/events?limit=50&offset=0", "Events", generated_at, events_payload)
 
     competitions_payload = _safe_get(client, "/competitions?limit=50&offset=0", errors)
-    evidence.append(SourceEvidence("api", "/competitions?limit=50&offset=0", "Competitions", generated_at))
+    _append_evidence(evidence, "/competitions?limit=50&offset=0", "Competitions", generated_at, competitions_payload)
 
     power_pool_payload = _safe_options(client, "/consultant/boards/power-pool", errors)
-    evidence.append(SourceEvidence("api", "/consultant/boards/power-pool", "Power Pool boards", generated_at))
+    _append_evidence(evidence, "/consultant/boards/power-pool", "Power Pool boards", generated_at, power_pool_payload)
 
     rule_pages: dict[str, str] = {}
     for page_id in DEFAULT_RULE_PAGE_IDS:
@@ -95,18 +117,9 @@ def refresh_incentive_snapshot(client: Any, generated_at: str) -> IncentiveSnaps
         page = _safe_get(client, path, errors)
         if isinstance(page, dict):
             rule_pages[page_id] = _page_text(page)
-            evidence.append(SourceEvidence("api", path, str(page.get("title", page_id)), generated_at))
+            _append_evidence(evidence, path, str(page.get("title", page_id)), generated_at, page)
         else:
-            evidence.append(
-                SourceEvidence(
-                    "api",
-                    path,
-                    page_id,
-                    generated_at,
-                    stale=True,
-                    note="refresh failed",
-                )
-            )
+            _append_evidence(evidence, path, page_id, generated_at, None)
 
     return IncentiveSnapshot(
         generated_at=generated_at,
