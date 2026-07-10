@@ -42,9 +42,9 @@ def _record_from_dict(row: dict[str, Any]) -> KnowledgeFreshnessRecord:
     )
 
 
-def _validate_required_record(record: KnowledgeFreshnessRecord) -> None:
-    """Input: required freshness record. Output: None. Raise ValueError when required fields are incomplete."""
-    if not record.path.strip():
+def _validate_required_record(record: KnowledgeFreshnessRecord, raw_path: Any) -> None:
+    """Input: record and raw path value. Output: None. Validate required manifest fields."""
+    if not isinstance(raw_path, str) or not raw_path.strip():
         raise ValueError(f"freshness manifest required entry has empty path: {record.name}")
     try:
         date.fromisoformat(record.updated_at)
@@ -61,15 +61,16 @@ def load_freshness_manifest(path: Path, strict: bool = False) -> list[KnowledgeF
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, list):
         raise ValueError(f"freshness manifest must contain a JSON list: {path}")
-    records = [_record_from_dict(row) for row in payload if isinstance(row, dict)]
+    rows = [row for row in payload if isinstance(row, dict)]
+    records = [_record_from_dict(row) for row in rows]
     if strict:
         names = {record.name for record in records}
         missing = sorted(REQUIRED_RESEARCH_RUN_MANIFEST_NAMES - names)
         if missing:
             raise ValueError(f"freshness manifest missing required entries: {', '.join(missing)}")
-        for record in records:
+        for row, record in zip(rows, records):
             if record.name in REQUIRED_RESEARCH_RUN_MANIFEST_NAMES:
-                _validate_required_record(record)
+                _validate_required_record(record, row.get("path"))
     return records
 
 
