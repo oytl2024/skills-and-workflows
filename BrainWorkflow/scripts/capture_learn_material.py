@@ -1,3 +1,4 @@
+import hashlib
 import html
 import json
 import os
@@ -11,6 +12,7 @@ from wqb.client import WQBClient
 
 
 KNOWLEDGE_ROOT_ENV = "BRAIN_KNOWLEDGE_ROOT"
+LEARN_JSON_CACHE_ROOT_ENV = "BRAIN_LEARN_JSON_CACHE_ROOT"
 PAGE_LIMIT = 100
 MAX_RECORDS = 1000
 REQUEST_TIMEOUT_SECONDS = 12
@@ -75,16 +77,70 @@ def default_knowledge_root() -> Path:
     return Path(__file__).resolve().parents[3] / "knowledge"
 
 
+def default_json_cache_root() -> Path:
+    """Input: none. Output: Path. Resolve the ignored JSON cache root for exact source diffs."""
+    configured = os.environ.get(LEARN_JSON_CACHE_ROOT_ENV, "").strip()
+    if configured:
+        return Path(configured)
+    return Path(__file__).resolve().parents[1] / "docs" / "knowledge" / "cache" / "learn"
+
+
 KNOWLEDGE_ROOT = default_knowledge_root()
-OUTPUT_DIR = KNOWLEDGE_ROOT / "raw" / "learn"
+RAW_LEARN_ROOT = KNOWLEDGE_ROOT / "raw" / "platform" / "learn"
+JSON_CACHE_ROOT = default_json_cache_root()
 WIKI_LEARN_PAGE = KNOWLEDGE_ROOT / "wiki" / "10_foundations" / "learn_material_index.md"
 WIKI_OPERATOR_PAGE = KNOWLEDGE_ROOT / "wiki" / "20_semantics" / "operator_catalog_official.md"
 
 
 def write_json(path: Path, payload: Any) -> None:
-    """Input: output path and JSON-like payload. Output: None. Persist raw Learn material with stable formatting."""
+    """Input: output path and JSON-like payload. Output: None. Persist exact Learn JSON cache with stable formatting."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def write_markdown(path: Path, lines: list[str]) -> None:
+    """Input: output path and markdown lines. Output: None. Persist an Obsidian-readable raw source file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
+def stable_json_hash(payload: Any) -> str:
+    """Input: JSON-like payload. Output: sha256 hex string. Hash source content for update checks."""
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def capture_date(generated_at: str) -> str:
+    """Input: ISO timestamp string. Output: YYYY-MM-DD string. Derive a stable capture folder name."""
+    return generated_at.split("T", 1)[0]
+
+
+def raw_capture_dir(generated_at: str) -> Path:
+    """Input: ISO timestamp string. Output: raw capture directory. Place Markdown raw sources by date."""
+    return RAW_LEARN_ROOT / capture_date(generated_at)
+
+
+def json_cache_dir(generated_at: str) -> Path:
+    """Input: ISO timestamp string. Output: JSON cache directory. Place exact payloads outside Obsidian."""
+    return JSON_CACHE_ROOT / capture_date(generated_at)
+
+
+def frontmatter(source_type: str, source_path: str, generated_at: str, payload: Any, compiled_targets: list[str]) -> list[str]:
+    """Input: source metadata and payload. Output: Markdown frontmatter lines. Describe raw source provenance."""
+    lines = [
+        "---",
+        f"source_type: {source_type}",
+        f"source_path: {source_path}",
+        f"captured_at: {generated_at}",
+        "capture_tool: scripts/capture_learn_material.py",
+        "content_status: raw_markdown",
+        f"content_hash: {stable_json_hash(payload)}",
+        "compiled_targets:",
+    ]
+    for target in compiled_targets:
+        lines.append(f"  - {target}")
+    lines.append("---")
+    return lines
 
 
 def result_rows(payload: Any) -> list[dict[str, Any]]:
@@ -175,6 +231,275 @@ def clean_text(value: Any) -> str:
     return ""
 
 
+def markdown_record_value(value: Any) -> str:
+    """Input: arbitrary source value. Output: readable Markdown text. Preserve source content in raw notes."""
+    text = clean_text(value)
+    return text if text else str(value or "")
+
+
+def write_raw_index(capture: dict[str, Any], manifest: dict[str, Any], output_dir: Path) -> Path:
+    """Input: Learn capture, manifest, output dir. Output: index path. Write the raw capture overview."""
+    generated_at = capture["generated_at"]
+    lines = frontmatter(
+        "platform_api",
+        "learn capture aggregate",
+        generated_at,
+        manifest,
+        ["knowledge/wiki/10_foundations/learn_material_index.md"],
+    )
+    lines.extend(
+        [
+            "",
+            "# Learn Capture Index",
+            "",
+            f"Captured at: `{generated_at}`",
+            "",
+            "Courses are intentionally excluded.",
+            "",
+            "## Section Files",
+            "",
+            "- [[operators|Operators]]",
+            "- [[documentation_pages|Documentation Pages]]",
+            "- [[documentation_errors|Documentation Fetch Errors]]",
+            "- [[faqs|FAQs]]",
+            "- [[videos|Videos]]",
+            "- [[recommended_readings|Recommended Readings]]",
+            "- [[search_results|Search Results]]",
+            "",
+            "## Counts",
+            "",
+        ]
+    )
+    for key, value in sorted(manifest["counts"].items()):
+        lines.append(f"- {key}: {value}")
+    lines.extend(
+        [
+            f"- search_query_count: {manifest['search_query_count']}",
+            "",
+            "## Update Check",
+            "",
+            "Compare counts and content hashes against the previous capture. Count changes identify which section files need deeper review before recompiling wiki pages.",
+        ]
+    )
+    path = output_dir / "index.md"
+    write_markdown(path, lines)
+    return path
+
+
+def write_raw_operators(operators: list[dict[str, Any]], generated_at: str, output_dir: Path) -> Path:
+    """Input: operator rows, timestamp, output dir. Output: path. Write raw official operator records as Markdown."""
+    lines = frontmatter(
+        "platform_api",
+        "/operators",
+        generated_at,
+        operators,
+        ["knowledge/wiki/20_semantics/operator_catalog_official.md", "knowledge/wiki/20_semantics/operators.md"],
+    )
+    lines.extend(["", "# Operators", "", f"Record count: {len(operators)}", ""])
+    by_category: dict[str, list[dict[str, Any]]] = {}
+    for operator in operators:
+        category = str(operator.get("category") or "Uncategorized")
+        by_category.setdefault(category, []).append(operator)
+    for category in sorted(by_category):
+        lines.extend([f"## {category}", ""])
+        for row in sorted(by_category[category], key=lambda item: str(item.get("name", "")).lower()):
+            name = row.get("name", "")
+            lines.extend(
+                [
+                    f"### `{name}`",
+                    "",
+                    f"- Source id: `{name}`",
+                    f"- Scope: {row.get('scope', 'unspecified')}",
+                    f"- Level: {row.get('level', 'unspecified')}",
+                    f"- Documentation: {row.get('documentation', '')}",
+                    f"- Definition: `{markdown_record_value(row.get('definition'))}`",
+                    f"- Description: {markdown_record_value(row.get('description'))}",
+                    "",
+                ]
+            )
+    path = output_dir / "operators.md"
+    write_markdown(path, lines)
+    return path
+
+
+def write_raw_documentation_pages(pages: list[dict[str, Any]], generated_at: str, output_dir: Path) -> Path:
+    """Input: documentation page rows, timestamp, output dir. Output: path. Write raw Learn documentation pages."""
+    lines = frontmatter(
+        "platform_api",
+        "/tutorial-pages/{id}",
+        generated_at,
+        pages,
+        [
+            "knowledge/wiki/10_foundations/learn_material_index.md",
+            "knowledge/wiki/10_foundations/metrics_and_checks.md",
+            "knowledge/wiki/60_workflows/correlation_aware_stage1.md",
+        ],
+    )
+    lines.extend(["", "# Documentation Pages", "", f"Record count: {len(pages)}", ""])
+    for page in sorted(pages, key=lambda item: str(item.get("title", item.get("id", ""))).lower()):
+        page_id = page.get("id", "")
+        title = page.get("title") or page_id
+        lines.extend(
+            [
+                f"## {title}",
+                "",
+                f"- Page id: `{page_id}`",
+                f"- Category: {page.get('category', '')}",
+                "",
+                markdown_record_value(page.get("content")),
+                "",
+            ]
+        )
+    path = output_dir / "documentation_pages.md"
+    write_markdown(path, lines)
+    return path
+
+
+def write_raw_errors(errors: list[dict[str, str]], generated_at: str, output_dir: Path) -> Path:
+    """Input: fetch error rows, timestamp, output dir. Output: path. Write raw documentation fetch errors."""
+    lines = frontmatter(
+        "platform_api",
+        "/tutorial-pages/{id}",
+        generated_at,
+        errors,
+        ["knowledge/wiki/10_foundations/learn_material_index.md"],
+    )
+    lines.extend(["", "# Documentation Fetch Errors", "", f"Record count: {len(errors)}", ""])
+    for error in errors:
+        lines.extend(
+            [
+                f"## `{error.get('id', '')}`",
+                "",
+                f"- Error: {error.get('error', '')}",
+                f"- Message: {error.get('message', '')}",
+                "",
+            ]
+        )
+    path = output_dir / "documentation_errors.md"
+    write_markdown(path, lines)
+    return path
+
+
+def write_raw_rows(
+    section_name: str,
+    endpoint: str,
+    rows: list[dict[str, Any]],
+    generated_at: str,
+    output_dir: Path,
+    filename: str,
+    compiled_targets: list[str],
+) -> Path:
+    """Input: row section metadata and rows. Output: path. Write raw API rows as Markdown."""
+    lines = frontmatter("platform_api", endpoint, generated_at, rows, compiled_targets)
+    lines.extend(["", f"# {section_name}", "", f"Record count: {len(rows)}", ""])
+    for index, row in enumerate(rows, 1):
+        title = row.get("title") or row.get("name") or row.get("question") or row.get("id") or f"Record {index}"
+        lines.extend([f"## {title}", ""])
+        for key in sorted(row):
+            value = row[key]
+            if isinstance(value, (dict, list)):
+                lines.append(f"- {key}: `{json.dumps(value, ensure_ascii=False, sort_keys=True)}`")
+            else:
+                text = markdown_record_value(value)
+                if len(text) > 500:
+                    lines.extend([f"- {key}:", "", text, ""])
+                else:
+                    lines.append(f"- {key}: {text}")
+        lines.append("")
+    path = output_dir / filename
+    write_markdown(path, lines)
+    return path
+
+
+def write_raw_search_results(search_results: dict[str, Any], generated_at: str, output_dir: Path) -> Path:
+    """Input: search results, timestamp, output dir. Output: path. Write raw Learn search discovery results."""
+    lines = frontmatter(
+        "platform_api",
+        "/search?query=...",
+        generated_at,
+        search_results,
+        ["knowledge/wiki/10_foundations/learn_material_index.md"],
+    )
+    lines.extend(["", "# Search Results", "", f"Query count: {len(search_results)}", ""])
+    for query in sorted(search_results):
+        payload = search_results[query]
+        lines.extend([f"## Query: `{query}`", ""])
+        if isinstance(payload, dict) and "error" in payload:
+            lines.extend([f"- Error: {payload.get('error')}", f"- Message: {payload.get('message')}", ""])
+            continue
+        if isinstance(payload, dict):
+            for group_name in sorted(payload):
+                group = payload[group_name]
+                rows = group.get("results", []) if isinstance(group, dict) else []
+                lines.append(f"### {group_name}")
+                lines.append("")
+                lines.append(f"- Result count: {len(rows)}")
+                for row in rows:
+                    if isinstance(row, dict):
+                        label = row.get("title") or row.get("name") or row.get("id") or row.get("url") or "result"
+                        lines.append(f"- `{row.get('id', '')}` {label}")
+                lines.append("")
+        else:
+            lines.extend(["```json", json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), "```", ""])
+    path = output_dir / "search_results.md"
+    write_markdown(path, lines)
+    return path
+
+
+def write_raw_learn_markdown(capture: dict[str, Any], manifest: dict[str, Any]) -> list[Path]:
+    """Input: Learn capture and manifest. Output: written Markdown paths. Convert raw Learn payloads for Obsidian."""
+    output_dir = raw_capture_dir(capture["generated_at"])
+    paths = [
+        write_raw_index(capture, manifest, output_dir),
+        write_raw_operators(capture["operators"], capture["generated_at"], output_dir),
+        write_raw_documentation_pages(capture["documentation_pages"], capture["generated_at"], output_dir),
+        write_raw_errors(capture["documentation_errors"], capture["generated_at"], output_dir),
+        write_raw_rows(
+            "FAQs",
+            "/faqs",
+            capture["faqs"],
+            capture["generated_at"],
+            output_dir,
+            "faqs.md",
+            ["knowledge/wiki/10_foundations/metrics_and_checks.md"],
+        ),
+        write_raw_rows(
+            "Videos",
+            "/videos",
+            capture["videos"],
+            capture["generated_at"],
+            output_dir,
+            "videos.md",
+            ["knowledge/wiki/20_semantics/data_fields_and_datasets.md", "knowledge/wiki/30_templates/template_families.md"],
+        ),
+        write_raw_rows(
+            "Recommended Readings",
+            "/recommended-readings",
+            capture["recommended_readings"],
+            capture["generated_at"],
+            output_dir,
+            "recommended_readings.md",
+            ["knowledge/wiki/30_templates/template_families.md"],
+        ),
+        write_raw_search_results(capture["search_results"], capture["generated_at"], output_dir),
+    ]
+    return paths
+
+
+def write_json_cache(capture: dict[str, Any], manifest: dict[str, Any]) -> Path:
+    """Input: Learn capture and manifest. Output: cache dir. Store exact JSON outside the Obsidian vault."""
+    output_dir = json_cache_dir(capture["generated_at"])
+    write_json(output_dir / "learn_capture_manifest.json", manifest)
+    write_json(output_dir / "operators.json", capture["operators"])
+    write_json(output_dir / "documentation_pages.json", capture["documentation_pages"])
+    write_json(output_dir / "documentation_errors.json", capture["documentation_errors"])
+    write_json(output_dir / "faqs.json", capture["faqs"])
+    write_json(output_dir / "videos.json", capture["videos"])
+    write_json(output_dir / "recommended_readings.json", capture["recommended_readings"])
+    write_json(output_dir / "search_results.json", capture["search_results"])
+    return output_dir
+
+
 def write_learn_wiki(capture: dict[str, Any]) -> None:
     """Input: raw capture dict. Output: None. Compile Learn source inventory into the wiki."""
     generated_at = capture["generated_at"]
@@ -184,7 +509,7 @@ def write_learn_wiki(capture: dict[str, Any]) -> None:
         "",
         f"Generated at: `{generated_at}`",
         "",
-        "This page indexes the locally captured non-course Learn material. Raw API payloads live under `knowledge/raw/learn/`.",
+        f"This page indexes the locally captured non-course Learn material. Raw Markdown sources live under `knowledge/raw/platform/learn/{capture_date(generated_at)}/`.",
         "",
         "## Captured Sections",
         "",
@@ -237,7 +562,7 @@ def write_operator_wiki(operators: list[dict[str, Any]], generated_at: str) -> N
         "",
         f"Generated at: `{generated_at}`",
         "",
-        "Raw source: `knowledge/raw/learn/operators.json`.",
+        f"Raw source: `knowledge/raw/platform/learn/{capture_date(generated_at)}/operators.md`.",
         "",
         "Use this catalog as the local source for operator names, categories, scopes, definitions, descriptions, documentation fields, and level restrictions.",
         "",
@@ -268,7 +593,7 @@ def write_operator_wiki(operators: list[dict[str, Any]], generated_at: str) -> N
 
 
 def main() -> None:
-    """Input: env credentials. Output: raw JSON and wiki pages. Capture non-course Learn material."""
+    """Input: env credentials. Output: raw Markdown, JSON cache, and wiki pages. Capture non-course Learn material."""
     generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     client = WQBClient(
         timeout_seconds=REQUEST_TIMEOUT_SECONDS,
@@ -292,24 +617,30 @@ def main() -> None:
         **sections,
     }
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     manifest = {
         "generated_at": generated_at,
         "excluded": capture["excluded"],
         "counts": {key: len(value) for key, value in capture.items() if isinstance(value, list)},
         "search_query_count": len(search_results),
     }
-    write_json(OUTPUT_DIR / "learn_capture_manifest.json", manifest)
-    write_json(OUTPUT_DIR / "operators.json", operators)
-    write_json(OUTPUT_DIR / "documentation_pages.json", documentation_pages)
-    write_json(OUTPUT_DIR / "documentation_errors.json", documentation_errors)
-    write_json(OUTPUT_DIR / "faqs.json", capture["faqs"])
-    write_json(OUTPUT_DIR / "videos.json", capture["videos"])
-    write_json(OUTPUT_DIR / "recommended_readings.json", capture["recommended_readings"])
-    write_json(OUTPUT_DIR / "search_results.json", search_results)
+    raw_paths = write_raw_learn_markdown(capture, manifest)
+    cache_dir = write_json_cache(capture, manifest)
     write_learn_wiki(capture)
     write_operator_wiki(operators, generated_at)
-    print(json.dumps({"generated_at": generated_at, "output_dir": str(OUTPUT_DIR), "counts": {key: len(value) for key, value in capture.items() if isinstance(value, list)}}, ensure_ascii=False, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "generated_at": generated_at,
+                "raw_markdown_dir": str(raw_capture_dir(generated_at)),
+                "raw_markdown_files": [str(path) for path in raw_paths],
+                "json_cache_dir": str(cache_dir),
+                "counts": {key: len(value) for key, value in capture.items() if isinstance(value, list)},
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -167,3 +167,28 @@
 - Updated `scripts/capture_learn_material.py` so future Learn captures write to the raw layer.
 - Added a regression test for Learn capture raw-layer defaults.
 - Updated source-index documentation in the shared vault so each raw Learn file has source, contents, update-check, and wiki target notes.
+
+## 2026-07-10 Markdown Raw Source Implementation
+
+### Requirement Summary
+- Update the Learn capture workflow so Obsidian-facing raw materials are Markdown.
+- Keep exact JSON payloads outside the vault in an ignored cache for deterministic diffs.
+- Preserve the shared root vault as the only knowledge base.
+
+### Confirmed Details
+- Markdown raw output should live under `knowledge/raw/platform/learn/<capture-date>/`.
+- JSON cache should live outside the vault under `docs/knowledge/cache/learn/<capture-date>/`.
+- Stage 1 cleanup is not deletion in this task; it is indexing and planning.
+
+### Execution Plan
+- Update `scripts/capture_learn_material.py` raw output and cache behavior.
+- Update tests for Markdown raw output and cache paths.
+- Use the existing captured Learn JSON to generate Markdown raw files.
+- Move existing JSON payloads to ignored cache after verifying Markdown files exist.
+- Run full tests and push branch.
+
+### Completion
+- Updated `scripts/capture_learn_material.py` to write Markdown raw sources under `knowledge/raw/platform/learn/<capture-date>/`.
+- Updated the same script to write exact JSON payloads under ignored `docs/knowledge/cache/learn/<capture-date>/`.
+- Updated CLI tests for the Markdown raw and JSON cache defaults.
+- Converted the existing 2026-07-09 Learn capture into Markdown raw files in the shared vault.

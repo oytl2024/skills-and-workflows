@@ -84,9 +84,19 @@ class CliTests(unittest.TestCase):
         from scripts import capture_learn_material
 
         expected = TESTS_DIR.parents[2] / "knowledge"
+        cache_root = TESTS_DIR.parents[0] / "docs" / "knowledge" / "cache" / "learn"
 
         self.assertEqual(capture_learn_material.KNOWLEDGE_ROOT, expected)
-        self.assertEqual(capture_learn_material.OUTPUT_DIR, expected / "raw" / "learn")
+        self.assertEqual(capture_learn_material.RAW_LEARN_ROOT, expected / "raw" / "platform" / "learn")
+        self.assertEqual(capture_learn_material.JSON_CACHE_ROOT, cache_root)
+        self.assertEqual(
+            capture_learn_material.raw_capture_dir("2026-07-09T10:03:26+00:00"),
+            expected / "raw" / "platform" / "learn" / "2026-07-09",
+        )
+        self.assertEqual(
+            capture_learn_material.json_cache_dir("2026-07-09T10:03:26+00:00"),
+            cache_root / "2026-07-09",
+        )
         self.assertEqual(
             capture_learn_material.WIKI_LEARN_PAGE,
             expected / "wiki" / "10_foundations" / "learn_material_index.md",
