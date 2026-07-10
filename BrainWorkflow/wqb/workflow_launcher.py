@@ -76,6 +76,8 @@ def load_workflow_launch_config(
     data.update({key: value for key, value in (overrides or {}).items() if value is not None})
     if "knowledge_root" not in data:
         data["knowledge_root"] = "knowledge"
+    if "live_api_enabled" in data and not isinstance(data["live_api_enabled"], bool):
+        raise ValueError("workflow config live_api_enabled must be a boolean")
     return WorkflowLaunchConfig(**{key: value for key, value in data.items() if key in WorkflowLaunchConfig.__dataclass_fields__})
 
 
@@ -87,8 +89,9 @@ def _slug(value: str) -> str:
 
 def create_run_manifest(config: WorkflowLaunchConfig, generated_at: str | None = None) -> WorkflowRunManifest:
     """Input: launch config and timestamp. Output: run manifest. Create one auditable run manifest."""
-    generated = generated_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    run_id = f"{generated[:10].replace('-', '')}-{_slug(config.objective)}"
+    generated = generated_at or datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    timestamp_slug = "".join(char for char in generated if char.isalnum())
+    run_id = f"{timestamp_slug}-{_slug(config.objective)}"
     run_dir = str(Path(config.run_root) / run_id)
     readiness_path = str(Path(run_dir) / "readiness_report.md")
     handoff_dir = str(Path(run_dir) / "handoffs")

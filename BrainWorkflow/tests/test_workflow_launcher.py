@@ -45,6 +45,27 @@ class WorkflowLauncherTests(unittest.TestCase):
         self.assertFalse(payload["live_api_enabled"])
         self.assertIn("data_ledger", payload["knowledge_artifacts"])
 
+    def test_create_run_manifest_keeps_same_day_runs_in_separate_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            defaults = root / "defaults.json"
+            defaults.write_text(json.dumps({"knowledge_root": "knowledge", "run_root": str(root / "runs"), "objective": "Power Pool"}), encoding="utf-8")
+            config = load_workflow_launch_config(defaults)
+
+            first = create_run_manifest(config, generated_at="2026-07-10T09:00:00Z")
+            second = create_run_manifest(config, generated_at="2026-07-10T09:00:01Z")
+
+        self.assertNotEqual(first.run_id, second.run_id)
+        self.assertNotEqual(first.run_dir, second.run_dir)
+
+    def test_load_workflow_launch_config_rejects_non_boolean_live_api_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            defaults = Path(tmp) / "defaults.json"
+            defaults.write_text(json.dumps({"knowledge_root": "knowledge", "live_api_enabled": "false"}), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "live_api_enabled.*boolean"):
+                load_workflow_launch_config(defaults)
+
     def test_write_run_manifest_creates_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
