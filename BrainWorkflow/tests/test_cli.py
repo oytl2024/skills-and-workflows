@@ -105,6 +105,35 @@ class CliTests(unittest.TestCase):
         readiness.assert_called_once()
         self.assertEqual(json.loads(output.getvalue())["json_path"], "readiness_report.json")
 
+    def test_bootstrap_knowledge_command_returns_summary(self):
+        from wqb.cli import bootstrap_knowledge_command
+        from wqb.knowledge_bootstrap import BootstrapSummary
+
+        fake_summary = BootstrapSummary(
+            generated_at="2026-07-10T00:00:00Z",
+            knowledge_root="knowledge",
+            data_ledger_count=1,
+            template_count=1,
+            artifact_paths=["knowledge/wiki/20_semantics/data_ledger.jsonl"],
+            warnings=[],
+        )
+        with patch("wqb.cli.bootstrap_knowledge", return_value=fake_summary):
+            result = bootstrap_knowledge_command("knowledge", "docs/knowledge")
+
+        self.assertEqual(result["data_ledger_count"], 1)
+        self.assertEqual(result["template_count"], 1)
+
+    def test_bootstrap_knowledge_main_dispatches_without_simulation(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "bootstrap-knowledge"]), patch(
+            "wqb.cli.bootstrap_knowledge_command",
+            return_value={"generated_at": "2026-07-10T00:00:00Z", "knowledge_root": "knowledge", "data_ledger_count": 1, "template_count": 1, "artifact_paths": [], "warnings": []},
+        ) as bootstrap, redirect_stdout(output):
+            main()
+
+        bootstrap.assert_called_once()
+        self.assertEqual(json.loads(output.getvalue())["data_ledger_count"], 1)
+
     def test_default_knowledge_root_uses_shared_workspace_vault(self):
         expected = TESTS_DIR.parents[2] / "knowledge"
 

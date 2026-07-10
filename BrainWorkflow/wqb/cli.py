@@ -27,6 +27,7 @@ from wqb.decision_log import write_option_cards
 from wqb.expression import expression_hash, is_power_pool_complexity_ok, replace_operator_names
 from wqb.generator import build_settings, generate_seed_candidates, simulation_payload
 from wqb.knowledge import fetch_knowledge_snapshot
+from wqb.knowledge_bootstrap import bootstrap_knowledge, bootstrap_summary_to_dict
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest, write_freshness_report
 from wqb.novelty import score_expression_novelty
 from wqb.optimizer import actions_for_check_summary
@@ -129,6 +130,12 @@ def knowledge_health_check(
         "missing_count": len([status for status in statuses if not status.artifact_exists]),
         "report_path": str(report),
     }
+
+
+def bootstrap_knowledge_command(knowledge_root: str | Path, seed_root: str | Path) -> dict[str, Any]:
+    """Input: knowledge root and seed root. Output: summary dict. Materialize formal knowledge artifacts."""
+    summary = bootstrap_knowledge(knowledge_root, seed_root)
+    return bootstrap_summary_to_dict(summary)
 
 
 def readiness_check(
@@ -3007,6 +3014,7 @@ def parse_args() -> argparse.Namespace:
             "plan-research-options",
             "knowledge-health-check",
             "readiness-check",
+            "bootstrap-knowledge",
             "schedule-research",
         ],
     )
@@ -3048,6 +3056,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--freshness-manifest", default="wiki/80_maintenance/freshness_manifest.json")
     parser.add_argument("--freshness-report", default="wiki/80_maintenance/freshness_report.md")
     parser.add_argument("--knowledge-root", default=str(default_knowledge_root()))
+    parser.add_argument("--knowledge-seed-root", default="docs/knowledge")
     parser.add_argument("--readiness-output-dir", default="")
     parser.add_argument("--readiness-mode", choices=["maintenance", "plan-only", "research", "submit-candidate"], default="plan-only")
     parser.add_argument("--batch-size", type=int, default=30)
@@ -3222,6 +3231,9 @@ def main() -> None:
             args.confirm_submit,
             today_value=args.today or None,
         )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "bootstrap-knowledge":
+        result = bootstrap_knowledge_command(args.knowledge_root, args.knowledge_seed_root)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "schedule-research":
         if not args.option_json:
