@@ -71,6 +71,40 @@ def cleanup_run_dir(run_dir: Path) -> None:
 
 
 class CliTests(unittest.TestCase):
+    def test_readiness_check_function_writes_reports(self):
+        from wqb.cli import readiness_check
+        from wqb.run_readiness import ReadinessReport
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "runs" / "run1"
+            fake_report = ReadinessReport(mode="plan-only", generated_at="2026-07-10T00:00:00Z", passed=True, blocked=False, issues=[])
+            with patch("wqb.cli.evaluate_run_readiness", return_value=fake_report), patch("wqb.cli.write_readiness_reports", return_value=(output_dir / "readiness_report.json", output_dir / "readiness_report.md")) as writer:
+                result = readiness_check(root, output_dir, "plan-only", 30, False, False, today_value="2026-07-10")
+
+        writer.assert_called_once()
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["mode"], "plan-only")
+
+    def test_parse_args_accepts_readiness_check(self):
+        with patch("sys.argv", ["wqb", "readiness-check", "--readiness-mode", "research", "--batch-size", "30", "--enable-live-api"]):
+            args = parse_args()
+
+        self.assertEqual(args.command, "readiness-check")
+        self.assertEqual(args.readiness_mode, "research")
+        self.assertTrue(args.enable_live_api)
+
+    def test_readiness_check_main_dispatches_without_simulation(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "readiness-check"]), patch(
+            "wqb.cli.readiness_check",
+            return_value={"mode": "plan-only", "passed": True, "blocked": False, "issue_count": 0, "json_path": "readiness_report.json", "markdown_path": "readiness_report.md"},
+        ) as readiness, redirect_stdout(output):
+            main()
+
+        readiness.assert_called_once()
+        self.assertEqual(json.loads(output.getvalue())["json_path"], "readiness_report.json")
+
     def test_default_knowledge_root_uses_shared_workspace_vault(self):
         expected = TESTS_DIR.parents[2] / "knowledge"
 

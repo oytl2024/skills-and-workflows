@@ -36,6 +36,7 @@ from wqb.research_planner import generate_research_options
 from wqb.research_scheduler import build_research_schedule, research_schedule_to_dict, write_research_schedule
 from wqb.research_workflow import build_parallel_stage_plan, cap_simulation_count, precheck_expression
 from wqb.rule_refresh import refresh_incentive_snapshot
+from wqb.run_readiness import evaluate_run_readiness, write_readiness_reports
 from wqb.simulator import extract_alpha_id, poll_simulation, resolve_multisimulation_alpha_ids, submit_multisimulation, submit_simulation
 from wqb.template_library import load_template_library
 
@@ -127,6 +128,35 @@ def knowledge_health_check(
         "stale_count": len([status for status in statuses if status.stale]),
         "missing_count": len([status for status in statuses if not status.artifact_exists]),
         "report_path": str(report),
+    }
+
+
+def readiness_check(
+    knowledge_root: str | Path,
+    output_dir: str | Path,
+    mode: str,
+    batch_size: int,
+    live_api_enabled: bool,
+    submit_confirmed: bool,
+    today_value: str | None = None,
+) -> dict[str, Any]:
+    """Input: root, output dir, mode, safety flags. Output: summary dict. Run startup readiness checks."""
+    report = evaluate_run_readiness(
+        knowledge_root,
+        mode=mode,
+        batch_size=batch_size,
+        live_api_enabled=live_api_enabled,
+        submit_confirmed=submit_confirmed,
+        today_value=today_value,
+    )
+    json_path, markdown_path = write_readiness_reports(Path(output_dir), report)
+    return {
+        "mode": report.mode,
+        "passed": report.passed,
+        "blocked": report.blocked,
+        "issue_count": len(report.issues),
+        "json_path": str(json_path),
+        "markdown_path": str(markdown_path),
     }
 
 
@@ -2976,6 +3006,7 @@ def parse_args() -> argparse.Namespace:
             "run-expression-file",
             "plan-research-options",
             "knowledge-health-check",
+            "readiness-check",
             "schedule-research",
         ],
     )
@@ -3016,6 +3047,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--option-output-dir", default=default_option_output_dir())
     parser.add_argument("--freshness-manifest", default="wiki/80_maintenance/freshness_manifest.json")
     parser.add_argument("--freshness-report", default="wiki/80_maintenance/freshness_report.md")
+    parser.add_argument("--knowledge-root", default=str(default_knowledge_root()))
+    parser.add_argument("--readiness-output-dir", default="")
+    parser.add_argument("--readiness-mode", choices=["maintenance", "plan-only", "research", "submit-candidate"], default="plan-only")
+    parser.add_argument("--batch-size", type=int, default=30)
+    parser.add_argument("--enable-live-api", action="store_true", default=False)
+    parser.add_argument("--confirm-submit", action="store_true", default=False)
     parser.add_argument("--today", default="")
     parser.add_argument("--option-json", default="")
     parser.add_argument("--option-index", type=int, default=None)
@@ -3171,6 +3208,18 @@ def main() -> None:
             default_knowledge_root(),
             args.freshness_manifest,
             args.freshness_report,
+            today_value=args.today or None,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "readiness-check":
+        output_dir = args.readiness_output_dir or str(Path(config["run_root"]) / "readiness")
+        result = readiness_check(
+            args.knowledge_root,
+            output_dir,
+            args.readiness_mode,
+            args.batch_size,
+            args.enable_live_api,
+            args.confirm_submit,
             today_value=args.today or None,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
