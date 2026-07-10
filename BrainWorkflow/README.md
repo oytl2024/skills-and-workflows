@@ -57,3 +57,7 @@ python -m unittest discover -s tests -v
 Phase 2 is implementing the principle-led research planner. The active design is:
 
 `docs/superpowers/specs/2026-07-09-wqb-phase2-principle-led-research-workflow-design.md`
+
+The long-term workflow design is:
+
+`docs/superpowers/specs/2026-07-10-long-term-self-optimizing-brain-workflow-design.md`

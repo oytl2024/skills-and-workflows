@@ -192,3 +192,31 @@
 - Updated the same script to write exact JSON payloads under ignored `docs/knowledge/cache/learn/<capture-date>/`.
 - Updated CLI tests for the Markdown raw and JSON cache defaults.
 - Converted the existing 2026-07-09 Learn capture into Markdown raw files in the shared vault.
+
+## 2026-07-10 Long-Term Self-Optimizing Workflow Design
+
+### Requirement Summary
+- Show the current BrainWorkflow research workflow as implemented and documented.
+- Continue designing a long-term maintainable workflow that can improve its own rules, benchmarks, planner decisions, and knowledge base.
+- Keep the existing concrete simulation/repair/submit workflow intact; this task focuses on planner, governance, knowledge architecture, and workflow optimization boundaries.
+
+### Confirmed Details
+- Start with inspection and design, not implementation changes to alpha simulation logic.
+- Use the shared vault at `C:\Users\oytl\Desktop\pyproject\brain\knowledge` as the durable knowledge source.
+- The long-term workflow should support incentive-aware planning, activity/data/region selection, and periodic rule refresh.
+- Automatic workflow optimization should produce proposed rule changes only; the user decides whether to apply them.
+- Scout and Seed must consult the knowledge base, including data semantics, historical data usage, template library, operator semantics, and strategy ideas.
+- The data knowledge layer must record all available platform data plus data already used by submitted or simulated strategies, so incentive-aware planning can schedule underused data.
+- The template knowledge layer must record operator embeddings, strategy templates, data-type-to-template fit, and periodic low-correlation template innovation or template repair proposals.
+
+### Execution Plan
+- Inspect current workflow docs, planner docs, maintenance pages, and Stage 1 inventory.
+- Summarize the current workflow and known gaps.
+- Propose 2-3 long-term architecture approaches with trade-offs.
+- Recommend one maintainable design and wait for user approval before writing a formal spec.
+
+### Completion
+- Showed the current workflow: principle-led planner, Scout/Seed/Discovery/Repair/Submit execution chain, raw/wiki knowledge layers, benchmarks, and workflow optimizer backlog.
+- Confirmed the automation boundary: the system proposes rule changes, and the user decides whether to apply them.
+- Confirmed research workflow startup should consume existing Data Ledger, Template Library, benchmarks, and principles instead of running a large knowledge compile.
+- Wrote the formal design spec at `docs/superpowers/specs/2026-07-10-long-term-self-optimizing-brain-workflow-design.md`.
