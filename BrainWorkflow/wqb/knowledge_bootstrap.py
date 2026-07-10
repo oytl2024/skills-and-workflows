@@ -15,6 +15,7 @@ TEMPLATE_LIBRARY_MD = Path("wiki") / "30_templates" / "template_library.md"
 FRESHNESS_MANIFEST = Path("wiki") / "80_maintenance" / "freshness_manifest.json"
 BOOTSTRAP_REPORT = Path("wiki") / "80_maintenance" / "bootstrap_report.md"
 ACTIVITY_SNAPSHOT = Path("wiki") / "10_foundations" / "activity_snapshot.md"
+NON_REFRESHED_BASELINE_DATE = "1970-01-01"
 
 
 @dataclass(frozen=True)
@@ -72,12 +73,33 @@ def _write_manifest(path: Path, generated_at: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     day = generated_at[:10]
     rows = [
-        {"name": "data_ledger", "path": str(DATA_LEDGER_JSONL).replace("\\", "/"), "updated_at": day, "max_age_days": 1},
-        {"name": "template_library", "path": str(TEMPLATE_LIBRARY_JSONL).replace("\\", "/"), "updated_at": day, "max_age_days": 7},
-        {"name": "benchmark_rules", "path": "wiki/50_benchmarks/correlation_and_novelty.md", "updated_at": day, "max_age_days": 7},
-        {"name": "activity_snapshot", "path": str(ACTIVITY_SNAPSHOT).replace("\\", "/"), "updated_at": day, "max_age_days": 1},
-        {"name": "operator_catalog", "path": "wiki/20_semantics/operator_catalog_official.md", "updated_at": day, "max_age_days": 30},
-        {"name": "research_option_cards", "path": "wiki/70_decisions/research_option_cards.jsonl", "updated_at": day, "max_age_days": 7},
+        {"name": "data_ledger", "path": str(DATA_LEDGER_JSONL).replace("\\", "/"), "updated_at": day, "max_age_days": 1, "status": "refreshed"},
+        {"name": "template_library", "path": str(TEMPLATE_LIBRARY_JSONL).replace("\\", "/"), "updated_at": day, "max_age_days": 7, "status": "refreshed"},
+        {
+            "name": "benchmark_rules",
+            "path": "wiki/50_benchmarks/correlation_and_novelty.md",
+            "updated_at": NON_REFRESHED_BASELINE_DATE,
+            "max_age_days": 7,
+            "status": "not_refreshed",
+            "source_note": "Bootstrap does not create or refresh benchmark rules.",
+        },
+        {"name": "activity_snapshot", "path": str(ACTIVITY_SNAPSHOT).replace("\\", "/"), "updated_at": day, "max_age_days": 1, "status": "refreshed"},
+        {
+            "name": "operator_catalog",
+            "path": "wiki/20_semantics/operator_catalog_official.md",
+            "updated_at": NON_REFRESHED_BASELINE_DATE,
+            "max_age_days": 30,
+            "status": "not_refreshed",
+            "source_note": "Bootstrap does not create or refresh the official operator catalog.",
+        },
+        {
+            "name": "research_option_cards",
+            "path": "wiki/70_decisions/research_option_cards.jsonl",
+            "updated_at": NON_REFRESHED_BASELINE_DATE,
+            "max_age_days": 7,
+            "status": "not_refreshed",
+            "source_note": "Bootstrap does not create or refresh research option cards.",
+        },
     ]
     path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
@@ -103,7 +125,11 @@ def bootstrap_knowledge(knowledge_root: str | Path, seed_root: str | Path, gener
     manifest = _write_manifest(root / FRESHNESS_MANIFEST, generated)
     report = root / BOOTSTRAP_REPORT
     report.parent.mkdir(parents=True, exist_ok=True)
-    warnings = ["Data ledger is schema-seeded and partial until platform metadata refresh runs."]
+    non_refreshed = ["benchmark_rules", "operator_catalog", "research_option_cards"]
+    warnings = [
+        "Data ledger and template library are schema-seeded and partial until platform metadata refresh runs.",
+        "The following required artifacts were not refreshed by bootstrap: " + ", ".join(non_refreshed) + ".",
+    ]
     artifact_paths = [str(path) for path in [ledger_jsonl, ledger_md, template_jsonl, template_md, manifest, activity, report]]
     report.write_text(
         "# Knowledge Bootstrap Report\n\n"
@@ -111,7 +137,10 @@ def bootstrap_knowledge(knowledge_root: str | Path, seed_root: str | Path, gener
         f"- Data Ledger Records: {len(ledger_rows)}\n"
         f"- Template Records: {len(template_rows)}\n"
         "- Source Quality: `schema_seed`\n"
-        "- Coverage Status: `partial`\n",
+        "- Coverage Status: `partial`\n"
+        "- Manifest Status: `partial`\n"
+        "- Refreshed Artifacts: `data_ledger`, `template_library`, `activity_snapshot`\n"
+        "- Not Refreshed (stale baseline): `benchmark_rules`, `operator_catalog`, `research_option_cards`\n",
         encoding="utf-8",
     )
     return BootstrapSummary(generated, str(root), len(ledger_rows), len(template_rows), artifact_paths, warnings)

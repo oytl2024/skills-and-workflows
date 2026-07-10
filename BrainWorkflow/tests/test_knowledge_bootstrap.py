@@ -92,3 +92,32 @@ class KnowledgeBootstrapTests(unittest.TestCase):
         self.assertTrue(any("freshness_manifest.json" in path for path in payload["artifact_paths"]))
         self.assertIn("data_ledger", {row["name"] for row in manifest})
         self.assertIn("template_library", {row["name"] for row in manifest})
+
+    def test_bootstrap_manifest_and_report_identify_non_refreshed_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            seed_root = Path(tmp) / "seed"
+            self.create_seed_files(seed_root)
+
+            summary = bootstrap_knowledge(root, seed_root, generated_at="2026-07-10T00:00:00Z")
+
+            manifest = json.loads(
+                (root / "wiki" / "80_maintenance" / "freshness_manifest.json").read_text(encoding="utf-8")
+            )
+            report = (root / "wiki" / "80_maintenance" / "bootstrap_report.md").read_text(encoding="utf-8")
+
+        by_name = {row["name"]: row for row in manifest}
+        for name in ("data_ledger", "template_library", "activity_snapshot"):
+            self.assertEqual(by_name[name]["updated_at"], "2026-07-10")
+            self.assertEqual(by_name[name]["status"], "refreshed")
+        for name in ("benchmark_rules", "operator_catalog", "research_option_cards"):
+            self.assertNotEqual(by_name[name]["updated_at"], "2026-07-10")
+            self.assertEqual(by_name[name]["status"], "not_refreshed")
+            self.assertTrue(by_name[name]["source_note"])
+            self.assertGreater(by_name[name]["max_age_days"], 0)
+        self.assertIn("Coverage Status: `partial`", report)
+        self.assertIn("Source Quality: `schema_seed`", report)
+        self.assertIn("Not Refreshed", report)
+        for name in ("benchmark_rules", "operator_catalog", "research_option_cards"):
+            self.assertIn(name, report)
+        self.assertTrue(any("not refreshed" in warning.lower() for warning in summary.warnings))
