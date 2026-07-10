@@ -83,6 +83,8 @@ def build_handoff_packets(manifest: WorkflowRunManifest, lanes: list[str] | None
                     "Do not automatically change accepted workflow rules",
                     "Do not run broad platform crawling/full recapture",
                     "Do not write sensitive values/API credentials into tracked files",
+                    "Do not fabricate platform-data coverage when raw sources are absent",
+                    "Do not run full wiki compilation from a research-startup handoff",
                 ],
                 input_artifacts=[manifest.readiness_report_path, *manifest.knowledge_artifacts.values()],
                 expected_output=str(Path(manifest.handoff_dir) / lane / template["expected_output"]),

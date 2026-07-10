@@ -46,11 +46,14 @@ class SubagentHandoffTests(unittest.TestCase):
         self.assertTrue(all(packet.allowed_files for packet in packets))
         self.assertTrue(all(packet.expected_output for packet in packets))
         self.assertTrue(all(packet.verification_command for packet in packets))
-        forbidden_actions = packets[0].forbidden_actions
-        self.assertIn("Do not submit alphas", forbidden_actions)
-        self.assertIn("Do not automatically change accepted workflow rules", forbidden_actions)
-        self.assertIn("Do not run broad platform crawling/full recapture", forbidden_actions)
-        self.assertIn("Do not write sensitive values/API credentials into tracked files", forbidden_actions)
+        for packet in packets:
+            forbidden_actions = packet.forbidden_actions
+            self.assertIn("Do not submit alphas", forbidden_actions)
+            self.assertIn("Do not automatically change accepted workflow rules", forbidden_actions)
+            self.assertIn("Do not run broad platform crawling/full recapture", forbidden_actions)
+            self.assertIn("Do not write sensitive values/API credentials into tracked files", forbidden_actions)
+            self.assertIn("Do not fabricate platform-data coverage when raw sources are absent", forbidden_actions)
+            self.assertIn("Do not run full wiki compilation from a research-startup handoff", forbidden_actions)
 
     def test_build_handoff_packets_honors_lane_overrides_including_empty(self):
         manifest = self.manifest()
