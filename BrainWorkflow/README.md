@@ -61,3 +61,7 @@ Phase 2 is implementing the principle-led research planner. The active design is
 The long-term workflow design is:
 
 `docs/superpowers/specs/2026-07-10-long-term-self-optimizing-brain-workflow-design.md`
+
+The foundation implementation plan is:
+
+`docs/superpowers/plans/2026-07-10-long-term-workflow-foundation-implementation.md`

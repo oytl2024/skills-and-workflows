@@ -220,3 +220,26 @@
 - Confirmed the automation boundary: the system proposes rule changes, and the user decides whether to apply them.
 - Confirmed research workflow startup should consume existing Data Ledger, Template Library, benchmarks, and principles instead of running a large knowledge compile.
 - Wrote the formal design spec at `docs/superpowers/specs/2026-07-10-long-term-self-optimizing-brain-workflow-design.md`.
+
+## 2026-07-10 Long-Term Workflow Foundation Implementation Plan
+
+### Requirement Summary
+- The user approved the long-term self-optimizing workflow spec.
+- Write an implementation plan that breaks the spec into independently testable tasks.
+- Keep the first implementation plan focused on foundation infrastructure: Data Ledger, Template Library, knowledge freshness, research scheduler, workflow proposal outputs, and CLI skeletons.
+
+### Confirmed Details
+- Do not modify the core simulation/repair/submit execution path in this planning task.
+- Do not implement heavy website recapture or full wiki compile automation in this first plan.
+- Workflow optimization produces proposals only; the user decides whether accepted rules are applied.
+
+### Execution Plan
+- Write the plan under `docs/superpowers/plans/`.
+- Self-review for spec coverage, placeholder wording, and type consistency.
+- Commit and push the plan document.
+- Offer execution choices: subagent-driven or inline execution.
+
+### Completion
+- Wrote the implementation plan at `docs/superpowers/plans/2026-07-10-long-term-workflow-foundation-implementation.md`.
+- Split the foundation work into eight testable tasks: Data Ledger, Template Library, Knowledge Freshness, Research Scheduler, Workflow Proposals, CLI helpers, example knowledge artifacts, and final verification.
+- Verified the plan exists, is linked from README, and has no forbidden planning markers.
