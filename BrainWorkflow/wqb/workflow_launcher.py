@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 
 DEFAULT_KNOWLEDGE_ARTIFACTS = {
@@ -29,6 +30,11 @@ class WorkflowLaunchConfig:
     live_api_enabled: bool = False
     submit_policy: str = "blocked"
     lanes: list[str] = field(default_factory=lambda: ["knowledge-readiness", "data-scheduling", "template-selection"])
+
+    def __post_init__(self) -> None:
+        """Input: constructed config fields. Output: none. Reject unsafe boolean coercion."""
+        if not isinstance(self.live_api_enabled, bool):
+            raise ValueError("workflow config live_api_enabled must be a boolean")
 
 
 @dataclass(frozen=True)
@@ -90,8 +96,10 @@ def _slug(value: str) -> str:
 def create_run_manifest(config: WorkflowLaunchConfig, generated_at: str | None = None) -> WorkflowRunManifest:
     """Input: launch config and timestamp. Output: run manifest. Create one auditable run manifest."""
     generated = generated_at or datetime.now(timezone.utc).isoformat(timespec="microseconds")
-    timestamp_slug = "".join(char for char in generated if char.isalnum())
-    run_id = f"{timestamp_slug}-{_slug(config.objective)}"
+    timestamp_slug = "".join(
+        char for char in generated.replace("+", "plus").replace("-", "minus") if char.isalnum()
+    )
+    run_id = f"{timestamp_slug}-{uuid4().hex[:12]}-{_slug(config.objective)}"
     run_dir = str(Path(config.run_root) / run_id)
     readiness_path = str(Path(run_dir) / "readiness_report.md")
     handoff_dir = str(Path(run_dir) / "handoffs")

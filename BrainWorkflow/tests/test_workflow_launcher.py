@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from wqb.workflow_launcher import (
+    WorkflowLaunchConfig,
     create_run_manifest,
     load_workflow_launch_config,
     workflow_run_manifest_to_dict,
@@ -54,6 +55,20 @@ class WorkflowLauncherTests(unittest.TestCase):
 
             first = create_run_manifest(config, generated_at="2026-07-10T09:00:00Z")
             second = create_run_manifest(config, generated_at="2026-07-10T09:00:01Z")
+
+        self.assertNotEqual(first.run_id, second.run_id)
+        self.assertNotEqual(first.run_dir, second.run_dir)
+
+    def test_create_run_manifest_rejects_non_boolean_live_api_enabled_from_direct_config(self):
+        with self.assertRaisesRegex(ValueError, "live_api_enabled.*boolean"):
+            config = WorkflowLaunchConfig(knowledge_root="knowledge", live_api_enabled="false")
+            create_run_manifest(config, generated_at="2026-07-10T00:00:00Z")
+
+    def test_create_run_manifest_avoids_collision_for_identical_generated_at(self):
+        config = WorkflowLaunchConfig(knowledge_root="knowledge", objective="Power Pool")
+
+        first = create_run_manifest(config, generated_at="2026-07-10T00:00:00Z")
+        second = create_run_manifest(config, generated_at="2026-07-10T00:00:00Z")
 
         self.assertNotEqual(first.run_id, second.run_id)
         self.assertNotEqual(first.run_dir, second.run_dir)
