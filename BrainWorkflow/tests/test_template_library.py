@@ -1,0 +1,116 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from wqb.data_ledger import DataLedgerRecord
+from wqb.template_library import (
+    TemplateRecord,
+    load_template_library,
+    score_template_for_data,
+    select_templates_for_data,
+    template_record_to_dict,
+    write_template_library_markdown,
+)
+
+
+def sample_data() -> DataLedgerRecord:
+    return DataLedgerRecord(
+        dataset_id="news12",
+        dataset_name="News Events",
+        field_id="news12_sentiment_fast_d1",
+        field_type="MATRIX",
+        region="USA",
+        delay=1,
+        universe="TOP3000",
+        semantic_tags=["event", "sentiment", "fast_d1", "power_pool"],
+        coverage=0.82,
+        alpha_count=12,
+        user_count=4,
+        simulation_usage_count=1,
+        submitted_usage_count=0,
+        last_used_at="2026-07-09",
+        best_result_label="repairable_signal",
+        correlation_risk="medium",
+        source_paths=["raw"],
+    )
+
+
+class TemplateLibraryTest(unittest.TestCase):
+    def test_load_template_library_round_trips_jsonl(self):
+        row = {
+            "template_id": "event_fast_delta_rank",
+            "hypothesis": "Fast event sentiment changes are incorporated gradually.",
+            "skeleton": "rank(ts_delta({field}, 1))",
+            "required_field_types": ["MATRIX"],
+            "compatible_semantic_tags": ["event", "sentiment", "fast_d1"],
+            "operator_tags": ["time_series_surprise", "cross_sectional_normalizer"],
+            "status": "seed",
+            "correlation_risk": "low",
+            "repair_levers": ["group_neutralize", "window_5"],
+            "source_paths": ["knowledge/wiki/30_templates/template_families.md"],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "template_library.jsonl"
+            path.write_text(json.dumps(row, sort_keys=True) + "\n", encoding="utf-8")
+
+            templates = load_template_library(path)
+
+        self.assertEqual(len(templates), 1)
+        self.assertEqual(templates[0].template_id, "event_fast_delta_rank")
+        self.assertEqual(template_record_to_dict(templates[0])["status"], "seed")
+
+    def test_select_templates_prefers_compatible_low_risk_template(self):
+        compatible = TemplateRecord(
+            template_id="event_fast_delta_rank",
+            hypothesis="Fast event sentiment changes are incorporated gradually.",
+            skeleton="rank(ts_delta({field}, 1))",
+            required_field_types=["MATRIX"],
+            compatible_semantic_tags=["event", "sentiment", "fast_d1", "power_pool"],
+            operator_tags=["time_series_surprise", "cross_sectional_normalizer"],
+            status="seed",
+            correlation_risk="low",
+            repair_levers=["group_neutralize"],
+            source_paths=["wiki"],
+        )
+        incompatible = TemplateRecord(
+            template_id="vector_attention_avg",
+            hypothesis="Vector attention breadth predicts return pressure.",
+            skeleton="rank(vec_avg({field}))",
+            required_field_types=["VECTOR"],
+            compatible_semantic_tags=["attention"],
+            operator_tags=["vector_reducer"],
+            status="seed",
+            correlation_risk="medium",
+            repair_levers=["vec_sum"],
+            source_paths=["wiki"],
+        )
+
+        selected = select_templates_for_data([incompatible, compatible], sample_data(), "power_pool", limit=1)
+
+        self.assertEqual(selected[0].template_id, "event_fast_delta_rank")
+        self.assertGreater(score_template_for_data(compatible, sample_data(), "power_pool"), score_template_for_data(incompatible, sample_data(), "power_pool"))
+
+    def test_write_template_library_markdown_creates_reviewable_table(self):
+        template = TemplateRecord(
+            template_id="quality_spread",
+            hypothesis="Cashflow quality minus leverage pressure reprices gradually.",
+            skeleton="rank({positive}) - rank({negative})",
+            required_field_types=["MATRIX"],
+            compatible_semantic_tags=["cashflow", "leverage_pressure"],
+            operator_tags=["cross_sectional_normalizer"],
+            status="discovery_ready",
+            correlation_risk="medium",
+            repair_levers=["subindustry_neutralize"],
+            source_paths=["knowledge/wiki/30_templates/template_families.md"],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            output = write_template_library_markdown(Path(tmp) / "template_library.md", [template], "2026-07-10T00:00:00Z")
+            text = output.read_text(encoding="utf-8")
+
+        self.assertIn("quality_spread", text)
+        self.assertIn("Cashflow quality", text)
+
+
+if __name__ == "__main__":
+    unittest.main()
