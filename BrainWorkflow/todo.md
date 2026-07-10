@@ -243,3 +243,34 @@
 - Wrote the implementation plan at `docs/superpowers/plans/2026-07-10-long-term-workflow-foundation-implementation.md`.
 - Split the foundation work into eight testable tasks: Data Ledger, Template Library, Knowledge Freshness, Research Scheduler, Workflow Proposals, CLI helpers, example knowledge artifacts, and final verification.
 - Verified the plan exists, is linked from README, and has no forbidden planning markers.
+
+## 2026-07-10 Task 3: Knowledge Freshness Checks
+
+### Requirement Summary
+- Implement the exact interfaces and values from `.superpowers/sdd/foundation-task-3-brief.md`.
+- Own code files: `wqb/knowledge_freshness.py` and `tests/test_knowledge_freshness.py`.
+- Follow TDD with a failing test, minimal implementation, focused tests, and the full unit suite.
+- Commit with `add knowledge freshness checks` and write the required report.
+
+### Completion
+- RED failed with the expected `ModuleNotFoundError` for `wqb.knowledge_freshness`.
+- Focused freshness tests passed 3/3.
+- Full unit suite passed 180/180.
+- Report written to `.superpowers/sdd/foundation-task-3-report.md`.
+
+## 2026-07-10 Long-Term Workflow Foundation Execution
+
+### Requirement Summary
+- Execute the approved foundation implementation plan with subagent-driven development.
+- Preserve the existing simulation, repair, and submit paths.
+- Add Data Ledger, Template Library, freshness checks, scheduler, workflow proposals, CLI helpers, and seed documentation.
+
+### Completion
+- Task 1 Data Ledger completed and reviewed clean: `4b5878b`.
+- Task 2 Template Library completed and reviewed clean: `cc1d959`.
+- Task 3 Knowledge Freshness completed and reviewed clean: `beb8055`.
+- Task 4 Research Scheduler completed and reviewed clean after docstring fix: `f61d272`, `59b3952`.
+- Task 5 Workflow Proposals completed and reviewed clean: `2840375`.
+- Task 6 CLI helpers completed and reviewed clean: `f7cab52`; minor noted for future direct argparse/main coverage.
+- Task 7 seed docs completed and reviewed clean: `a362b61`.
+- Task 8 verification passed: full suite 187/187, py_compile clean, git diff check clean except CRLF warning on this todo record.
