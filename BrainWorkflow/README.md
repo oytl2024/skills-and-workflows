@@ -65,3 +65,17 @@ The long-term workflow design is:
 The foundation implementation plan is:
 
 `docs/superpowers/plans/2026-07-10-long-term-workflow-foundation-implementation.md`
+
+## Long-Term Workflow Foundation
+
+The long-term workflow separates research runs from knowledge maintenance.
+
+Research commands consume compiled knowledge artifacts such as Data Ledger, Template Library, benchmark rules, and principle pages. They should not trigger full Learn/forum/operator recapture or full wiki compilation.
+
+Maintenance commands refresh raw sources, update compiled ledgers, run freshness checks, and generate workflow-change proposals for user review.
+
+Example foundation files live under `docs/knowledge/`:
+
+- `freshness_manifest.example.json`
+- `data_ledger.example.jsonl`
+- `template_library.example.jsonl`
