@@ -42,6 +42,12 @@ class DataLedgerRecord:
     compatible_template_ids: list[str] = field(default_factory=list)
     gate_requirements: list[str] = field(default_factory=list)
     experiment_paths: list[str] = field(default_factory=list)
+    instrument_type: str = ""
+    date_coverage: str = ""
+    data_category: str = ""
+    crowding_risk: str = "unknown"
+    known_operators: list[str] = field(default_factory=list)
+    repair_usage_count: int = 0
 
 
 def data_ledger_record_to_dict(record: DataLedgerRecord) -> dict[str, Any]:
@@ -76,6 +82,12 @@ def _record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
         compatible_template_ids=[str(item) for item in row.get("compatible_template_ids", []) if str(item)],
         gate_requirements=[str(item) for item in row.get("gate_requirements", []) if str(item)],
         experiment_paths=[str(item) for item in row.get("experiment_paths", []) if str(item)],
+        instrument_type=str(row.get("instrument_type", "")),
+        date_coverage=str(row.get("date_coverage", "")),
+        data_category=str(row.get("data_category", "")),
+        crowding_risk=str(row.get("crowding_risk", "unknown")),
+        known_operators=[str(item) for item in row.get("known_operators", []) if str(item)],
+        repair_usage_count=int(row.get("repair_usage_count", 0)),
     )
 
 
@@ -122,6 +134,7 @@ def select_data_for_research(
     region: str,
     delay: int,
     limit: int,
+    universe: str | None = None,
 ) -> list[DataLedgerRecord]:
     """Input: records and scheduling filters. Output: ranked records. Select data candidates for a run."""
     eligible = [
@@ -129,6 +142,10 @@ def select_data_for_research(
         for record in records
         if region.upper() in {item.upper() for item in (record.available_regions or [record.region])}
         and int(delay) in set(record.available_delays or [record.delay])
+        and (
+            universe is None
+            or universe.upper() in {item.upper() for item in (record.available_universes or [record.universe])}
+        )
     ]
     scored = sorted(
         eligible,

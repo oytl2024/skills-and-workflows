@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from wqb.data_ledger import DataLedgerRecord
@@ -90,7 +91,7 @@ def templates() -> list[TemplateRecord]:
 
 class ResearchSchedulerTest(unittest.TestCase):
     def test_build_schedule_prefers_underused_data_and_matching_template(self):
-        schedule = build_research_schedule(option_card(), data_records(), templates(), region="USA", delay=1)
+        schedule = build_research_schedule(option_card(), data_records(), templates(), region="USA", delay=1, universe="TOP3000")
 
         self.assertEqual(schedule.primary_incentive, "power_pool")
         self.assertEqual(schedule.selected_data[0].field_id, "news12_sentiment_fast_d1")
@@ -99,30 +100,53 @@ class ResearchSchedulerTest(unittest.TestCase):
         self.assertEqual(schedule.activity, "power_pool")
         self.assertEqual(schedule.universe, "TOP3000")
         self.assertEqual(schedule.batch_count, 1)
-        self.assertEqual(schedule.simulation_budget, 30)
-        self.assertGreaterEqual(schedule.api_budget, 1)
+        self.assertEqual(schedule.simulation_budget, 2)
+        self.assertGreaterEqual(schedule.api_budget, schedule.simulation_budget)
         self.assertTrue(schedule.parallel_task_plan)
         self.assertIn("local_novelty_gate", schedule.local_gates)
 
     def test_research_schedule_to_dict_is_json_safe(self):
-        schedule = build_research_schedule(option_card(), data_records(), templates(), region="USA", delay=1)
+        schedule = build_research_schedule(option_card(), data_records(), templates(), region="USA", delay=1, universe="TOP3000")
         row = research_schedule_to_dict(schedule)
 
         self.assertEqual(row["option_title"], "Explore current Power Pool boards")
         self.assertEqual(row["selected_data"][0]["field_id"], "news12_sentiment_fast_d1")
-        self.assertEqual(row["simulation_budget"], 30)
+        self.assertEqual(row["simulation_budget"], 2)
         self.assertTrue(row["parallel_task_plan"])
 
     def test_write_research_schedule_creates_markdown(self):
-        schedule = build_research_schedule(option_card(), data_records(), templates(), region="USA", delay=1)
+        schedule = build_research_schedule(option_card(), data_records(), templates(), region="USA", delay=1, universe="TOP3000")
         with tempfile.TemporaryDirectory() as tmp:
             output = write_research_schedule(Path(tmp) / "schedule.md", schedule, "2026-07-10T00:00:00Z")
             text = output.read_text(encoding="utf-8")
 
         self.assertIn("Explore current Power Pool boards", text)
         self.assertIn("news12_sentiment_fast_d1", text)
-        self.assertIn("Simulation Budget: 30", text)
+        self.assertIn("Simulation Budget: 2", text)
         self.assertIn("Parallel Task Plan", text)
+
+    def test_schedule_filters_universe_and_counts_execution_units(self):
+        top1000_record = replace(data_records()[1], dataset_id="alt_news", field_id="alt_news_field", universe="TOP1000")
+        second_template = replace(templates()[0], template_id="event_fast_delta_mean")
+
+        schedule = build_research_schedule(
+            option_card(),
+            data_records() + [top1000_record],
+            templates() + [second_template],
+            region="USA",
+            delay=1,
+            universe="TOP3000",
+            max_data=5,
+            templates_per_data=2,
+            batch_size=1,
+        )
+
+        self.assertEqual([record.universe for record in schedule.selected_data], ["TOP3000", "TOP3000"])
+        self.assertEqual(len(schedule.template_matches), 4)
+        self.assertEqual(schedule.batch_count, 4)
+        self.assertEqual(schedule.simulation_budget, 4)
+        self.assertGreaterEqual(schedule.api_budget, 4)
+        self.assertEqual(len(schedule.parallel_task_plan), 4)
 
 
 if __name__ == "__main__":

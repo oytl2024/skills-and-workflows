@@ -57,6 +57,11 @@ class TemplateLibraryTest(unittest.TestCase):
             "turnover_bucket": "medium",
             "local_gates": ["field_type_gate"],
             "experiment_paths": ["knowledge/wiki/40_experiments/event.md"],
+            "intended_direction": "long positive sentiment changes",
+            "interpretation": "Rising fast sentiment should precede excess returns.",
+            "decay": "fast",
+            "known_antipatterns": ["raw_event_rank"],
+            "crowded_variants": ["event_delta_rank_v1"],
         }
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "template_library.jsonl"
@@ -69,6 +74,14 @@ class TemplateLibraryTest(unittest.TestCase):
         self.assertEqual(template_record_to_dict(templates[0])["status"], "seed")
         self.assertEqual(templates[0].compatible_regions, ["USA"])
         self.assertEqual(templates[0].turnover_bucket, "medium")
+        self.assertEqual(templates[0].intended_direction, "long positive sentiment changes")
+        self.assertEqual(templates[0].interpretation, "Rising fast sentiment should precede excess returns.")
+        self.assertEqual(templates[0].decay, "fast")
+        self.assertEqual(templates[0].known_antipatterns, ["raw_event_rank"])
+        self.assertEqual(templates[0].crowded_variants, ["event_delta_rank_v1"])
+        serialized = template_record_to_dict(templates[0])
+        self.assertEqual(serialized["intended_direction"], "long positive sentiment changes")
+        self.assertEqual(serialized["crowded_variants"], ["event_delta_rank_v1"])
 
     def test_select_templates_prefers_compatible_low_risk_template(self):
         compatible = TemplateRecord(

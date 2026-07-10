@@ -40,6 +40,15 @@ class KnowledgeFreshnessTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "must contain a JSON list"):
                 load_freshness_manifest(invalid)
 
+    def test_load_freshness_manifest_strictly_requires_research_run_entries(self):
+        partial = [{"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-10", "max_age_days": 1}]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "freshness.json"
+            for manifest in ([], partial):
+                path.write_text(json.dumps(manifest), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "missing required entries"):
+                    load_freshness_manifest(path, strict=True)
+
     def test_evaluate_freshness_marks_stale_records(self):
         records = [
             KnowledgeFreshnessRecord("data_ledger", "knowledge/wiki/20_semantics/data_ledger.jsonl", "2026-07-08", 1),

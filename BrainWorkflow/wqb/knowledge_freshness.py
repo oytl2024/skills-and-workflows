@@ -5,6 +5,14 @@ from pathlib import Path
 from typing import Any
 
 
+REQUIRED_RESEARCH_RUN_MANIFEST_NAMES = {
+    "data_ledger",
+    "template_library",
+    "benchmark_rules",
+    "activity_snapshot",
+}
+
+
 @dataclass(frozen=True)
 class KnowledgeFreshnessRecord:
     name: str
@@ -34,14 +42,20 @@ def _record_from_dict(row: dict[str, Any]) -> KnowledgeFreshnessRecord:
     )
 
 
-def load_freshness_manifest(path: Path) -> list[KnowledgeFreshnessRecord]:
+def load_freshness_manifest(path: Path, strict: bool = False) -> list[KnowledgeFreshnessRecord]:
     """Input: manifest path. Output: freshness records. Load knowledge freshness settings."""
     if not path.exists():
         raise FileNotFoundError(f"freshness manifest not found: {path}")
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, list):
         raise ValueError(f"freshness manifest must contain a JSON list: {path}")
-    return [_record_from_dict(row) for row in payload if isinstance(row, dict)]
+    records = [_record_from_dict(row) for row in payload if isinstance(row, dict)]
+    if strict:
+        names = {record.name for record in records}
+        missing = sorted(REQUIRED_RESEARCH_RUN_MANIFEST_NAMES - names)
+        if missing:
+            raise ValueError(f"freshness manifest missing required entries: {', '.join(missing)}")
+    return records
 
 
 def evaluate_freshness(

@@ -119,7 +119,7 @@ def knowledge_health_check(
     if not output.is_absolute():
         output = root / output
     current = date.fromisoformat(today_value) if today_value else date.today()
-    records = load_freshness_manifest(manifest)
+    records = load_freshness_manifest(manifest, strict=True)
     statuses = evaluate_freshness(records, current, artifact_root=root)
     report = write_freshness_report(output, statuses, datetime.now(timezone.utc).replace(microsecond=0).isoformat())
     return {
@@ -136,11 +136,12 @@ def schedule_research_from_option(
     output_path: str | Path,
     region: str,
     delay: int,
-    option_index: int = 1,
+    option_index: int | None = None,
+    universe: str = "TOP3000",
 ) -> dict[str, Any]:
     """Input: option path, knowledge root, output path, region, delay. Output: summary dict. Build schedule from compiled knowledge."""
     root = Path(knowledge_root)
-    if option_index < 1:
+    if option_index is not None and option_index < 1:
         raise ValueError("option_index must be 1 or greater")
     option_text = Path(option_json).read_text(encoding="utf-8")
     try:
@@ -151,12 +152,15 @@ def schedule_research_from_option(
         if not isinstance(payload, dict):
             raise ValueError("option file must contain one JSON object or JSONL option-card records")
         rows = [payload]
-    if option_index > len(rows):
-        raise ValueError(f"option_index {option_index} is outside the {len(rows)} available option records")
-    option = _option_card_from_dict(rows[option_index - 1])
+    if len(rows) > 1 and option_index is None:
+        raise ValueError("option_index is required for multi-record JSONL option files")
+    selected_index = option_index or 1
+    if selected_index > len(rows):
+        raise ValueError(f"option_index {selected_index} is outside the {len(rows)} available option records")
+    option = _option_card_from_dict(rows[selected_index - 1])
     ledger = load_data_ledger(root / "wiki" / "20_semantics" / "data_ledger.jsonl")
     templates = load_template_library(root / "wiki" / "30_templates" / "template_library.jsonl")
-    schedule = build_research_schedule(option, ledger, templates, region=region, delay=delay)
+    schedule = build_research_schedule(option, ledger, templates, region=region, delay=delay, universe=universe)
     output = Path(output_path)
     if not output.is_absolute():
         output = root / output
@@ -167,7 +171,7 @@ def schedule_research_from_option(
         "selected_data_count": len(row["selected_data"]),
         "template_match_count": len(row["template_matches"]),
         "local_gates": row["local_gates"],
-        "option_index": option_index,
+        "option_index": selected_index,
     }
 
 
@@ -3014,10 +3018,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--freshness-report", default="wiki/80_maintenance/freshness_report.md")
     parser.add_argument("--today", default="")
     parser.add_argument("--option-json", default="")
-    parser.add_argument("--option-index", type=int, default=1)
+    parser.add_argument("--option-index", type=int, default=None)
     parser.add_argument("--schedule-output", default="wiki/70_decisions/research_schedule.md")
     parser.add_argument("--schedule-region", default="USA")
     parser.add_argument("--schedule-delay", type=int, default=1)
+    parser.add_argument("--schedule-universe", default="TOP3000")
     return parser.parse_args()
 
 
@@ -3179,6 +3184,7 @@ def main() -> None:
             args.schedule_region,
             args.schedule_delay,
             option_index=args.option_index,
+            universe=args.schedule_universe,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
 

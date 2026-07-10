@@ -1,4 +1,5 @@
 from dataclasses import asdict, dataclass, field
+from math import ceil
 from pathlib import Path
 from typing import Any
 
@@ -51,12 +52,20 @@ def build_research_schedule(
     templates: list[TemplateRecord],
     region: str,
     delay: int,
+    universe: str,
     max_data: int = 5,
     templates_per_data: int = 2,
     batch_size: int = 30,
 ) -> ResearchSchedule:
     """Input: option, ledger, templates, scope. Output: ResearchSchedule. Create a concrete research schedule."""
-    selected_data = select_data_for_research(data_records, option.primary_incentive, region, delay, max_data)
+    selected_data = select_data_for_research(
+        data_records,
+        option.primary_incentive,
+        region,
+        delay,
+        max_data,
+        universe=universe,
+    )
     template_matches: list[dict[str, Any]] = []
     for record in selected_data:
         matched = select_templates_for_data(templates, record, option.primary_incentive, templates_per_data)
@@ -71,15 +80,22 @@ def build_research_schedule(
                     "correlation_risk": template.correlation_risk,
                 }
             )
-    batch_count = 1 if template_matches else 0
-    dataset_ids = list(dict.fromkeys(record.dataset_id for record in selected_data if record.dataset_id))
-    parallel_task_plan = [asdict(task) for task in build_parallel_stage_plan("scout", dataset_ids)]
+    unit_ids = [f"{match['dataset_id']}:{match['field_id']}:{match['template_id']}" for match in template_matches]
+    parallel_task_plan = [
+        asdict(task)
+        for task in build_parallel_stage_plan("scout", unit_ids)
+        if task.task_type == "data_scout"
+    ]
+    unit_count = len(template_matches)
+    normalized_batch_size = max(int(batch_size), 1)
+    batch_count = ceil(unit_count / normalized_batch_size) if unit_count else 0
+    simulation_budget = min(unit_count, normalized_batch_size * batch_count)
     return ResearchSchedule(
         option_title=option.title,
         primary_incentive=option.primary_incentive,
         region=region,
         delay=int(delay),
-        batch_size=int(batch_size),
+        batch_size=normalized_batch_size,
         selected_data=selected_data,
         template_matches=template_matches,
         local_gates=list(DEFAULT_LOCAL_GATES),
@@ -89,10 +105,10 @@ def build_research_schedule(
             "promote_only_latest_hard_check_passes",
         ],
         activity=option.primary_incentive,
-        universe=selected_data[0].universe if selected_data else "",
+        universe=universe,
         batch_count=batch_count,
-        simulation_budget=int(batch_size) * batch_count,
-        api_budget=batch_count + len(dataset_ids),
+        simulation_budget=simulation_budget,
+        api_budget=max(simulation_budget, len(parallel_task_plan)),
         parallel_task_plan=parallel_task_plan,
     )
 

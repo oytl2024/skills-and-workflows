@@ -40,6 +40,12 @@ class DataLedgerTest(unittest.TestCase):
             "compatible_template_ids": ["event_fast_delta_rank"],
             "gate_requirements": ["field_availability_gate"],
             "experiment_paths": ["knowledge/wiki/40_experiments/news12.md"],
+            "instrument_type": "EQUITY",
+            "date_coverage": "2018-01-01 to 2026-07-09",
+            "data_category": "news_sentiment",
+            "crowding_risk": "medium",
+            "known_operators": ["ts_delta", "rank"],
+            "repair_usage_count": 2,
         }
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "data_ledger.jsonl"
@@ -52,8 +58,17 @@ class DataLedgerTest(unittest.TestCase):
         self.assertEqual(data_ledger_record_to_dict(records[0])["dataset_id"], "news12")
         self.assertEqual(records[0].available_regions, ["USA", "CAN"])
         self.assertEqual(records[0].compatible_template_ids, ["event_fast_delta_rank"])
+        self.assertEqual(records[0].instrument_type, "EQUITY")
+        self.assertEqual(records[0].date_coverage, "2018-01-01 to 2026-07-09")
+        self.assertEqual(records[0].data_category, "news_sentiment")
+        self.assertEqual(records[0].crowding_risk, "medium")
+        self.assertEqual(records[0].known_operators, ["ts_delta", "rank"])
+        self.assertEqual(records[0].repair_usage_count, 2)
+        serialized = data_ledger_record_to_dict(records[0])
+        self.assertEqual(serialized["instrument_type"], "EQUITY")
+        self.assertEqual(serialized["repair_usage_count"], 2)
 
-    def test_select_data_hard_filters_region_and_delay_before_ranking(self):
+    def test_select_data_hard_filters_region_delay_and_universe_before_ranking(self):
         matching = DataLedgerRecord(
             dataset_id="news12", dataset_name="News", field_id="usa_d1", field_type="MATRIX",
             region="USA", delay=1, universe="TOP3000", semantic_tags=["power_pool"], coverage=0.1,
@@ -72,8 +87,21 @@ class DataLedgerTest(unittest.TestCase):
             alpha_count=0, user_count=0, simulation_usage_count=0, submitted_usage_count=0, last_used_at="",
             best_result_label="repairable_signal", correlation_risk="low", source_paths=[],
         )
+        wrong_universe = DataLedgerRecord(
+            dataset_id="smallcap", dataset_name="Small Cap", field_id="usa_d1_top1000", field_type="MATRIX",
+            region="USA", delay=1, universe="TOP1000", semantic_tags=["power_pool"], coverage=1.0,
+            alpha_count=0, user_count=0, simulation_usage_count=0, submitted_usage_count=0, last_used_at="",
+            best_result_label="repairable_signal", correlation_risk="low", source_paths=[],
+        )
 
-        selected = select_data_for_research([wrong_region, wrong_delay, matching], "power_pool", "USA", 1, limit=3)
+        selected = select_data_for_research(
+            [wrong_region, wrong_delay, wrong_universe, matching],
+            "power_pool",
+            "USA",
+            1,
+            limit=3,
+            universe="TOP3000",
+        )
 
         self.assertEqual([record.field_id for record in selected], ["usa_d1"])
 

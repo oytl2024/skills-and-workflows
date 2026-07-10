@@ -163,7 +163,10 @@ class CliTests(unittest.TestCase):
                             "path": "knowledge/wiki/20_semantics/data_ledger.jsonl",
                             "updated_at": "2026-07-08",
                             "max_age_days": 1,
-                        }
+                        },
+                        {"name": "template_library", "path": "knowledge/wiki/30_templates/template_library.jsonl", "updated_at": "2026-07-08", "max_age_days": 7},
+                        {"name": "benchmark_rules", "path": "knowledge/wiki/50_benchmarks", "updated_at": "2026-07-08", "max_age_days": 3},
+                        {"name": "activity_snapshot", "path": "knowledge/wiki/10_foundations/activity_snapshot.md", "updated_at": "2026-07-08", "max_age_days": 1},
                     ]
                 ),
                 encoding="utf-8",
@@ -174,8 +177,19 @@ class CliTests(unittest.TestCase):
             self.assertTrue(Path(result["report_path"]).exists())
             self.assertIn("missing", report.read_text(encoding="utf-8"))
 
-        self.assertEqual(result["stale_count"], 1)
-        self.assertEqual(result["missing_count"], 1)
+        self.assertEqual(result["stale_count"], 4)
+        self.assertEqual(result["missing_count"], 4)
+
+    def test_knowledge_health_check_rejects_partial_manifest(self):
+        from wqb.cli import knowledge_health_check
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "freshness.json"
+            manifest.write_text(json.dumps([]), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "missing required entries"):
+                knowledge_health_check(root, manifest, root / "freshness_report.md", today_value="2026-07-10")
 
     def test_schedule_research_from_option_uses_ledger_and_templates(self):
         from wqb.cli import schedule_research_from_option
@@ -290,6 +304,8 @@ class CliTests(unittest.TestCase):
             )
             output_path = root / "wiki" / "70_decisions" / "schedule.md"
 
+            with self.assertRaisesRegex(ValueError, "option_index is required"):
+                schedule_research_from_option(option_path, root, output_path, "USA", 1)
             result = schedule_research_from_option(option_path, root, output_path, "USA", 1, option_index=2)
 
             schedule_text = Path(result["schedule_path"]).read_text(encoding="utf-8")
@@ -300,9 +316,12 @@ class CliTests(unittest.TestCase):
             health_args = parse_args()
         with patch("sys.argv", ["wqb", "schedule-research", "--option-json", "cards.jsonl", "--option-index", "2"]):
             schedule_args = parse_args()
+        with patch("sys.argv", ["wqb", "schedule-research", "--option-json", "cards.jsonl"]):
+            schedule_without_index = parse_args()
 
         self.assertEqual(health_args.command, "knowledge-health-check")
         self.assertEqual(schedule_args.option_index, 2)
+        self.assertIsNone(schedule_without_index.option_index)
 
     def test_schedule_research_main_requires_option_json(self):
         with patch("sys.argv", ["wqb", "schedule-research"]):

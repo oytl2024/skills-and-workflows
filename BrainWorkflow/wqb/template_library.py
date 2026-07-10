@@ -42,6 +42,11 @@ class TemplateRecord:
     turnover_bucket: str = ""
     local_gates: list[str] = field(default_factory=list)
     experiment_paths: list[str] = field(default_factory=list)
+    intended_direction: str = ""
+    interpretation: str = ""
+    decay: str = ""
+    known_antipatterns: list[str] = field(default_factory=list)
+    crowded_variants: list[str] = field(default_factory=list)
 
 
 def template_record_to_dict(record: TemplateRecord) -> dict[str, Any]:
@@ -70,6 +75,11 @@ def _template_from_dict(row: dict[str, Any]) -> TemplateRecord:
         turnover_bucket=str(row.get("turnover_bucket", "")),
         local_gates=[str(item) for item in row.get("local_gates", []) if str(item)],
         experiment_paths=[str(item) for item in row.get("experiment_paths", []) if str(item)],
+        intended_direction=str(row.get("intended_direction", "")),
+        interpretation=str(row.get("interpretation", "")),
+        decay=str(row.get("decay", "")),
+        known_antipatterns=[str(item) for item in row.get("known_antipatterns", []) if str(item)],
+        crowded_variants=[str(item) for item in row.get("crowded_variants", []) if str(item)],
     )
 
 
