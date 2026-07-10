@@ -42,6 +42,18 @@ def _record_from_dict(row: dict[str, Any]) -> KnowledgeFreshnessRecord:
     )
 
 
+def _validate_required_record(record: KnowledgeFreshnessRecord) -> None:
+    """Input: required freshness record. Output: None. Raise ValueError when required fields are incomplete."""
+    if not record.path.strip():
+        raise ValueError(f"freshness manifest required entry has empty path: {record.name}")
+    try:
+        date.fromisoformat(record.updated_at)
+    except ValueError as error:
+        raise ValueError(f"freshness manifest required entry has invalid updated_at: {record.name}") from error
+    if record.max_age_days <= 0:
+        raise ValueError(f"freshness manifest required entry has non-positive max_age_days: {record.name}")
+
+
 def load_freshness_manifest(path: Path, strict: bool = False) -> list[KnowledgeFreshnessRecord]:
     """Input: manifest path. Output: freshness records. Load knowledge freshness settings."""
     if not path.exists():
@@ -55,6 +67,9 @@ def load_freshness_manifest(path: Path, strict: bool = False) -> list[KnowledgeF
         missing = sorted(REQUIRED_RESEARCH_RUN_MANIFEST_NAMES - names)
         if missing:
             raise ValueError(f"freshness manifest missing required entries: {', '.join(missing)}")
+        for record in records:
+            if record.name in REQUIRED_RESEARCH_RUN_MANIFEST_NAMES:
+                _validate_required_record(record)
     return records
 
 

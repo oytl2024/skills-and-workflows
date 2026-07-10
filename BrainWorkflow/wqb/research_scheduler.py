@@ -68,7 +68,15 @@ def build_research_schedule(
     )
     template_matches: list[dict[str, Any]] = []
     for record in selected_data:
-        matched = select_templates_for_data(templates, record, option.primary_incentive, templates_per_data)
+        matched = select_templates_for_data(
+            templates,
+            record,
+            option.primary_incentive,
+            templates_per_data,
+            region=region,
+            delay=delay,
+            universe=universe,
+        )
         for template in matched:
             template_matches.append(
                 {

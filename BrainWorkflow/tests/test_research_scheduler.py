@@ -148,6 +148,41 @@ class ResearchSchedulerTest(unittest.TestCase):
         self.assertGreaterEqual(schedule.api_budget, 4)
         self.assertEqual(len(schedule.parallel_task_plan), 4)
 
+    def test_schedule_matches_templates_against_selected_multi_scope(self):
+        multi_scope_record = replace(
+            data_records()[1],
+            available_regions=["USA", "CAN"],
+            available_delays=[0, 1],
+            available_universes=["TOP1000", "TOP3000"],
+        )
+        selected_scope_template = replace(
+            templates()[0],
+            template_id="canada_d0_top1000",
+            compatible_regions=["CAN"],
+            compatible_delays=[0],
+            compatible_universes=["TOP1000"],
+        )
+        primary_scope_template = replace(
+            templates()[0],
+            template_id="usa_d1_top3000",
+            compatible_regions=["USA"],
+            compatible_delays=[1],
+            compatible_universes=["TOP3000"],
+        )
+
+        schedule = build_research_schedule(
+            option_card(),
+            [multi_scope_record],
+            [selected_scope_template, primary_scope_template],
+            region="CAN",
+            delay=0,
+            universe="TOP1000",
+            templates_per_data=2,
+        )
+
+        self.assertEqual([record.field_id for record in schedule.selected_data], ["news12_sentiment_fast_d1"])
+        self.assertEqual([match["template_id"] for match in schedule.template_matches], ["canada_d0_top1000"])
+
 
 if __name__ == "__main__":
     unittest.main()

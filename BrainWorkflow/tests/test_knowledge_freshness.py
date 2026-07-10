@@ -49,6 +49,28 @@ class KnowledgeFreshnessTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "missing required entries"):
                     load_freshness_manifest(path, strict=True)
 
+    def test_load_freshness_manifest_strictly_rejects_incomplete_required_entries(self):
+        required_entries = [
+            {"name": "data_ledger", "path": "wiki/data_ledger.jsonl", "updated_at": "2026-07-10", "max_age_days": 1},
+            {"name": "template_library", "path": "wiki/template_library.jsonl", "updated_at": "2026-07-10", "max_age_days": 1},
+            {"name": "benchmark_rules", "path": "wiki/benchmark_rules.md", "updated_at": "2026-07-10", "max_age_days": 1},
+            {"name": "activity_snapshot", "path": "wiki/activity_snapshot.json", "updated_at": "2026-07-10", "max_age_days": 1},
+        ]
+        invalid_fields = {
+            "path": "",
+            "updated_at": "2026/07/10",
+            "max_age_days": 0,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "freshness.json"
+            for field, value in invalid_fields.items():
+                manifest = [dict(row) for row in required_entries]
+                manifest[0][field] = value
+                path.write_text(json.dumps(manifest), encoding="utf-8")
+
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    load_freshness_manifest(path, strict=True)
+
     def test_evaluate_freshness_marks_stale_records(self):
         records = [
             KnowledgeFreshnessRecord("data_ledger", "knowledge/wiki/20_semantics/data_ledger.jsonl", "2026-07-08", 1),

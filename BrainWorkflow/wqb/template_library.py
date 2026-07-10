@@ -121,17 +121,23 @@ def select_templates_for_data(
     data_record: DataLedgerRecord,
     incentive: str,
     limit: int,
+    region: str | None = None,
+    delay: int | None = None,
+    universe: str | None = None,
 ) -> list[TemplateRecord]:
     """Input: templates, data record, incentive, limit. Output: ranked templates. Select template candidates."""
     field_type = data_record.field_type.upper()
+    selected_region = region if region is not None else data_record.region
+    selected_delay = delay if delay is not None else data_record.delay
+    selected_universe = universe if universe is not None else data_record.universe
     eligible = [
         template
         for template in templates
         if template.status.lower() != "deprecated"
         and (not template.required_field_types or field_type in {item.upper() for item in template.required_field_types})
-        and (not template.compatible_regions or data_record.region.upper() in {item.upper() for item in template.compatible_regions})
-        and (not template.compatible_delays or int(data_record.delay) in set(template.compatible_delays))
-        and (not template.compatible_universes or data_record.universe.upper() in {item.upper() for item in template.compatible_universes})
+        and (not template.compatible_regions or selected_region.upper() in {item.upper() for item in template.compatible_regions})
+        and (not template.compatible_delays or int(selected_delay) in set(template.compatible_delays))
+        and (not template.compatible_universes or selected_universe.upper() in {item.upper() for item in template.compatible_universes})
     ]
     scored = sorted(
         eligible,
