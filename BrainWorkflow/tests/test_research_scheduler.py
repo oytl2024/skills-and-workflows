@@ -96,6 +96,12 @@ class ResearchSchedulerTest(unittest.TestCase):
         self.assertEqual(schedule.selected_data[0].field_id, "news12_sentiment_fast_d1")
         self.assertEqual(schedule.template_matches[0]["template_id"], "event_fast_delta_rank")
         self.assertEqual(schedule.batch_size, 30)
+        self.assertEqual(schedule.activity, "power_pool")
+        self.assertEqual(schedule.universe, "TOP3000")
+        self.assertEqual(schedule.batch_count, 1)
+        self.assertEqual(schedule.simulation_budget, 30)
+        self.assertGreaterEqual(schedule.api_budget, 1)
+        self.assertTrue(schedule.parallel_task_plan)
         self.assertIn("local_novelty_gate", schedule.local_gates)
 
     def test_research_schedule_to_dict_is_json_safe(self):
@@ -104,6 +110,8 @@ class ResearchSchedulerTest(unittest.TestCase):
 
         self.assertEqual(row["option_title"], "Explore current Power Pool boards")
         self.assertEqual(row["selected_data"][0]["field_id"], "news12_sentiment_fast_d1")
+        self.assertEqual(row["simulation_budget"], 30)
+        self.assertTrue(row["parallel_task_plan"])
 
     def test_write_research_schedule_creates_markdown(self):
         schedule = build_research_schedule(option_card(), data_records(), templates(), region="USA", delay=1)
@@ -113,6 +121,8 @@ class ResearchSchedulerTest(unittest.TestCase):
 
         self.assertIn("Explore current Power Pool boards", text)
         self.assertIn("news12_sentiment_fast_d1", text)
+        self.assertIn("Simulation Budget: 30", text)
+        self.assertIn("Parallel Task Plan", text)
 
 
 if __name__ == "__main__":

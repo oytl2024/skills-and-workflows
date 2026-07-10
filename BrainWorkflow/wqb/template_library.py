@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import json
 from pathlib import Path
 from typing import Any
@@ -34,6 +34,14 @@ class TemplateRecord:
     correlation_risk: str
     repair_levers: list[str]
     source_paths: list[str]
+    compatible_regions: list[str] = field(default_factory=list)
+    compatible_delays: list[int] = field(default_factory=list)
+    compatible_universes: list[str] = field(default_factory=list)
+    suitable_horizons: list[str] = field(default_factory=list)
+    neutralization_styles: list[str] = field(default_factory=list)
+    turnover_bucket: str = ""
+    local_gates: list[str] = field(default_factory=list)
+    experiment_paths: list[str] = field(default_factory=list)
 
 
 def template_record_to_dict(record: TemplateRecord) -> dict[str, Any]:
@@ -54,6 +62,14 @@ def _template_from_dict(row: dict[str, Any]) -> TemplateRecord:
         correlation_risk=str(row.get("correlation_risk", "unknown")),
         repair_levers=[str(item) for item in row.get("repair_levers", []) if str(item)],
         source_paths=[str(item) for item in row.get("source_paths", []) if str(item)],
+        compatible_regions=[str(item) for item in row.get("compatible_regions", []) if str(item)],
+        compatible_delays=[int(item) for item in row.get("compatible_delays", [])],
+        compatible_universes=[str(item) for item in row.get("compatible_universes", []) if str(item)],
+        suitable_horizons=[str(item) for item in row.get("suitable_horizons", []) if str(item)],
+        neutralization_styles=[str(item) for item in row.get("neutralization_styles", []) if str(item)],
+        turnover_bucket=str(row.get("turnover_bucket", "")),
+        local_gates=[str(item) for item in row.get("local_gates", []) if str(item)],
+        experiment_paths=[str(item) for item in row.get("experiment_paths", []) if str(item)],
     )
 
 
@@ -97,8 +113,18 @@ def select_templates_for_data(
     limit: int,
 ) -> list[TemplateRecord]:
     """Input: templates, data record, incentive, limit. Output: ranked templates. Select template candidates."""
+    field_type = data_record.field_type.upper()
+    eligible = [
+        template
+        for template in templates
+        if template.status.lower() != "deprecated"
+        and (not template.required_field_types or field_type in {item.upper() for item in template.required_field_types})
+        and (not template.compatible_regions or data_record.region.upper() in {item.upper() for item in template.compatible_regions})
+        and (not template.compatible_delays or int(data_record.delay) in set(template.compatible_delays))
+        and (not template.compatible_universes or data_record.universe.upper() in {item.upper() for item in template.compatible_universes})
+    ]
     scored = sorted(
-        templates,
+        eligible,
         key=lambda item: (score_template_for_data(item, data_record, incentive), item.template_id),
         reverse=True,
     )

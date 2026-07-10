@@ -29,6 +29,17 @@ class KnowledgeFreshnessTest(unittest.TestCase):
         self.assertEqual(records[0].name, "data_ledger")
         self.assertEqual(records[0].max_age_days, 1)
 
+    def test_load_freshness_manifest_rejects_missing_and_non_list_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "missing.json"
+            with self.assertRaisesRegex(FileNotFoundError, "freshness manifest not found"):
+                load_freshness_manifest(missing)
+
+            invalid = Path(tmp) / "invalid.json"
+            invalid.write_text(json.dumps({"name": "data_ledger"}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "must contain a JSON list"):
+                load_freshness_manifest(invalid)
+
     def test_evaluate_freshness_marks_stale_records(self):
         records = [
             KnowledgeFreshnessRecord("data_ledger", "knowledge/wiki/20_semantics/data_ledger.jsonl", "2026-07-08", 1),
@@ -41,6 +52,14 @@ class KnowledgeFreshnessTest(unittest.TestCase):
         self.assertTrue(by_name["data_ledger"].stale)
         self.assertFalse(by_name["template_library"].stale)
         self.assertEqual(by_name["data_ledger"].age_days, 2)
+
+    def test_evaluate_freshness_marks_missing_artifacts_stale_when_root_is_provided(self):
+        records = [KnowledgeFreshnessRecord("data_ledger", "wiki/20_semantics/data_ledger.jsonl", "2026-07-10", 7)]
+        with tempfile.TemporaryDirectory() as tmp:
+            statuses = evaluate_freshness(records, today=date(2026, 7, 10), artifact_root=Path(tmp))
+
+        self.assertTrue(statuses[0].stale)
+        self.assertFalse(statuses[0].artifact_exists)
 
     def test_write_freshness_report(self):
         statuses = evaluate_freshness(

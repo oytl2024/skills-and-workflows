@@ -49,6 +49,14 @@ class TemplateLibraryTest(unittest.TestCase):
             "correlation_risk": "low",
             "repair_levers": ["group_neutralize", "window_5"],
             "source_paths": ["knowledge/wiki/30_templates/template_families.md"],
+            "compatible_regions": ["USA"],
+            "compatible_delays": [1],
+            "compatible_universes": ["TOP3000"],
+            "suitable_horizons": ["short"],
+            "neutralization_styles": ["subindustry"],
+            "turnover_bucket": "medium",
+            "local_gates": ["field_type_gate"],
+            "experiment_paths": ["knowledge/wiki/40_experiments/event.md"],
         }
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "template_library.jsonl"
@@ -59,6 +67,8 @@ class TemplateLibraryTest(unittest.TestCase):
         self.assertEqual(len(templates), 1)
         self.assertEqual(templates[0].template_id, "event_fast_delta_rank")
         self.assertEqual(template_record_to_dict(templates[0])["status"], "seed")
+        self.assertEqual(templates[0].compatible_regions, ["USA"])
+        self.assertEqual(templates[0].turnover_bucket, "medium")
 
     def test_select_templates_prefers_compatible_low_risk_template(self):
         compatible = TemplateRecord(
@@ -90,6 +100,27 @@ class TemplateLibraryTest(unittest.TestCase):
 
         self.assertEqual(selected[0].template_id, "event_fast_delta_rank")
         self.assertGreater(score_template_for_data(compatible, sample_data(), "power_pool"), score_template_for_data(incompatible, sample_data(), "power_pool"))
+
+    def test_select_templates_excludes_incompatible_and_deprecated_records(self):
+        compatible = TemplateRecord(
+            template_id="matrix_ready", hypothesis="Compatible", skeleton="rank({field})",
+            required_field_types=["MATRIX"], compatible_semantic_tags=[], operator_tags=[], status="seed",
+            correlation_risk="low", repair_levers=[], source_paths=[],
+        )
+        incompatible = TemplateRecord(
+            template_id="vector_only", hypothesis="Wrong type", skeleton="rank(vec_avg({field}))",
+            required_field_types=["VECTOR"], compatible_semantic_tags=[], operator_tags=[], status="submit_proven",
+            correlation_risk="low", repair_levers=[], source_paths=[],
+        )
+        deprecated = TemplateRecord(
+            template_id="deprecated_matrix", hypothesis="Old", skeleton="rank({field})",
+            required_field_types=["MATRIX"], compatible_semantic_tags=[], operator_tags=[], status="deprecated",
+            correlation_risk="low", repair_levers=[], source_paths=[],
+        )
+
+        selected = select_templates_for_data([incompatible, deprecated, compatible], sample_data(), "power_pool", limit=3)
+
+        self.assertEqual([template.template_id for template in selected], ["matrix_ready"])
 
     def test_write_template_library_markdown_creates_reviewable_table(self):
         template = TemplateRecord(

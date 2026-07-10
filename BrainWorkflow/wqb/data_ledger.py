@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import json
 from pathlib import Path
 from typing import Any
@@ -35,6 +35,13 @@ class DataLedgerRecord:
     best_result_label: str
     correlation_risk: str
     source_paths: list[str]
+    available_regions: list[str] = field(default_factory=list)
+    available_delays: list[int] = field(default_factory=list)
+    available_universes: list[str] = field(default_factory=list)
+    activity_tags: list[str] = field(default_factory=list)
+    compatible_template_ids: list[str] = field(default_factory=list)
+    gate_requirements: list[str] = field(default_factory=list)
+    experiment_paths: list[str] = field(default_factory=list)
 
 
 def data_ledger_record_to_dict(record: DataLedgerRecord) -> dict[str, Any]:
@@ -62,6 +69,13 @@ def _record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
         best_result_label=str(row.get("best_result_label", "")),
         correlation_risk=str(row.get("correlation_risk", "unknown")),
         source_paths=[str(item) for item in row.get("source_paths", []) if str(item)],
+        available_regions=[str(item) for item in row.get("available_regions", []) if str(item)],
+        available_delays=[int(item) for item in row.get("available_delays", [])],
+        available_universes=[str(item) for item in row.get("available_universes", []) if str(item)],
+        activity_tags=[str(item) for item in row.get("activity_tags", []) if str(item)],
+        compatible_template_ids=[str(item) for item in row.get("compatible_template_ids", []) if str(item)],
+        gate_requirements=[str(item) for item in row.get("gate_requirements", []) if str(item)],
+        experiment_paths=[str(item) for item in row.get("experiment_paths", []) if str(item)],
     )
 
 
@@ -110,8 +124,14 @@ def select_data_for_research(
     limit: int,
 ) -> list[DataLedgerRecord]:
     """Input: records and scheduling filters. Output: ranked records. Select data candidates for a run."""
+    eligible = [
+        record
+        for record in records
+        if region.upper() in {item.upper() for item in (record.available_regions or [record.region])}
+        and int(delay) in set(record.available_delays or [record.delay])
+    ]
     scored = sorted(
-        records,
+        eligible,
         key=lambda item: (score_data_for_research(item, incentive, region, delay), item.field_id),
         reverse=True,
     )

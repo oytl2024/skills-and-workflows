@@ -27,6 +27,7 @@ from wqb.cli import (
     is_http_status_error,
     list_fields_summary,
     load_novelty_reference_records,
+    main,
     parse_operator_replacements,
     parse_blend_weights,
     parse_args,
@@ -171,8 +172,10 @@ class CliTests(unittest.TestCase):
             result = knowledge_health_check(root, manifest, report, today_value="2026-07-10")
 
             self.assertTrue(Path(result["report_path"]).exists())
+            self.assertIn("missing", report.read_text(encoding="utf-8"))
 
         self.assertEqual(result["stale_count"], 1)
+        self.assertEqual(result["missing_count"], 1)
 
     def test_schedule_research_from_option_uses_ledger_and_templates(self):
         from wqb.cli import schedule_research_from_option
@@ -251,6 +254,70 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(result["selected_data_count"], 1)
         self.assertEqual(result["template_match_count"], 1)
+
+    def test_schedule_research_from_option_selects_one_based_option_from_jsonl(self):
+        from wqb.cli import schedule_research_from_option
+        from wqb.decision_log import write_option_cards
+
+        first = OptionCard(
+            title="First option", primary_incentive="power_pool", secondary_incentives=[], why_now="First.",
+            candidate_scope="USA D1", expected_asset_value="Assets.", correlation_risk="Medium.",
+            resource_cost="One batch.", evidence=[SourceEvidence("api", "/first", "First", "2026-07-10T00:00:00Z")],
+            failure_modes=["Correlation."], decision_needed="Choose.",
+            score=ScoreBreakdown(total=1.0, components={}, penalties={}, reasons=["First"]),
+        )
+        second = OptionCard(
+            title="Selected JSONL option", primary_incentive="power_pool", secondary_incentives=[], why_now="Second.",
+            candidate_scope="USA D1", expected_asset_value="Assets.", correlation_risk="Medium.",
+            resource_cost="One batch.", evidence=[SourceEvidence("api", "/second", "Second", "2026-07-10T00:00:00Z")],
+            failure_modes=["Correlation."], decision_needed="Choose.",
+            score=ScoreBreakdown(total=2.0, components={}, penalties={}, reasons=["Second"]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            option_path, _ = write_option_cards(root / "cards", [first, second], "2026-07-10T00:00:00Z")
+            ledger_dir = root / "wiki" / "20_semantics"
+            template_dir = root / "wiki" / "30_templates"
+            ledger_dir.mkdir(parents=True)
+            template_dir.mkdir(parents=True)
+            (ledger_dir / "data_ledger.jsonl").write_text(
+                json.dumps({"dataset_id": "news12", "dataset_name": "News", "field_id": "news_field", "field_type": "MATRIX", "region": "USA", "delay": 1, "universe": "TOP3000", "semantic_tags": ["power_pool"], "coverage": 0.8, "alpha_count": 0, "user_count": 0, "simulation_usage_count": 0, "submitted_usage_count": 0, "last_used_at": "", "best_result_label": "unexplored", "correlation_risk": "low", "source_paths": []}) + "\n",
+                encoding="utf-8",
+            )
+            (template_dir / "template_library.jsonl").write_text(
+                json.dumps({"template_id": "matrix_rank", "hypothesis": "Rank the field.", "skeleton": "rank({field})", "required_field_types": ["MATRIX"], "compatible_semantic_tags": ["power_pool"], "operator_tags": [], "status": "seed", "correlation_risk": "low", "repair_levers": [], "source_paths": []}) + "\n",
+                encoding="utf-8",
+            )
+            output_path = root / "wiki" / "70_decisions" / "schedule.md"
+
+            result = schedule_research_from_option(option_path, root, output_path, "USA", 1, option_index=2)
+
+            schedule_text = Path(result["schedule_path"]).read_text(encoding="utf-8")
+        self.assertIn("Selected JSONL option", schedule_text)
+
+    def test_parse_args_accepts_knowledge_health_and_option_index(self):
+        with patch("sys.argv", ["wqb", "knowledge-health-check", "--today", "2026-07-10"]):
+            health_args = parse_args()
+        with patch("sys.argv", ["wqb", "schedule-research", "--option-json", "cards.jsonl", "--option-index", "2"]):
+            schedule_args = parse_args()
+
+        self.assertEqual(health_args.command, "knowledge-health-check")
+        self.assertEqual(schedule_args.option_index, 2)
+
+    def test_schedule_research_main_requires_option_json(self):
+        with patch("sys.argv", ["wqb", "schedule-research"]):
+            with self.assertRaisesRegex(SystemExit, "--option-json is required"):
+                main()
+
+    def test_knowledge_health_check_main_dispatches_without_simulation(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "knowledge-health-check"]), patch(
+            "wqb.cli.knowledge_health_check", return_value={"record_count": 1, "stale_count": 0, "missing_count": 0, "report_path": "report.md"}
+        ) as health_check, redirect_stdout(output):
+            main()
+
+        health_check.assert_called_once()
+        self.assertEqual(json.loads(output.getvalue())["report_path"], "report.md")
 
     def test_dry_run_prints_payloads_without_network(self):
         config = load_config(

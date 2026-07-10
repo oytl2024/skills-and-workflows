@@ -120,11 +120,12 @@ def knowledge_health_check(
         output = root / output
     current = date.fromisoformat(today_value) if today_value else date.today()
     records = load_freshness_manifest(manifest)
-    statuses = evaluate_freshness(records, current)
+    statuses = evaluate_freshness(records, current, artifact_root=root)
     report = write_freshness_report(output, statuses, datetime.now(timezone.utc).replace(microsecond=0).isoformat())
     return {
         "record_count": len(statuses),
         "stale_count": len([status for status in statuses if status.stale]),
+        "missing_count": len([status for status in statuses if not status.artifact_exists]),
         "report_path": str(report),
     }
 
@@ -135,10 +136,24 @@ def schedule_research_from_option(
     output_path: str | Path,
     region: str,
     delay: int,
+    option_index: int = 1,
 ) -> dict[str, Any]:
     """Input: option path, knowledge root, output path, region, delay. Output: summary dict. Build schedule from compiled knowledge."""
     root = Path(knowledge_root)
-    option = _option_card_from_dict(json.loads(Path(option_json).read_text(encoding="utf-8")))
+    if option_index < 1:
+        raise ValueError("option_index must be 1 or greater")
+    option_text = Path(option_json).read_text(encoding="utf-8")
+    try:
+        payload = json.loads(option_text)
+    except json.JSONDecodeError:
+        rows = [json.loads(line) for line in option_text.splitlines() if line.strip()]
+    else:
+        if not isinstance(payload, dict):
+            raise ValueError("option file must contain one JSON object or JSONL option-card records")
+        rows = [payload]
+    if option_index > len(rows):
+        raise ValueError(f"option_index {option_index} is outside the {len(rows)} available option records")
+    option = _option_card_from_dict(rows[option_index - 1])
     ledger = load_data_ledger(root / "wiki" / "20_semantics" / "data_ledger.jsonl")
     templates = load_template_library(root / "wiki" / "30_templates" / "template_library.jsonl")
     schedule = build_research_schedule(option, ledger, templates, region=region, delay=delay)
@@ -152,6 +167,7 @@ def schedule_research_from_option(
         "selected_data_count": len(row["selected_data"]),
         "template_match_count": len(row["template_matches"]),
         "local_gates": row["local_gates"],
+        "option_index": option_index,
     }
 
 
@@ -2998,6 +3014,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--freshness-report", default="wiki/80_maintenance/freshness_report.md")
     parser.add_argument("--today", default="")
     parser.add_argument("--option-json", default="")
+    parser.add_argument("--option-index", type=int, default=1)
     parser.add_argument("--schedule-output", default="wiki/70_decisions/research_schedule.md")
     parser.add_argument("--schedule-region", default="USA")
     parser.add_argument("--schedule-delay", type=int, default=1)
@@ -3161,6 +3178,7 @@ def main() -> None:
             args.schedule_output,
             args.schedule_region,
             args.schedule_delay,
+            option_index=args.option_index,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
 
