@@ -3,8 +3,8 @@ import json
 import os
 import time
 from collections import Counter
-from dataclasses import asdict
-from datetime import datetime, timezone
+from dataclasses import asdict, fields as dataclass_fields
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,17 +22,22 @@ from wqb.data_catalog import (
     filter_fields_by_suffix,
     select_seed_fields,
 )
+from wqb.data_ledger import load_data_ledger
 from wqb.decision_log import write_option_cards
 from wqb.expression import expression_hash, is_power_pool_complexity_ok, replace_operator_names
 from wqb.generator import build_settings, generate_seed_candidates, simulation_payload
 from wqb.knowledge import fetch_knowledge_snapshot
+from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest, write_freshness_report
 from wqb.novelty import score_expression_novelty
 from wqb.optimizer import actions_for_check_summary
+from wqb.principle_model import OptionCard, ScoreBreakdown, SourceEvidence
 from wqb.recorder import RunRecorder
 from wqb.research_planner import generate_research_options
+from wqb.research_scheduler import build_research_schedule, research_schedule_to_dict, write_research_schedule
 from wqb.research_workflow import build_parallel_stage_plan, cap_simulation_count, precheck_expression
 from wqb.rule_refresh import refresh_incentive_snapshot
 from wqb.simulator import extract_alpha_id, poll_simulation, resolve_multisimulation_alpha_ids, submit_multisimulation, submit_simulation
+from wqb.template_library import load_template_library
 
 
 FIELD_BATCH_MULTI_CHUNK_SIZE = 5
@@ -85,6 +90,68 @@ def plan_research_options(config: dict[str, Any], max_options: int, output_dir: 
         "markdown_path": str(markdown_path),
         "refresh_error_count": len(snapshot.refresh_errors),
         "options": [card.title for card in cards],
+    }
+
+
+def _option_card_from_dict(row: dict[str, Any]) -> OptionCard:
+    """Input: dict row. Output: OptionCard. Rebuild an option card from JSON for scheduling."""
+    evidence = [SourceEvidence(**item) for item in row.get("evidence", [])]
+    score = ScoreBreakdown(**row["score"])
+    allowed = {field.name for field in dataclass_fields(OptionCard)}
+    data = {key: value for key, value in row.items() if key in allowed}
+    data["evidence"] = evidence
+    data["score"] = score
+    return OptionCard(**data)
+
+
+def knowledge_health_check(
+    knowledge_root: str | Path,
+    manifest_path: str | Path,
+    output_path: str | Path,
+    today_value: str | None = None,
+) -> dict[str, Any]:
+    """Input: knowledge root, manifest path, output path, date string. Output: summary dict. Check compiled knowledge freshness."""
+    root = Path(knowledge_root)
+    manifest = Path(manifest_path)
+    if not manifest.is_absolute():
+        manifest = root / manifest
+    output = Path(output_path)
+    if not output.is_absolute():
+        output = root / output
+    current = date.fromisoformat(today_value) if today_value else date.today()
+    records = load_freshness_manifest(manifest)
+    statuses = evaluate_freshness(records, current)
+    report = write_freshness_report(output, statuses, datetime.now(timezone.utc).replace(microsecond=0).isoformat())
+    return {
+        "record_count": len(statuses),
+        "stale_count": len([status for status in statuses if status.stale]),
+        "report_path": str(report),
+    }
+
+
+def schedule_research_from_option(
+    option_json: str | Path,
+    knowledge_root: str | Path,
+    output_path: str | Path,
+    region: str,
+    delay: int,
+) -> dict[str, Any]:
+    """Input: option path, knowledge root, output path, region, delay. Output: summary dict. Build schedule from compiled knowledge."""
+    root = Path(knowledge_root)
+    option = _option_card_from_dict(json.loads(Path(option_json).read_text(encoding="utf-8")))
+    ledger = load_data_ledger(root / "wiki" / "20_semantics" / "data_ledger.jsonl")
+    templates = load_template_library(root / "wiki" / "30_templates" / "template_library.jsonl")
+    schedule = build_research_schedule(option, ledger, templates, region=region, delay=delay)
+    output = Path(output_path)
+    if not output.is_absolute():
+        output = root / output
+    schedule_path = write_research_schedule(output, schedule, datetime.now(timezone.utc).replace(microsecond=0).isoformat())
+    row = research_schedule_to_dict(schedule)
+    return {
+        "schedule_path": str(schedule_path),
+        "selected_data_count": len(row["selected_data"]),
+        "template_match_count": len(row["template_matches"]),
+        "local_gates": row["local_gates"],
     }
 
 
@@ -2888,6 +2955,8 @@ def parse_args() -> argparse.Namespace:
             "retry-planned",
             "run-expression-file",
             "plan-research-options",
+            "knowledge-health-check",
+            "schedule-research",
         ],
     )
     parser.add_argument("--config", default="configs/stage1_usa_d1.yaml")
@@ -2925,6 +2994,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--request-base-backoff-seconds", type=int, default=None)
     parser.add_argument("--max-options", type=int, default=5)
     parser.add_argument("--option-output-dir", default=default_option_output_dir())
+    parser.add_argument("--freshness-manifest", default="wiki/80_maintenance/freshness_manifest.json")
+    parser.add_argument("--freshness-report", default="wiki/80_maintenance/freshness_report.md")
+    parser.add_argument("--today", default="")
+    parser.add_argument("--option-json", default="")
+    parser.add_argument("--schedule-output", default="wiki/70_decisions/research_schedule.md")
+    parser.add_argument("--schedule-region", default="USA")
+    parser.add_argument("--schedule-delay", type=int, default=1)
     return parser.parse_args()
 
 
@@ -3067,6 +3143,25 @@ def main() -> None:
         plan_stage(args.workflow_stage, args.dataset_id)
     elif args.command == "plan-research-options":
         result = plan_research_options(config, args.max_options, args.option_output_dir)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "knowledge-health-check":
+        result = knowledge_health_check(
+            default_knowledge_root(),
+            args.freshness_manifest,
+            args.freshness_report,
+            today_value=args.today or None,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "schedule-research":
+        if not args.option_json:
+            raise SystemExit("--option-json is required for schedule-research")
+        result = schedule_research_from_option(
+            args.option_json,
+            default_knowledge_root(),
+            args.schedule_output,
+            args.schedule_region,
+            args.schedule_delay,
+        )
         print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

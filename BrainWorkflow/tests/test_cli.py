@@ -13,6 +13,7 @@ from uuid import uuid4
 import requests
 
 from wqb.expression import expression_hash
+from wqb.principle_model import OptionCard, ScoreBreakdown, SourceEvidence
 from wqb.cli import (
     authenticate_for_run,
     cache_metadata,
@@ -145,6 +146,111 @@ class CliTests(unittest.TestCase):
             self.assertGreaterEqual(result["option_count"], 1)
             self.assertTrue(Path(result["jsonl_path"]).exists())
             self.assertTrue(Path(result["markdown_path"]).exists())
+
+    def test_knowledge_health_check_writes_report_without_simulation(self):
+        from wqb.cli import knowledge_health_check
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "freshness.json"
+            report = root / "knowledge" / "wiki" / "80_maintenance" / "freshness_report.md"
+            manifest.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "data_ledger",
+                            "path": "knowledge/wiki/20_semantics/data_ledger.jsonl",
+                            "updated_at": "2026-07-08",
+                            "max_age_days": 1,
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = knowledge_health_check(root, manifest, report, today_value="2026-07-10")
+
+            self.assertTrue(Path(result["report_path"]).exists())
+
+        self.assertEqual(result["stale_count"], 1)
+
+    def test_schedule_research_from_option_uses_ledger_and_templates(self):
+        from wqb.cli import schedule_research_from_option
+        from wqb.principle_model import option_card_to_dict
+
+        option = OptionCard(
+            title="Explore current Power Pool boards",
+            primary_incentive="power_pool",
+            secondary_incentives=["genius"],
+            why_now="Visible Power Pool boards include USA D1.",
+            candidate_scope="USA D1 underused event data.",
+            expected_asset_value="Simple alpha assets with lower criteria.",
+            correlation_risk="Medium-high unless new data and distinct templates are used.",
+            resource_cost="One 30-alpha scout batch.",
+            evidence=[SourceEvidence("api", "/consultant/boards/power-pool", "Power Pool boards", "2026-07-10T00:00:00Z")],
+            failure_modes=["Power Pool correlation failure."],
+            decision_needed="Choose this option.",
+            score=ScoreBreakdown(total=8.0, components={"power_pool": 8.0}, penalties={}, reasons=["Visible board."]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            option_path = root / "option.json"
+            option_path.write_text(json.dumps(option_card_to_dict(option)), encoding="utf-8")
+            ledger_dir = root / "wiki" / "20_semantics"
+            template_dir = root / "wiki" / "30_templates"
+            ledger_dir.mkdir(parents=True)
+            template_dir.mkdir(parents=True)
+            (ledger_dir / "data_ledger.jsonl").write_text(
+                json.dumps(
+                    {
+                        "dataset_id": "news12",
+                        "dataset_name": "News Events",
+                        "field_id": "news12_sentiment_fast_d1",
+                        "field_type": "MATRIX",
+                        "region": "USA",
+                        "delay": 1,
+                        "universe": "TOP3000",
+                        "semantic_tags": ["event", "sentiment", "fast_d1", "power_pool"],
+                        "coverage": 0.82,
+                        "alpha_count": 12,
+                        "user_count": 4,
+                        "simulation_usage_count": 1,
+                        "submitted_usage_count": 0,
+                        "last_used_at": "2026-07-09",
+                        "best_result_label": "repairable_signal",
+                        "correlation_risk": "medium",
+                        "source_paths": ["raw"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (template_dir / "template_library.jsonl").write_text(
+                json.dumps(
+                    {
+                        "template_id": "event_fast_delta_rank",
+                        "hypothesis": "Fast event sentiment changes are incorporated gradually.",
+                        "skeleton": "rank(ts_delta({field}, 1))",
+                        "required_field_types": ["MATRIX"],
+                        "compatible_semantic_tags": ["event", "sentiment", "fast_d1", "power_pool"],
+                        "operator_tags": ["time_series_surprise"],
+                        "status": "seed",
+                        "correlation_risk": "low",
+                        "repair_levers": ["group_neutralize"],
+                        "source_paths": ["wiki"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            output_path = root / "wiki" / "70_decisions" / "research_schedule.md"
+
+            result = schedule_research_from_option(option_path, root, output_path, "USA", 1)
+
+            self.assertTrue(Path(result["schedule_path"]).exists())
+
+        self.assertEqual(result["selected_data_count"], 1)
+        self.assertEqual(result["template_match_count"], 1)
 
     def test_dry_run_prints_payloads_without_network(self):
         config = load_config(
