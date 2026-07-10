@@ -66,7 +66,7 @@ def _packet_to_dict(packet: HandoffPacket) -> dict[str, Any]:
 
 def build_handoff_packets(manifest: WorkflowRunManifest, lanes: list[str] | None = None) -> list[HandoffPacket]:
     """Input: manifest and lanes. Output: handoff packets. Build bounded subagent assignments."""
-    selected = lanes or manifest.lanes
+    selected = manifest.lanes if lanes is None else lanes
     packets: list[HandoffPacket] = []
     for lane in selected:
         if lane not in LANE_TEMPLATES:
@@ -78,7 +78,12 @@ def build_handoff_packets(manifest: WorkflowRunManifest, lanes: list[str] | None
                 task_title=template["task_title"],
                 objective=manifest.objective,
                 allowed_files=[manifest.knowledge_root, manifest.run_dir, "BrainWorkflow/wqb", "BrainWorkflow/tests"],
-                forbidden_actions=["Do not submit alphas", "Do not change API credentials", "Do not edit unrelated workflow rules"],
+                forbidden_actions=[
+                    "Do not submit alphas",
+                    "Do not automatically change accepted workflow rules",
+                    "Do not run broad platform crawling/full recapture",
+                    "Do not write sensitive values/API credentials into tracked files",
+                ],
                 input_artifacts=[manifest.readiness_report_path, *manifest.knowledge_artifacts.values()],
                 expected_output=str(Path(manifest.handoff_dir) / lane / template["expected_output"]),
                 stop_condition="Stop after writing the expected output and verification summary.",
@@ -108,6 +113,8 @@ def _packet_markdown(packet: HandoffPacket) -> str:
     lines.extend(f"- {item}" for item in packet.forbidden_actions)
     lines.extend(["", "## Input Artifacts"])
     lines.extend(f"- `{item}`" for item in packet.input_artifacts)
+    lines.extend(["", "## Summary Schema"])
+    lines.extend(f"- `{key}`: `{value}`" for key, value in packet.summary_schema.items())
     return "\n".join(lines) + "\n"
 
 
