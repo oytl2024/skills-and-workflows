@@ -85,12 +85,17 @@ def evaluate_run_readiness(
     if not manifest.exists():
         issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "missing_manifest", "Freshness manifest is missing.", manifest, "Run bootstrap-knowledge."))
     else:
-        records = load_freshness_manifest(manifest, strict=True)
-        for status in evaluate_freshness(records, current, artifact_root=root):
-            if not status.artifact_exists:
-                issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "missing_artifact", f"Required artifact is missing: {status.name}", status.path, "Run bootstrap-knowledge."))
-            elif status.stale:
-                issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "stale_artifact", f"Required artifact is stale: {status.name}", status.path, "Run knowledge maintenance."))
+        try:
+            records = load_freshness_manifest(manifest, strict=True)
+            statuses = evaluate_freshness(records, current, artifact_root=root)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+            issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "parse_error", f"Cannot load freshness manifest: {error}", manifest, "Fix the freshness manifest before running."))
+        else:
+            for status in statuses:
+                if not status.artifact_exists:
+                    issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "missing_artifact", f"Required artifact is missing: {status.name}", status.path, "Run bootstrap-knowledge."))
+                elif status.stale:
+                    issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "stale_artifact", f"Required artifact is stale: {status.name}", status.path, "Run knowledge maintenance."))
     _check_jsonl_artifact(root / "wiki" / "20_semantics" / "data_ledger.jsonl", "data_ledger", issues, mode)
     _check_jsonl_artifact(root / "wiki" / "30_templates" / "template_library.jsonl", "template_library", issues, mode)
     if mode == "research" and batch_size < 30:

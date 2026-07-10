@@ -44,6 +44,19 @@ class RunReadinessTests(unittest.TestCase):
         self.assertFalse(report.blocked)
         self.assertIn("missing_artifact", {issue.code for issue in report.issues})
 
+    def test_malformed_freshness_manifest_returns_blocking_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "wiki" / "80_maintenance" / "freshness_manifest.json"
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text("{malformed\n", encoding="utf-8")
+
+            report = evaluate_run_readiness(root, mode="research", today_value="2026-07-10")
+
+        self.assertFalse(report.passed)
+        self.assertTrue(report.blocked)
+        self.assertIn("parse_error", {issue.code for issue in report.issues})
+
     def create_minimal_artifacts(self, root: Path) -> None:
         self.write_manifest(root)
         (root / "wiki" / "20_semantics").mkdir(parents=True, exist_ok=True)
