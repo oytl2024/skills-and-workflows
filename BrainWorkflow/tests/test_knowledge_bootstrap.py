@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from wqb.data_ledger import load_data_ledger
 from wqb.knowledge_bootstrap import bootstrap_knowledge, bootstrap_summary_to_dict
 
 
@@ -92,6 +93,21 @@ class KnowledgeBootstrapTests(unittest.TestCase):
         self.assertTrue(any("freshness_manifest.json" in path for path in payload["artifact_paths"]))
         self.assertIn("data_ledger", {row["name"] for row in manifest})
         self.assertIn("template_library", {row["name"] for row in manifest})
+
+    def test_bootstrap_hides_schema_seed_coverage_from_data_ledger_loader(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            seed_root = Path(tmp) / "seed"
+            self.create_seed_files(seed_root)
+
+            bootstrap_knowledge(root, seed_root, generated_at="2026-07-10T00:00:00Z")
+            ledger_path = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            raw_row = json.loads(ledger_path.read_text(encoding="utf-8").splitlines()[0])
+            loaded_record = load_data_ledger(ledger_path)[0]
+
+        self.assertEqual(raw_row["source_quality"], "schema_seed")
+        self.assertEqual(raw_row["coverage_status"], "partial")
+        self.assertEqual(loaded_record.coverage, 0.0)
 
     def test_bootstrap_manifest_and_report_identify_non_refreshed_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:

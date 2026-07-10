@@ -44,13 +44,20 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> Path:
     return path
 
 
-def _stamp_rows(rows: list[dict[str, Any]], source_quality: str, coverage_status: str) -> list[dict[str, Any]]:
-    """Input: rows and labels. Output: copied rows with source labels."""
+def _stamp_rows(
+    rows: list[dict[str, Any]],
+    source_quality: str,
+    coverage_status: str,
+    normalize_coverage: bool = False,
+) -> list[dict[str, Any]]:
+    """Input: rows and labels. Output: copied rows with source labels and optional conservative coverage."""
     stamped = []
     for row in rows:
         copied = dict(row)
         copied["source_quality"] = source_quality
         copied["coverage_status"] = coverage_status
+        if normalize_coverage:
+            copied["coverage"] = 0.0
         stamped.append(copied)
     return stamped
 
@@ -115,7 +122,12 @@ def bootstrap_knowledge(knowledge_root: str | Path, seed_root: str | Path, gener
     generated = generated_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     root = Path(knowledge_root)
     seed = Path(seed_root)
-    ledger_rows = _stamp_rows(_read_jsonl(seed / "data_ledger.example.jsonl"), "schema_seed", "partial")
+    ledger_rows = _stamp_rows(
+        _read_jsonl(seed / "data_ledger.example.jsonl"),
+        "schema_seed",
+        "partial",
+        normalize_coverage=True,
+    )
     template_rows = _stamp_rows(_read_jsonl(seed / "template_library.example.jsonl"), "schema_seed", "partial")
     ledger_jsonl = _write_jsonl(root / DATA_LEDGER_JSONL, ledger_rows)
     template_jsonl = _write_jsonl(root / TEMPLATE_LIBRARY_JSONL, template_rows)
