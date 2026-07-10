@@ -9,6 +9,7 @@ from wqb.template_library import TemplateRecord
 
 
 def option_card() -> OptionCard:
+    """Input: none. Output: an OptionCard fixture for scheduler tests."""
     return OptionCard(
         title="Explore current Power Pool boards",
         primary_incentive="power_pool",
@@ -26,6 +27,7 @@ def option_card() -> OptionCard:
 
 
 def data_records() -> list[DataLedgerRecord]:
+    """Input: none. Output: data-ledger records covering scheduler selection cases."""
     return [
         DataLedgerRecord(
             dataset_id="pv1",
@@ -69,6 +71,7 @@ def data_records() -> list[DataLedgerRecord]:
 
 
 def templates() -> list[TemplateRecord]:
+    """Input: none. Output: a template-library fixture matching the test data."""
     return [
         TemplateRecord(
             template_id="event_fast_delta_rank",
