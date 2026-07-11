@@ -3133,6 +3133,27 @@ def main() -> None:
     """Input: CLI args. Output: command side effects. Dispatch Stage 1 commands."""
     args = parse_args()
     overrides = config_overrides_from_args(args)
+    if args.command == "launch-workflow":
+        launch_overrides = {
+            "knowledge_root": args.knowledge_root,
+            "objective": args.workflow_objective or None,
+            "mode": args.workflow_mode or None,
+            "region": args.workflow_region or None,
+            "universe": args.workflow_universe or None,
+            "delay": args.workflow_delay,
+            "batch_size": args.batch_size,
+            "live_api_enabled": args.enable_live_api,
+            "submit_policy": "ask" if args.confirm_submit else None,
+        }
+        result = launch_workflow(
+            args.workflow_defaults,
+            args.workflow_local or None,
+            overrides=launch_overrides,
+            write_handoffs=not args.skip_handoffs,
+            today_value=args.today or None,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
     config = load_config(args.config, overrides=overrides)
     if args.command == "dry-run":
         dry_run(config)
@@ -3275,26 +3296,6 @@ def main() -> None:
             args.batch_size,
             args.enable_live_api,
             args.confirm_submit,
-            today_value=args.today or None,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-    elif args.command == "launch-workflow":
-        launch_overrides = {
-            "knowledge_root": args.knowledge_root,
-            "objective": args.workflow_objective or None,
-            "mode": args.workflow_mode or None,
-            "region": args.workflow_region or None,
-            "universe": args.workflow_universe or None,
-            "delay": args.workflow_delay,
-            "batch_size": args.batch_size,
-            "live_api_enabled": args.enable_live_api,
-            "submit_policy": "ask" if args.confirm_submit else None,
-        }
-        result = launch_workflow(
-            args.workflow_defaults,
-            args.workflow_local or None,
-            overrides=launch_overrides,
-            write_handoffs=not args.skip_handoffs,
             today_value=args.today or None,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))

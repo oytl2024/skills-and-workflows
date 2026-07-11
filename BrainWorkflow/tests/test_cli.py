@@ -109,6 +109,20 @@ class CliTests(unittest.TestCase):
         launcher.assert_called_once()
         self.assertEqual(json.loads(output.getvalue())["run_id"], "run1")
 
+    def test_launch_workflow_main_does_not_load_stage1_config(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "launch-workflow"]), patch(
+            "wqb.cli.load_config", side_effect=AssertionError("Stage 1 config must not load")
+        ) as config_loader, patch(
+            "wqb.cli.launch_workflow",
+            return_value={"run_id": "run1", "mode": "plan-only"},
+        ) as launcher, redirect_stdout(output):
+            main()
+
+        config_loader.assert_not_called()
+        launcher.assert_called_once()
+        self.assertEqual(json.loads(output.getvalue())["run_id"], "run1")
+
     def test_readiness_check_function_writes_reports(self):
         from wqb.cli import readiness_check
         from wqb.run_readiness import ReadinessReport
