@@ -1,12 +1,14 @@
 import argparse
 import json
 import os
+import sys
 import time
 from collections import Counter
 from dataclasses import asdict, fields as dataclass_fields
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import requests
 
@@ -50,6 +52,15 @@ FIELD_BATCH_SEED_FIELD_LIMIT = 40
 FIELD_BATCH_CANDIDATE_BUFFER_MULTIPLIER = 3
 DEFAULT_MULTI_CHUNK_SLEEP_SECONDS = 0.0
 KNOWLEDGE_ROOT_ENV = "BRAIN_KNOWLEDGE_ROOT"
+
+
+class ReadinessGateError(RuntimeError):
+    """Input: gate message and report paths. Output: exception. Carry blocked readiness report locations."""
+
+    def __init__(self, message: str, json_path: Path, markdown_path: Path):
+        super().__init__(message)
+        self.json_path = json_path
+        self.markdown_path = markdown_path
 
 
 def default_knowledge_root() -> Path:
@@ -148,6 +159,9 @@ def readiness_check(
     live_api_enabled: bool,
     submit_confirmed: bool,
     today_value: str | None = None,
+    region: str | None = None,
+    universe: str | None = None,
+    delay: int | None = None,
 ) -> dict[str, Any]:
     """Input: root, output dir, mode, safety flags. Output: summary dict. Run startup readiness checks."""
     report = evaluate_run_readiness(
@@ -157,6 +171,9 @@ def readiness_check(
         live_api_enabled=live_api_enabled,
         submit_confirmed=submit_confirmed,
         today_value=today_value,
+        region=region,
+        universe=universe,
+        delay=delay,
     )
     json_path, markdown_path = write_readiness_reports(Path(output_dir), report)
     return {
@@ -174,21 +191,39 @@ def launch_workflow(
     local_path: str | Path | None,
     overrides: dict[str, Any],
     write_handoffs: bool = True,
+    submit_confirmed: bool = False,
     today_value: str | None = None,
 ) -> dict[str, Any]:
     """Input: config paths and overrides. Output: launch summary. Write manifest, readiness reports, and handoffs."""
     local = Path(local_path) if local_path else None
     config = load_workflow_launch_config(Path(defaults_path), local, overrides=overrides)
+    readiness_report = evaluate_run_readiness(
+        config.knowledge_root,
+        mode=config.mode,
+        batch_size=config.batch_size,
+        live_api_enabled=config.live_api_enabled,
+        submit_confirmed=submit_confirmed,
+        today_value=today_value,
+        region=config.region,
+        universe=config.universe,
+        delay=config.delay,
+    )
+    if readiness_report.blocked:
+        blocked_dir = Path(config.run_root) / "readiness_blocked" / f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}"
+        readiness_json, readiness_md = write_readiness_reports(blocked_dir, readiness_report)
+        return {
+            "run_id": "",
+            "mode": config.mode,
+            "manifest_path": "",
+            "readiness_json_path": str(readiness_json),
+            "readiness_markdown_path": str(readiness_md),
+            "readiness_passed": readiness_report.passed,
+            "readiness_blocked": True,
+            "error": f"Readiness blocked for {config.mode}; see {readiness_md}",
+            "handoffs": [],
+        }
     manifest = create_run_manifest(config)
     manifest_path = write_run_manifest(Path(manifest.run_dir) / "run_manifest.json", manifest)
-    readiness_report = evaluate_run_readiness(
-        manifest.knowledge_root,
-        mode=manifest.mode,
-        batch_size=manifest.batch_size,
-        live_api_enabled=manifest.live_api_enabled,
-        submit_confirmed=manifest.submit_policy == "ask",
-        today_value=today_value,
-    )
     readiness_json, readiness_md = write_readiness_reports(Path(manifest.run_dir), readiness_report)
     handoff_outputs = []
     if write_handoffs:
@@ -200,8 +235,68 @@ def launch_workflow(
         "readiness_json_path": str(readiness_json),
         "readiness_markdown_path": str(readiness_md),
         "readiness_passed": readiness_report.passed,
+        "readiness_blocked": False,
         "handoffs": handoff_outputs,
     }
+
+
+def require_readiness_gate(
+    knowledge_root: str | Path,
+    output_dir: str | Path,
+    mode: str,
+    batch_size: int,
+    live_api_enabled: bool,
+    submit_confirmed: bool = False,
+    region: str | None = None,
+    universe: str | None = None,
+    delay: int | None = None,
+) -> None:
+    """Input: readiness inputs and output dir. Output: none. Raise with report paths when execution is blocked."""
+    report = evaluate_run_readiness(
+        knowledge_root,
+        mode=mode,
+        batch_size=batch_size,
+        live_api_enabled=live_api_enabled,
+        submit_confirmed=submit_confirmed,
+        region=region,
+        universe=universe,
+        delay=delay,
+    )
+    json_path, markdown_path = write_readiness_reports(Path(output_dir), report)
+    if report.blocked:
+        raise ReadinessGateError(f"Readiness blocked for {mode}; see {markdown_path}", json_path, markdown_path)
+
+
+def _live_gate_kwargs(config: dict[str, Any], run_dir: Path) -> dict[str, Any]:
+    """Input: run config and run dir. Output: readiness kwargs. Build live execution readiness gate inputs."""
+    return {
+        "knowledge_root": config.get("knowledge_root") or default_knowledge_root(),
+        "output_dir": run_dir,
+        "mode": "research",
+        "batch_size": int(config.get("max_alphas_per_round", 30)),
+        "live_api_enabled": True,
+        "region": str(config.get("region", "USA")),
+        "universe": str(config.get("universe", "TOP3000")),
+        "delay": int(config.get("delay", 1)),
+    }
+
+
+def _print_readiness_blocked(run_dir: Path, error: ReadinessGateError, extra: dict[str, Any] | None = None) -> None:
+    """Input: run dir, readiness error, extra fields. Output: terminal JSON. Report a blocked live command."""
+    print(
+        json.dumps(
+            {
+                "run_dir": str(run_dir),
+                "status": "readiness_blocked",
+                "error": str(error),
+                "readiness_json_path": str(error.json_path),
+                "readiness_markdown_path": str(error.markdown_path),
+                **dict(extra or {}),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 def schedule_research_from_option(
@@ -215,6 +310,19 @@ def schedule_research_from_option(
 ) -> dict[str, Any]:
     """Input: option path, knowledge root, output path, region, delay. Output: summary dict. Build schedule from compiled knowledge."""
     root = Path(knowledge_root)
+    output = Path(output_path)
+    if not output.is_absolute():
+        output = root / output
+    require_readiness_gate(
+        root,
+        output.parent / "readiness",
+        mode="research",
+        batch_size=30,
+        live_api_enabled=True,
+        region=region,
+        universe=universe,
+        delay=delay,
+    )
     if option_index is not None and option_index < 1:
         raise ValueError("option_index must be 1 or greater")
     option_text = Path(option_json).read_text(encoding="utf-8")
@@ -235,9 +343,6 @@ def schedule_research_from_option(
     ledger = load_data_ledger(root / "wiki" / "20_semantics" / "data_ledger.jsonl")
     templates = load_template_library(root / "wiki" / "30_templates" / "template_library.jsonl")
     schedule = build_research_schedule(option, ledger, templates, region=region, delay=delay, universe=universe)
-    output = Path(output_path)
-    if not output.is_absolute():
-        output = root / output
     schedule_path = write_research_schedule(output, schedule, datetime.now(timezone.utc).replace(microsecond=0).isoformat())
     row = research_schedule_to_dict(schedule)
     return {
@@ -2518,6 +2623,11 @@ def retry_planned(
     """Input: run config, run dir, submit mode. Output: run artifacts. Retry unsubmitted planned candidates."""
     selected_run_dir = Path(run_dir)
     recorder = RunRecorder(selected_run_dir)
+    try:
+        require_readiness_gate(**_live_gate_kwargs(config, selected_run_dir))
+    except ReadinessGateError as err:
+        _print_readiness_blocked(selected_run_dir, err, {"submit_mode": submit_mode, "defer_poll": defer_poll})
+        return
     client = build_client(config)
     if not authenticate_for_run(client, recorder, "retry_planned_auth"):
         print(json.dumps({"run_dir": str(selected_run_dir), "status": "auth_recoverable_error"}, ensure_ascii=False, indent=2))
@@ -2556,6 +2666,11 @@ def run_expression_file(
     """Input: config, JSONL file, run dir. Output: terminal JSON and run artifacts. Submit custom expression batch."""
     selected_run_dir = Path(run_dir) if run_dir else make_run_dir(config)
     recorder = RunRecorder(selected_run_dir)
+    try:
+        require_readiness_gate(**_live_gate_kwargs(config, selected_run_dir))
+    except ReadinessGateError as err:
+        _print_readiness_blocked(selected_run_dir, err, {"expression_file": expression_file, "submit_mode": submit_mode})
+        return
     client = build_client(config)
     if not authenticate_for_run(client, recorder, "run_expression_file_auth"):
         print(json.dumps({"run_dir": str(selected_run_dir), "status": "auth_recoverable_error"}, ensure_ascii=False, indent=2))
@@ -2604,6 +2719,11 @@ def refresh_alpha(
     """Input: run config and alpha id. Output: run artifacts. Refresh one existing Alpha by re-simulation."""
     run_dir = make_run_dir(config)
     recorder = RunRecorder(run_dir)
+    try:
+        require_readiness_gate(**_live_gate_kwargs(config, run_dir))
+    except ReadinessGateError as err:
+        _print_readiness_blocked(run_dir, err, {"alpha_id": alpha_id})
+        return
     client = build_client(config)
     client.authenticate()
     try:
@@ -2678,6 +2798,11 @@ def refresh_alpha_batch(
     """Input: run config, alpha id, variants. Output: run artifacts. Batch refresh setting variants."""
     run_dir = make_run_dir(config)
     recorder = RunRecorder(run_dir)
+    try:
+        require_readiness_gate(**_live_gate_kwargs(config, run_dir))
+    except ReadinessGateError as err:
+        _print_readiness_blocked(run_dir, err, {"alpha_id": alpha_id, "submit_mode": submit_mode})
+        return
     client = build_client(config)
     client.authenticate()
     try:
@@ -2735,6 +2860,11 @@ def repair_alpha_with_field(
     """Input: run config, alpha id, field expression, weights. Output: run artifacts. Repair near-miss Alpha."""
     run_dir = make_run_dir(config)
     recorder = RunRecorder(run_dir)
+    try:
+        require_readiness_gate(**_live_gate_kwargs(config, run_dir))
+    except ReadinessGateError as err:
+        _print_readiness_blocked(run_dir, err, {"alpha_id": alpha_id, "field_expression": field_expression})
+        return
     client = build_client(config)
     if not authenticate_for_run(client, recorder, "repair_alpha_auth"):
         print(json.dumps({"run_dir": str(run_dir), "alpha_id": alpha_id, "status": "auth_recoverable_error"}, ensure_ascii=False, indent=2))
@@ -2784,6 +2914,21 @@ def field_batch(
     """Input: run config and field filters. Output: run artifacts. Run seed batch from selected fields."""
     run_dir = make_run_dir(config)
     recorder = RunRecorder(run_dir)
+    try:
+        require_readiness_gate(**_live_gate_kwargs(config, run_dir))
+    except ReadinessGateError as err:
+        _print_readiness_blocked(
+            run_dir,
+            err,
+            {
+                "field_search": field_search,
+                "dataset_id": dataset_id,
+                "field_suffix": field_suffix,
+                "template_mode": template_mode,
+                "workflow_stage": workflow_stage,
+            },
+        )
+        return
     client = build_client(config)
     if not authenticate_for_run(client, recorder, "field_batch_auth"):
         print(
@@ -2854,6 +2999,11 @@ def smoke(config: dict[str, Any]) -> None:
     """Input: run config. Output: run artifacts. Execute a tiny live simulation/check cycle."""
     run_dir = make_run_dir(config)
     recorder = RunRecorder(run_dir)
+    try:
+        require_readiness_gate(**_live_gate_kwargs(config, run_dir))
+    except ReadinessGateError as err:
+        _print_readiness_blocked(run_dir, err, {"command": "smoke"})
+        return
     client = build_client(config)
     client.authenticate()
     snapshot = fetch_knowledge_snapshot(client, list(config.get("knowledge_queries", []))[:3])
@@ -2899,6 +3049,11 @@ def run_stage1(config: dict[str, Any]) -> None:
     """Input: run config. Output: run artifacts. Run Stage 1 search and optimization workflow."""
     run_dir = make_run_dir(config)
     recorder = RunRecorder(run_dir)
+    try:
+        require_readiness_gate(**_live_gate_kwargs(config, run_dir))
+    except ReadinessGateError as err:
+        _print_readiness_blocked(run_dir, err, {"command": "run-stage1"})
+        return
     client = build_client(config)
     client.authenticate()
     snapshot = fetch_knowledge_snapshot(client, list(config.get("knowledge_queries", [])))
@@ -3129,27 +3284,41 @@ def config_overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def cli_flag_present(argv: list[str], flag: str) -> bool:
+    """Input: argv tokens and a flag. Output: bool. Detect whether a CLI flag was explicitly provided."""
+    return any(item == flag or item.startswith(f"{flag}=") for item in argv)
+
+
+def launch_overrides_from_args(args: argparse.Namespace, argv: list[str]) -> dict[str, Any]:
+    """Input: parsed args and argv. Output: workflow overrides. Preserve config layering for omitted CLI flags."""
+    overrides: dict[str, Any] = {
+        "objective": args.workflow_objective or None,
+        "mode": args.workflow_mode or None,
+        "region": args.workflow_region or None,
+        "universe": args.workflow_universe or None,
+        "delay": args.workflow_delay,
+    }
+    if cli_flag_present(argv, "--knowledge-root"):
+        overrides["knowledge_root"] = args.knowledge_root
+    if cli_flag_present(argv, "--batch-size"):
+        overrides["batch_size"] = args.batch_size
+    if cli_flag_present(argv, "--enable-live-api"):
+        overrides["live_api_enabled"] = args.enable_live_api
+    return overrides
+
+
 def main() -> None:
     """Input: CLI args. Output: command side effects. Dispatch Stage 1 commands."""
     args = parse_args()
     overrides = config_overrides_from_args(args)
     if args.command == "launch-workflow":
-        launch_overrides = {
-            "knowledge_root": args.knowledge_root,
-            "objective": args.workflow_objective or None,
-            "mode": args.workflow_mode or None,
-            "region": args.workflow_region or None,
-            "universe": args.workflow_universe or None,
-            "delay": args.workflow_delay,
-            "batch_size": args.batch_size,
-            "live_api_enabled": args.enable_live_api,
-            "submit_policy": "ask" if args.confirm_submit else None,
-        }
+        launch_overrides = launch_overrides_from_args(args, sys.argv[1:])
         result = launch_workflow(
             args.workflow_defaults,
             args.workflow_local or None,
             overrides=launch_overrides,
             write_handoffs=not args.skip_handoffs,
+            submit_confirmed=args.confirm_submit,
             today_value=args.today or None,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -3297,6 +3466,9 @@ def main() -> None:
             args.enable_live_api,
             args.confirm_submit,
             today_value=args.today or None,
+            region=str(config.get("region", "")) or None,
+            universe=str(config.get("universe", "")) or None,
+            delay=int(config["delay"]) if "delay" in config else None,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "bootstrap-knowledge":

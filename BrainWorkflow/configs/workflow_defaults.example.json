@@ -1,5 +1,5 @@
 {
-  "knowledge_root": "C:/Users/oytl/Desktop/pyproject/brain/knowledge",
+  "knowledge_root": "knowledge",
   "run_root": "runs",
   "objective": "current-incentives",
   "region": "USA",

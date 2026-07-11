@@ -70,6 +70,77 @@ def cleanup_run_dir(run_dir: Path) -> None:
     shutil.rmtree(resolved)
 
 
+def write_ready_knowledge_artifacts(root: Path) -> None:
+    """Input: knowledge root. Output: none. Create minimal scope-ready knowledge test artifacts."""
+    (root / "wiki" / "20_semantics").mkdir(parents=True, exist_ok=True)
+    (root / "wiki" / "30_templates").mkdir(parents=True, exist_ok=True)
+    (root / "wiki" / "50_benchmarks").mkdir(parents=True, exist_ok=True)
+    (root / "wiki" / "10_foundations").mkdir(parents=True, exist_ok=True)
+    (root / "wiki" / "80_maintenance").mkdir(parents=True, exist_ok=True)
+    (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(
+        json.dumps(
+            {
+                "dataset_id": "news12",
+                "dataset_name": "News",
+                "field_id": "news_field",
+                "field_type": "MATRIX",
+                "region": "USA",
+                "delay": 1,
+                "universe": "TOP3000",
+                "semantic_tags": ["power_pool"],
+                "coverage": 0.8,
+                "alpha_count": 0,
+                "user_count": 0,
+                "simulation_usage_count": 0,
+                "submitted_usage_count": 0,
+                "last_used_at": "",
+                "best_result_label": "unexplored",
+                "correlation_risk": "low",
+                "source_paths": [],
+                "available_regions": ["USA"],
+                "available_delays": [1],
+                "available_universes": ["TOP3000"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (root / "wiki" / "30_templates" / "template_library.jsonl").write_text(
+        json.dumps(
+            {
+                "template_id": "matrix_rank",
+                "hypothesis": "Rank the field.",
+                "skeleton": "rank({field})",
+                "required_field_types": ["MATRIX"],
+                "compatible_semantic_tags": ["power_pool"],
+                "operator_tags": [],
+                "status": "seed",
+                "correlation_risk": "low",
+                "repair_levers": [],
+                "source_paths": [],
+                "compatible_regions": ["USA"],
+                "compatible_delays": [1],
+                "compatible_universes": ["TOP3000"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (root / "wiki" / "50_benchmarks" / "correlation_and_novelty.md").write_text("# Benchmarks\n", encoding="utf-8")
+    (root / "wiki" / "10_foundations" / "activity_snapshot.md").write_text("# Activity Snapshot\n", encoding="utf-8")
+    (root / "wiki" / "80_maintenance" / "freshness_manifest.json").write_text(
+        json.dumps(
+            [
+                {"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-10", "max_age_days": 7},
+                {"name": "template_library", "path": "wiki/30_templates/template_library.jsonl", "updated_at": "2026-07-10", "max_age_days": 7},
+                {"name": "benchmark_rules", "path": "wiki/50_benchmarks/correlation_and_novelty.md", "updated_at": "2026-07-10", "max_age_days": 7},
+                {"name": "activity_snapshot", "path": "wiki/10_foundations/activity_snapshot.md", "updated_at": "2026-07-10", "max_age_days": 7},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
 class CliTests(unittest.TestCase):
     def test_launch_workflow_writes_manifest_readiness_and_handoffs(self):
         from wqb.cli import launch_workflow
@@ -98,6 +169,67 @@ class CliTests(unittest.TestCase):
             self.assertGreaterEqual(len(result["handoffs"]), 1)
             self.assertEqual(result["mode"], "plan-only")
 
+    def test_launch_workflow_blocks_research_before_manifest_and_handoffs(self):
+        from wqb.cli import launch_workflow
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            defaults = root / "workflow_defaults.json"
+            defaults.write_text(
+                json.dumps(
+                    {
+                        "knowledge_root": str(root / "missing_knowledge"),
+                        "run_root": str(root / "runs"),
+                        "objective": "Power Pool",
+                        "region": "USA",
+                        "delay": 1,
+                        "mode": "research",
+                        "batch_size": 30,
+                        "live_api_enabled": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = launch_workflow(defaults, None, overrides={}, write_handoffs=True, today_value="2026-07-10")
+
+            self.assertTrue(result["readiness_blocked"])
+            self.assertEqual(result["manifest_path"], "")
+            self.assertEqual(result["handoffs"], [])
+            self.assertTrue(Path(result["readiness_markdown_path"]).exists())
+            self.assertEqual(list((root / "runs").glob("*/run_manifest.json")), [])
+
+    def test_launch_workflow_submit_policy_ask_does_not_confirm_submit_candidate(self):
+        from wqb.cli import launch_workflow
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            knowledge = root / "knowledge"
+            write_ready_knowledge_artifacts(knowledge)
+            defaults = root / "workflow_defaults.json"
+            defaults.write_text(
+                json.dumps(
+                    {
+                        "knowledge_root": str(knowledge),
+                        "run_root": str(root / "runs"),
+                        "objective": "Power Pool",
+                        "region": "USA",
+                        "delay": 1,
+                        "mode": "submit-candidate",
+                        "submit_policy": "ask",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            blocked = launch_workflow(defaults, None, overrides={}, write_handoffs=True, today_value="2026-07-10")
+            confirmed = launch_workflow(defaults, None, overrides={}, write_handoffs=False, submit_confirmed=True, today_value="2026-07-10")
+
+            self.assertTrue(blocked["readiness_blocked"])
+            self.assertEqual(blocked["manifest_path"], "")
+            self.assertFalse(confirmed["readiness_blocked"])
+            self.assertTrue(Path(confirmed["manifest_path"]).exists())
+
     def test_launch_workflow_main_dispatches_without_simulation(self):
         output = io.StringIO()
         with patch("sys.argv", ["wqb", "launch-workflow"]), patch(
@@ -108,6 +240,46 @@ class CliTests(unittest.TestCase):
 
         launcher.assert_called_once()
         self.assertEqual(json.loads(output.getvalue())["run_id"], "run1")
+
+    def test_launch_workflow_main_preserves_local_config_when_flags_omitted(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "launch-workflow", "--workflow-local", "workflow.local.json"]), patch(
+            "wqb.cli.launch_workflow",
+            return_value={"run_id": "run1", "mode": "plan-only"},
+        ) as launcher, redirect_stdout(output):
+            main()
+
+        overrides = launcher.call_args.kwargs["overrides"]
+        self.assertNotIn("knowledge_root", overrides)
+        self.assertNotIn("batch_size", overrides)
+        self.assertNotIn("live_api_enabled", overrides)
+        self.assertEqual(json.loads(output.getvalue())["run_id"], "run1")
+
+    def test_launch_workflow_main_passes_only_provided_cli_overrides(self):
+        output = io.StringIO()
+        with patch(
+            "sys.argv",
+            [
+                "wqb",
+                "launch-workflow",
+                "--knowledge-root",
+                "custom_knowledge",
+                "--batch-size",
+                "44",
+                "--enable-live-api",
+                "--confirm-submit",
+            ],
+        ), patch(
+            "wqb.cli.launch_workflow",
+            return_value={"run_id": "run1", "mode": "research"},
+        ) as launcher, redirect_stdout(output):
+            main()
+
+        overrides = launcher.call_args.kwargs["overrides"]
+        self.assertEqual(overrides["knowledge_root"], "custom_knowledge")
+        self.assertEqual(overrides["batch_size"], 44)
+        self.assertTrue(overrides["live_api_enabled"])
+        self.assertTrue(launcher.call_args.kwargs["submit_confirmed"])
 
     def test_launch_workflow_main_does_not_load_stage1_config(self):
         output = io.StringIO()
@@ -326,12 +498,13 @@ class CliTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            write_ready_knowledge_artifacts(root)
             option_path = root / "option.json"
             option_path.write_text(json.dumps(option_card_to_dict(option)), encoding="utf-8")
             ledger_dir = root / "wiki" / "20_semantics"
             template_dir = root / "wiki" / "30_templates"
-            ledger_dir.mkdir(parents=True)
-            template_dir.mkdir(parents=True)
+            ledger_dir.mkdir(parents=True, exist_ok=True)
+            template_dir.mkdir(parents=True, exist_ok=True)
             (ledger_dir / "data_ledger.jsonl").write_text(
                 json.dumps(
                     {
@@ -404,11 +577,12 @@ class CliTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            write_ready_knowledge_artifacts(root)
             option_path, _ = write_option_cards(root / "cards", [first, second], "2026-07-10T00:00:00Z")
             ledger_dir = root / "wiki" / "20_semantics"
             template_dir = root / "wiki" / "30_templates"
-            ledger_dir.mkdir(parents=True)
-            template_dir.mkdir(parents=True)
+            ledger_dir.mkdir(parents=True, exist_ok=True)
+            template_dir.mkdir(parents=True, exist_ok=True)
             (ledger_dir / "data_ledger.jsonl").write_text(
                 json.dumps({"dataset_id": "news12", "dataset_name": "News", "field_id": "news_field", "field_type": "MATRIX", "region": "USA", "delay": 1, "universe": "TOP3000", "semantic_tags": ["power_pool"], "coverage": 0.8, "alpha_count": 0, "user_count": 0, "simulation_usage_count": 0, "submitted_usage_count": 0, "last_used_at": "", "best_result_label": "unexplored", "correlation_risk": "low", "source_paths": []}) + "\n",
                 encoding="utf-8",
@@ -425,6 +599,36 @@ class CliTests(unittest.TestCase):
 
             schedule_text = Path(result["schedule_path"]).read_text(encoding="utf-8")
         self.assertIn("Selected JSONL option", schedule_text)
+
+    def test_schedule_research_blocks_before_writing_schedule_when_readiness_fails(self):
+        from wqb.cli import schedule_research_from_option
+        from wqb.principle_model import option_card_to_dict
+
+        option = OptionCard(
+            title="Blocked option",
+            primary_incentive="power_pool",
+            secondary_incentives=[],
+            why_now="Need research.",
+            candidate_scope="USA D1",
+            expected_asset_value="Assets.",
+            correlation_risk="Medium.",
+            resource_cost="One batch.",
+            evidence=[SourceEvidence("api", "/blocked", "Blocked", "2026-07-10T00:00:00Z")],
+            failure_modes=["Correlation."],
+            decision_needed="Choose.",
+            score=ScoreBreakdown(total=1.0, components={}, penalties={}, reasons=["Blocked"]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            option_path = root / "option.json"
+            output_path = root / "wiki" / "70_decisions" / "schedule.md"
+            option_path.write_text(json.dumps(option_card_to_dict(option)), encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "Readiness blocked"):
+                schedule_research_from_option(option_path, root, output_path, "USA", 1)
+
+            self.assertFalse(output_path.exists())
+            self.assertTrue((output_path.parent / "readiness" / "readiness_report.md").exists())
 
     def test_parse_args_accepts_knowledge_health_and_option_index(self):
         with patch("sys.argv", ["wqb", "knowledge-health-check", "--today", "2026-07-10"]):
@@ -1911,7 +2115,7 @@ class CliTests(unittest.TestCase):
                 captured.update(kwargs)
                 return []
 
-            with patch("wqb.cli.build_client", return_value=FakeClient()):
+            with patch("wqb.cli.require_readiness_gate"), patch("wqb.cli.build_client", return_value=FakeClient()):
                 with patch("wqb.cli.run_expression_file_batch", side_effect=fake_batch):
                     with redirect_stdout(io.StringIO()):
                         run_expression_file(
@@ -2750,13 +2954,37 @@ class CliTests(unittest.TestCase):
                 "configs/stage1_usa_d1.yaml",
                 overrides={"max_alphas_per_round": 2, "run_root": str(TESTS_DIR)},
             )
-            with patch("wqb.cli.make_run_dir", return_value=run_dir):
+            with patch("wqb.cli.require_readiness_gate"), patch("wqb.cli.make_run_dir", return_value=run_dir):
                 with patch("wqb.cli.build_client", return_value=FakeClient()):
                     with patch("wqb.cli.run_field_batch", return_value=[]) as runner:
                         with redirect_stdout(io.StringIO()):
                             field_batch(config, field_search="field", multi_chunk_sleep_seconds=9)
 
             self.assertEqual(runner.call_args.kwargs["multi_chunk_sleep_seconds"], 9)
+        finally:
+            cleanup_run_dir(run_dir)
+
+    def test_field_batch_blocks_before_auth_when_readiness_fails(self):
+        from wqb.cli import field_batch
+
+        class FakeClient:
+            def authenticate(self):
+                raise AssertionError("readiness gate should run before auth")
+
+        run_dir = make_run_dir()
+        try:
+            config = load_config(
+                "configs/stage1_usa_d1.yaml",
+                overrides={"max_alphas_per_round": 2, "run_root": str(TESTS_DIR), "knowledge_root": str(run_dir / "missing_knowledge")},
+            )
+            output = io.StringIO()
+            with patch("wqb.cli.make_run_dir", return_value=run_dir), patch("wqb.cli.build_client", return_value=FakeClient()):
+                with redirect_stdout(output):
+                    field_batch(config, field_search="field")
+
+            payload = json.loads(output.getvalue())
+            self.assertEqual(payload["status"], "readiness_blocked")
+            self.assertTrue(Path(payload["readiness_markdown_path"]).exists())
         finally:
             cleanup_run_dir(run_dir)
 
@@ -2951,7 +3179,7 @@ class CliTests(unittest.TestCase):
                 overrides={"max_alphas_per_round": 1, "run_root": str(TESTS_DIR)},
             )
             output = io.StringIO()
-            with patch("wqb.cli.make_run_dir", return_value=run_dir), patch("wqb.cli.build_client", return_value=FakeClient()):
+            with patch("wqb.cli.require_readiness_gate"), patch("wqb.cli.make_run_dir", return_value=run_dir), patch("wqb.cli.build_client", return_value=FakeClient()):
                 with redirect_stdout(output):
                     field_batch(config, field_search="fresh_status_field", submit_mode="multi")
 
@@ -3110,7 +3338,7 @@ class CliTests(unittest.TestCase):
         try:
             config = load_config("configs/stage1_usa_d1.yaml", overrides={"run_root": str(TESTS_DIR)})
             output = io.StringIO()
-            with patch("wqb.cli.build_client", return_value=FakeClient()):
+            with patch("wqb.cli.require_readiness_gate"), patch("wqb.cli.build_client", return_value=FakeClient()):
                 with patch("wqb.cli.retry_planned_candidates", return_value=[]):
                     with patch("wqb.cli.summarize_run_dir", return_value={"in_flight_count": 1, "submitted_count": 1, "error_counts": {}}):
                         with redirect_stdout(output):
@@ -3133,7 +3361,7 @@ class CliTests(unittest.TestCase):
         try:
             config = load_config("configs/stage1_usa_d1.yaml", overrides={"max_alphas_per_round": 1})
             output = io.StringIO()
-            with patch("wqb.cli.make_run_dir", return_value=run_dir), patch("wqb.cli.build_client", return_value=FakeClient()):
+            with patch("wqb.cli.require_readiness_gate"), patch("wqb.cli.make_run_dir", return_value=run_dir), patch("wqb.cli.build_client", return_value=FakeClient()):
                 with redirect_stdout(output):
                     field_batch(config, field_search="x")
 

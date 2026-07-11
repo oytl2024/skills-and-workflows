@@ -4,12 +4,16 @@ import json
 from pathlib import Path
 from typing import Any
 
+from wqb.data_ledger import load_data_ledger, select_data_for_research
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest
+from wqb.template_library import load_template_library, select_templates_for_data
 
 
 READINESS_MODES = {"maintenance", "plan-only", "research", "submit-candidate"}
 STRICT_BLOCKING_MODES = {"research", "submit-candidate"}
 FRESHNESS_MANIFEST_PATH = Path("wiki") / "80_maintenance" / "freshness_manifest.json"
+DATA_LEDGER_PATH = Path("wiki") / "20_semantics" / "data_ledger.jsonl"
+TEMPLATE_LIBRARY_PATH = Path("wiki") / "30_templates" / "template_library.jsonl"
 
 
 @dataclass(frozen=True)
@@ -66,6 +70,86 @@ def _check_jsonl_artifact(path: Path, code_name: str, issues: list[ReadinessIssu
         issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "empty_artifact", f"{code_name} has no records.", path, "Run bootstrap-knowledge or refresh knowledge."))
 
 
+def _level_for_mode(mode: str) -> str:
+    """Input: readiness mode. Output: issue level. Convert strict modes into blocking issues."""
+    return "block" if mode in STRICT_BLOCKING_MODES else "warn"
+
+
+def _validate_scope_artifacts(
+    root: Path,
+    mode: str,
+    issues: list[ReadinessIssue],
+    region: str | None,
+    universe: str | None,
+    delay: int | None,
+) -> None:
+    """Input: root, mode, issues, scope. Output: none. Validate ledger/template fit for a selected run scope."""
+    if region is None or universe is None or delay is None:
+        return
+    level = _level_for_mode(mode)
+    ledger_path = root / DATA_LEDGER_PATH
+    template_path = root / TEMPLATE_LIBRARY_PATH
+    try:
+        ledger_records = load_data_ledger(ledger_path)
+        template_records = load_template_library(template_path)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+        issues.append(_issue(level, "parse_error", f"Cannot load scoped knowledge artifacts: {error}", root, "Fix JSONL before running research."))
+        return
+    selected_data = select_data_for_research(
+        ledger_records,
+        incentive="power_pool",
+        region=region,
+        delay=int(delay),
+        limit=max(len(ledger_records), 1),
+        universe=universe,
+    )
+    if not selected_data:
+        issues.append(
+            _issue(
+                level,
+                "no_compatible_data",
+                f"No data ledger records match selected scope {region} D{int(delay)} {universe}.",
+                ledger_path,
+                "Bootstrap or refresh data ledger records for the selected region/universe/delay.",
+            )
+        )
+        return
+    covered_data = [record for record in selected_data if float(record.coverage) > 0.0]
+    if not covered_data:
+        issues.append(
+            _issue(
+                level,
+                "insufficient_data_coverage",
+                f"Compatible data ledger records for {region} D{int(delay)} {universe} have zero coverage.",
+                ledger_path,
+                "Replace schema-only seeds with measured data ledger records before research.",
+            )
+        )
+        return
+    has_template_match = any(
+        select_templates_for_data(
+            template_records,
+            record,
+            incentive="power_pool",
+            limit=1,
+            region=region,
+            delay=int(delay),
+            universe=universe,
+        )
+        for record in covered_data
+    )
+    if not has_template_match:
+        issues.append(
+            _issue(
+                level,
+                "no_compatible_template",
+                f"No template library records match selected scope {region} D{int(delay)} {universe}.",
+                template_path,
+                "Add or refresh templates compatible with the selected data scope.",
+            )
+        )
+
+
 def evaluate_run_readiness(
     knowledge_root: str | Path,
     mode: str,
@@ -73,6 +157,9 @@ def evaluate_run_readiness(
     live_api_enabled: bool = False,
     submit_confirmed: bool = False,
     today_value: str | None = None,
+    region: str | None = None,
+    universe: str | None = None,
+    delay: int | None = None,
 ) -> ReadinessReport:
     """Input: root, mode, safety flags. Output: report. Check whether a run may start."""
     if mode not in READINESS_MODES:
@@ -96,8 +183,9 @@ def evaluate_run_readiness(
                     issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "missing_artifact", f"Required artifact is missing: {status.name}", status.path, "Run bootstrap-knowledge."))
                 elif status.stale:
                     issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "stale_artifact", f"Required artifact is stale: {status.name}", status.path, "Run knowledge maintenance."))
-    _check_jsonl_artifact(root / "wiki" / "20_semantics" / "data_ledger.jsonl", "data_ledger", issues, mode)
-    _check_jsonl_artifact(root / "wiki" / "30_templates" / "template_library.jsonl", "template_library", issues, mode)
+    _check_jsonl_artifact(root / DATA_LEDGER_PATH, "data_ledger", issues, mode)
+    _check_jsonl_artifact(root / TEMPLATE_LIBRARY_PATH, "template_library", issues, mode)
+    _validate_scope_artifacts(root, mode, issues, region, universe, delay)
     if mode == "research" and batch_size < 30:
         issues.append(_issue("block", "batch_size_too_small", "Research discovery batch size must be at least 30.", "", "Set batch_size to 30 or higher."))
     if mode == "research" and not live_api_enabled:

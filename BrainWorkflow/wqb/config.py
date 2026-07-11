@@ -28,6 +28,17 @@ REQUIRED_CONFIG_KEYS = ["region", "universe", "delay"]
 ON_OFF_CONFIG_KEYS = ["pasteurization", "nan_handling"]
 
 
+def resolve_config_path(path: str | Path) -> Path:
+    """Input: config path. Output: existing Path. Resolve relative configs from cwd or the package root."""
+    config_path = Path(path)
+    if config_path.exists() or config_path.is_absolute():
+        return config_path
+    package_root_path = Path(__file__).resolve().parents[1] / config_path
+    if package_root_path.exists():
+        return package_root_path
+    return config_path
+
+
 def normalize_on_off(value: Any) -> str:
     """Input: bool or string. Output: ON/OFF string. Normalize YAML boolean-like platform toggles."""
     if isinstance(value, bool):
@@ -39,7 +50,7 @@ def load_config(
     path: str | Path, overrides: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     """Input: YAML path as str|Path and optional overrides dict; output: config dict. Load, merge defaults, validate required keys, and normalize numeric fields."""
-    config_path = Path(path)
+    config_path = resolve_config_path(path)
     loaded_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(loaded_config, dict):
         raise ValueError("config root must be a mapping")

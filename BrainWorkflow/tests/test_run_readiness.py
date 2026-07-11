@@ -68,6 +68,55 @@ class RunReadinessTests(unittest.TestCase):
         (root / "wiki" / "50_benchmarks" / "correlation_and_novelty.md").write_text("# Benchmarks\n", encoding="utf-8")
         (root / "wiki" / "10_foundations" / "activity_snapshot.md").write_text("# Activity Snapshot\n", encoding="utf-8")
 
+    def create_scope_ready_artifacts(self, root: Path) -> None:
+        self.create_minimal_artifacts(root)
+        (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(
+            json.dumps(
+                {
+                    "dataset_id": "news12",
+                    "dataset_name": "News",
+                    "field_id": "news_field",
+                    "field_type": "MATRIX",
+                    "region": "USA",
+                    "delay": 1,
+                    "universe": "TOP3000",
+                    "semantic_tags": ["power_pool"],
+                    "coverage": 0.8,
+                    "alpha_count": 0,
+                    "user_count": 0,
+                    "simulation_usage_count": 0,
+                    "submitted_usage_count": 0,
+                    "last_used_at": "",
+                    "best_result_label": "unexplored",
+                    "correlation_risk": "low",
+                    "source_paths": [],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (root / "wiki" / "30_templates" / "template_library.jsonl").write_text(
+            json.dumps(
+                {
+                    "template_id": "matrix_rank",
+                    "hypothesis": "Rank the field.",
+                    "skeleton": "rank({field})",
+                    "required_field_types": ["MATRIX"],
+                    "compatible_semantic_tags": ["power_pool"],
+                    "operator_tags": [],
+                    "status": "seed",
+                    "correlation_risk": "low",
+                    "repair_levers": [],
+                    "source_paths": [],
+                    "compatible_regions": ["USA"],
+                    "compatible_delays": [1],
+                    "compatible_universes": ["TOP3000"],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
     def test_discovery_batch_smaller_than_30_blocks_research(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -108,6 +157,66 @@ class RunReadinessTests(unittest.TestCase):
 
         self.assertFalse(report.passed)
         self.assertIn("parse_error", {issue.code for issue in report.issues})
+
+    def test_research_blocks_incompatible_selected_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.create_scope_ready_artifacts(root)
+
+            report = evaluate_run_readiness(
+                root,
+                mode="research",
+                batch_size=30,
+                live_api_enabled=True,
+                region="EUR",
+                universe="TOP3000",
+                delay=1,
+                today_value="2026-07-10",
+            )
+
+        self.assertFalse(report.passed)
+        self.assertIn("no_compatible_data", {issue.code for issue in report.issues})
+
+    def test_research_blocks_zero_coverage_schema_seed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.create_scope_ready_artifacts(root)
+            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8"))
+            row["coverage"] = 0.0
+            (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            report = evaluate_run_readiness(
+                root,
+                mode="research",
+                batch_size=30,
+                live_api_enabled=True,
+                region="USA",
+                universe="TOP3000",
+                delay=1,
+                today_value="2026-07-10",
+            )
+
+        self.assertFalse(report.passed)
+        self.assertIn("insufficient_data_coverage", {issue.code for issue in report.issues})
+
+    def test_research_passes_with_scope_ready_knowledge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.create_scope_ready_artifacts(root)
+
+            report = evaluate_run_readiness(
+                root,
+                mode="research",
+                batch_size=30,
+                live_api_enabled=True,
+                region="USA",
+                universe="TOP3000",
+                delay=1,
+                today_value="2026-07-10",
+            )
+
+        self.assertTrue(report.passed)
+        self.assertFalse(report.blocked)
 
     def test_write_readiness_reports_creates_json_and_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:
