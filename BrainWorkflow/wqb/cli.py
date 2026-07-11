@@ -39,7 +39,9 @@ from wqb.research_workflow import build_parallel_stage_plan, cap_simulation_coun
 from wqb.rule_refresh import refresh_incentive_snapshot
 from wqb.run_readiness import evaluate_run_readiness, write_readiness_reports
 from wqb.simulator import extract_alpha_id, poll_simulation, resolve_multisimulation_alpha_ids, submit_multisimulation, submit_simulation
+from wqb.subagent_handoff import build_handoff_packets, write_handoff_packets
 from wqb.template_library import load_template_library
+from wqb.workflow_launcher import create_run_manifest, load_workflow_launch_config, write_run_manifest
 
 
 FIELD_BATCH_MULTI_CHUNK_SIZE = 5
@@ -164,6 +166,41 @@ def readiness_check(
         "issue_count": len(report.issues),
         "json_path": str(json_path),
         "markdown_path": str(markdown_path),
+    }
+
+
+def launch_workflow(
+    defaults_path: str | Path,
+    local_path: str | Path | None,
+    overrides: dict[str, Any],
+    write_handoffs: bool = True,
+    today_value: str | None = None,
+) -> dict[str, Any]:
+    """Input: config paths and overrides. Output: launch summary. Write manifest, readiness reports, and handoffs."""
+    local = Path(local_path) if local_path else None
+    config = load_workflow_launch_config(Path(defaults_path), local, overrides=overrides)
+    manifest = create_run_manifest(config)
+    manifest_path = write_run_manifest(Path(manifest.run_dir) / "run_manifest.json", manifest)
+    readiness_report = evaluate_run_readiness(
+        manifest.knowledge_root,
+        mode=manifest.mode,
+        batch_size=manifest.batch_size,
+        live_api_enabled=manifest.live_api_enabled,
+        submit_confirmed=manifest.submit_policy == "ask",
+        today_value=today_value,
+    )
+    readiness_json, readiness_md = write_readiness_reports(Path(manifest.run_dir), readiness_report)
+    handoff_outputs = []
+    if write_handoffs:
+        handoff_outputs = write_handoff_packets(Path(manifest.handoff_dir), build_handoff_packets(manifest))
+    return {
+        "run_id": manifest.run_id,
+        "mode": manifest.mode,
+        "manifest_path": str(manifest_path),
+        "readiness_json_path": str(readiness_json),
+        "readiness_markdown_path": str(readiness_md),
+        "readiness_passed": readiness_report.passed,
+        "handoffs": handoff_outputs,
     }
 
 
@@ -3014,6 +3051,7 @@ def parse_args() -> argparse.Namespace:
             "plan-research-options",
             "knowledge-health-check",
             "readiness-check",
+            "launch-workflow",
             "bootstrap-knowledge",
             "schedule-research",
         ],
@@ -3063,6 +3101,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--enable-live-api", action="store_true", default=False)
     parser.add_argument("--confirm-submit", action="store_true", default=False)
     parser.add_argument("--today", default="")
+    parser.add_argument("--workflow-defaults", default="configs/workflow_defaults.example.json")
+    parser.add_argument("--workflow-local", default="")
+    parser.add_argument("--workflow-objective", default="")
+    parser.add_argument("--workflow-mode", choices=["maintenance", "plan-only", "research", "submit-candidate"], default="")
+    parser.add_argument("--workflow-region", default="")
+    parser.add_argument("--workflow-universe", default="")
+    parser.add_argument("--workflow-delay", type=int, default=None)
+    parser.add_argument("--skip-handoffs", action="store_true", default=False)
     parser.add_argument("--option-json", default="")
     parser.add_argument("--option-index", type=int, default=None)
     parser.add_argument("--schedule-output", default="wiki/70_decisions/research_schedule.md")
@@ -3229,6 +3275,26 @@ def main() -> None:
             args.batch_size,
             args.enable_live_api,
             args.confirm_submit,
+            today_value=args.today or None,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "launch-workflow":
+        launch_overrides = {
+            "knowledge_root": args.knowledge_root,
+            "objective": args.workflow_objective or None,
+            "mode": args.workflow_mode or None,
+            "region": args.workflow_region or None,
+            "universe": args.workflow_universe or None,
+            "delay": args.workflow_delay,
+            "batch_size": args.batch_size,
+            "live_api_enabled": args.enable_live_api,
+            "submit_policy": "ask" if args.confirm_submit else None,
+        }
+        result = launch_workflow(
+            args.workflow_defaults,
+            args.workflow_local or None,
+            overrides=launch_overrides,
+            write_handoffs=not args.skip_handoffs,
             today_value=args.today or None,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))

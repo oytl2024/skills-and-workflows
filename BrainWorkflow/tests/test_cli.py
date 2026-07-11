@@ -71,6 +71,44 @@ def cleanup_run_dir(run_dir: Path) -> None:
 
 
 class CliTests(unittest.TestCase):
+    def test_launch_workflow_writes_manifest_readiness_and_handoffs(self):
+        from wqb.cli import launch_workflow
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            defaults = root / "workflow_defaults.json"
+            defaults.write_text(
+                json.dumps(
+                    {
+                        "knowledge_root": str(root / "knowledge"),
+                        "run_root": str(root / "runs"),
+                        "objective": "Power Pool",
+                        "region": "USA",
+                        "delay": 1,
+                        "mode": "plan-only",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = launch_workflow(defaults, None, overrides={}, write_handoffs=True, today_value="2026-07-10")
+
+            self.assertTrue(Path(result["manifest_path"]).exists())
+            self.assertTrue(Path(result["readiness_json_path"]).exists())
+            self.assertGreaterEqual(len(result["handoffs"]), 1)
+            self.assertEqual(result["mode"], "plan-only")
+
+    def test_launch_workflow_main_dispatches_without_simulation(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "launch-workflow"]), patch(
+            "wqb.cli.launch_workflow",
+            return_value={"run_id": "run1", "mode": "plan-only", "manifest_path": "run_manifest.json", "readiness_json_path": "readiness_report.json", "readiness_markdown_path": "readiness_report.md", "handoffs": []},
+        ) as launcher, redirect_stdout(output):
+            main()
+
+        launcher.assert_called_once()
+        self.assertEqual(json.loads(output.getvalue())["run_id"], "run1")
+
     def test_readiness_check_function_writes_reports(self):
         from wqb.cli import readiness_check
         from wqb.run_readiness import ReadinessReport
