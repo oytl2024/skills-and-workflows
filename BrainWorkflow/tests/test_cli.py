@@ -647,6 +647,28 @@ class CliTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "--option-json is required"):
                 main()
 
+    def test_schedule_research_main_uses_explicit_knowledge_root(self):
+        output = io.StringIO()
+        with patch(
+            "sys.argv",
+            [
+                "wqb",
+                "schedule-research",
+                "--option-json",
+                "cards.jsonl",
+                "--knowledge-root",
+                "custom_knowledge",
+            ],
+        ), patch(
+            "wqb.cli.schedule_research_from_option",
+            return_value={"schedule_path": "schedule.md", "selected_data_count": 1, "selected_template_count": 1},
+        ) as scheduler, redirect_stdout(output):
+            main()
+
+        scheduler.assert_called_once()
+        self.assertEqual(scheduler.call_args.args[1], "custom_knowledge")
+        self.assertEqual(json.loads(output.getvalue())["schedule_path"], "schedule.md")
+
     def test_knowledge_health_check_main_dispatches_without_simulation(self):
         output = io.StringIO()
         with patch("sys.argv", ["wqb", "knowledge-health-check"]), patch(

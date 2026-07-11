@@ -86,7 +86,8 @@ The startup layer separates maintenance from research execution:
 
 - `bootstrap-knowledge` materializes Data Ledger, Template Library, Freshness Manifest, and bootstrap reports into the shared Obsidian vault.
 - `readiness-check` validates required artifacts, parseability, freshness, batch size, live API permission, and submit confirmation.
-- `launch-workflow` writes a run manifest, readiness report, and subagent handoff packets before research execution.
+- `launch-workflow` writes a run manifest, readiness report, and subagent handoff packets before research execution. In strict research or submit-candidate modes, blocked readiness writes only a blocked readiness report and does not create a run manifest or handoffs.
+- `schedule-research` and live simulation/repair commands run the same readiness gate before writing schedules or contacting the API.
 
 Example:
 

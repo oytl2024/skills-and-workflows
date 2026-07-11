@@ -3479,7 +3479,7 @@ def main() -> None:
             raise SystemExit("--option-json is required for schedule-research")
         result = schedule_research_from_option(
             args.option_json,
-            default_knowledge_root(),
+            args.knowledge_root,
             args.schedule_output,
             args.schedule_region,
             args.schedule_delay,
