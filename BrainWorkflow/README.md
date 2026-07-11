@@ -79,3 +79,19 @@ Example foundation files live under `docs/knowledge/`:
 - `freshness_manifest.example.json`
 - `data_ledger.example.jsonl`
 - `template_library.example.jsonl`
+
+### Startup Layer
+
+The startup layer separates maintenance from research execution:
+
+- `bootstrap-knowledge` materializes Data Ledger, Template Library, Freshness Manifest, and bootstrap reports into the shared Obsidian vault.
+- `readiness-check` validates required artifacts, parseability, freshness, batch size, live API permission, and submit confirmation.
+- `launch-workflow` writes a run manifest, readiness report, and subagent handoff packets before research execution.
+
+Example:
+
+```powershell
+python -m wqb.cli bootstrap-knowledge --knowledge-root C:\Users\oytl\Desktop\pyproject\brain\knowledge
+python -m wqb.cli readiness-check --knowledge-root C:\Users\oytl\Desktop\pyproject\brain\knowledge --readiness-mode plan-only
+python -m wqb.cli launch-workflow --workflow-objective current-incentives --workflow-mode plan-only
+```
