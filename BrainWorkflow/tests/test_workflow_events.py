@@ -23,3 +23,15 @@ class WorkflowEventsTests(unittest.TestCase):
 
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].event_type, "workflow_created")
+
+    def test_malformed_event_objects_are_skipped_but_later_valid_rows_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "workflow_events.jsonl"
+            path.write_text(
+                '{"event_type":"bad","occurred_at":"t","payload":null}\n'
+                '{"event_type":"workflow_created","occurred_at":"t2","payload":{}}\n',
+                encoding="utf-8",
+            )
+            events = read_workflow_events(tmp)
+
+        self.assertEqual([event.event_type for event in events], ["workflow_created"])

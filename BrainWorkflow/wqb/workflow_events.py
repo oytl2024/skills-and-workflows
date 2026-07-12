@@ -40,12 +40,16 @@ def read_workflow_events(run_dir: str | Path) -> list[WorkflowEvent]:
             row = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(row, dict) and "event_type" in row and "occurred_at" in row:
-            events.append(
-                WorkflowEvent(
-                    event_type=str(row["event_type"]),
-                    occurred_at=str(row["occurred_at"]),
-                    payload=dict(row.get("payload", {})),
-                )
+        if not isinstance(row, dict) or "event_type" not in row or "occurred_at" not in row:
+            continue
+        payload = row.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        events.append(
+            WorkflowEvent(
+                event_type=str(row["event_type"]),
+                occurred_at=str(row["occurred_at"]),
+                payload=payload,
             )
+        )
     return events
