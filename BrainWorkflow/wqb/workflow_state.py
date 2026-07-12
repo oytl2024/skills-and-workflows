@@ -162,6 +162,13 @@ def load_active_run(run_root: str | Path) -> dict[str, str]:
     return {"run_id": str(row.get("run_id", "")), "run_dir": str(row.get("run_dir", ""))}
 
 
+def clear_active_run(run_root: str | Path) -> None:
+    """Input: run root. Output: none. Remove active run pointer when a workflow ends."""
+    path = Path(run_root) / ACTIVE_RUN_FILENAME
+    if path.exists():
+        path.unlink()
+
+
 def diagnose_state_consistency(run_dir: str | Path) -> list[str]:
     """Input: run dir. Output: issue codes. Detect contradictions between state and artifacts."""
     root = Path(run_dir)
