@@ -12,6 +12,7 @@ from wqb.research_record import (
     record_approval,
     record_candidate_gate,
     record_queue_update,
+    sync_research_record_to_raw,
     write_research_record,
 )
 from wqb.workflow_events import append_workflow_event, read_workflow_events
@@ -160,6 +161,10 @@ class WorkflowOrchestrator:
         state = self._active_state()
         if state is None:
             return {"active": False, "queued_count": 0}
+        if state.status != "waiting_for_user":
+            summary = self._summary(state)
+            summary["queued_count"] = 0
+            return summary
         run_dir = Path(state.run_dir)
         candidates = json.loads((run_dir / "candidate_gate.json").read_text(encoding="utf-8"))
         wanted = {str(item) for item in candidate_ids}
@@ -180,6 +185,27 @@ class WorkflowOrchestrator:
         state = transition_run_state(state, "running", "")
         write_run_state(run_dir / STATE_FILENAME, state)
         return {"run_id": state.run_id, "queued_count": queued_count, "status": state.status}
+
+    def sync_research_record(self, now: str) -> dict[str, object]:
+        """Input: timestamp. Output: sync summary. Sync the active Research Record to knowledge raw."""
+        state = self._active_state()
+        if state is None:
+            return {"active": False, "synced": False, "raw_path": ""}
+        run_dir = Path(state.run_dir)
+        record = self._load_or_create_research_record(state)
+        write_research_record(run_dir / "research_record.json", record)
+        raw_path = sync_research_record_to_raw(record, self.paths.knowledge_root / "raw")
+        state = replace(state, research_record_synced=True)
+        write_run_state(run_dir / STATE_FILENAME, state)
+        append_workflow_event(
+            run_dir,
+            "research_record_synced",
+            {"raw_path": str(raw_path), "synced": True},
+            now,
+        )
+        summary = self._summary(state)
+        summary.update({"synced": True, "raw_path": str(raw_path)})
+        return summary
 
     def _load_or_create_research_record(self, state: WorkflowRunState):
         """Input: state. Output: ResearchRecord. Load or create the run research record."""
