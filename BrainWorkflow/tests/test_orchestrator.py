@@ -37,6 +37,36 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(status["next_action"], "workflow-start")
         self.assertEqual(status["current_stage"], "objective_selected")
 
+    def test_status_recovers_durable_run_when_active_pointer_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            (root / "runs" / "active_run.json").unlink()
+
+            status = orchestrator.status()
+            active = load_active_run(root / "runs")
+
+        self.assertTrue(status["active"])
+        self.assertEqual(status["run_id"], started["run_id"])
+        self.assertEqual(active["run_id"], started["run_id"])
+
+    def test_status_recovers_durable_run_when_active_pointer_is_stale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            (root / "runs" / "active_run.json").write_text(
+                '{"run_id": "missing", "run_dir": "missing"}', encoding="utf-8"
+            )
+
+            status = orchestrator.status()
+            active = load_active_run(root / "runs")
+
+        self.assertTrue(status["active"])
+        self.assertEqual(status["run_id"], started["run_id"])
+        self.assertEqual(active["run_id"], started["run_id"])
+
     def test_abort_releases_active_run_and_preserves_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

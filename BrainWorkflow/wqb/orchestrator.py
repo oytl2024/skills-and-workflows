@@ -93,11 +93,54 @@ class WorkflowOrchestrator:
         return self._summary(state)
 
     def _active_state(self) -> WorkflowRunState | None:
-        """Input: none. Output: active state or none. Load current active run state."""
-        active = load_active_run(self.paths.run_root)
-        if not active:
+        """Input: none. Output: active state or none. Recover the current resumable run from durable files."""
+        try:
+            active = load_active_run(self.paths.run_root)
+        except (OSError, ValueError, TypeError):
+            active = {}
+        run_dir = Path(active.get("run_dir", "")) if active.get("run_dir") else None
+        state = self._load_resumable_state(run_dir) if run_dir else None
+        if state is not None and state.run_id == active.get("run_id"):
+            return state
+
+        recovered = self._find_resumable_state()
+        if recovered is None:
             return None
-        return load_run_state(Path(active["run_dir"]) / STATE_FILENAME)
+        state, run_dir = recovered
+        write_active_run(self.paths.run_root, state.run_id, run_dir)
+        return state
+
+    def _find_resumable_state(self) -> tuple[WorkflowRunState, Path] | None:
+        """Input: none. Output: state and directory or none. Select the newest durable resumable run."""
+        if not self.paths.run_root.exists():
+            return None
+        candidates: list[tuple[WorkflowRunState, Path]] = []
+        for run_dir in self.paths.run_root.iterdir():
+            if not run_dir.is_dir():
+                continue
+            state = self._load_resumable_state(run_dir)
+            if state is not None:
+                candidates.append((state, run_dir))
+        if not candidates:
+            return None
+        return max(
+            candidates,
+            key=lambda candidate: (
+                candidate[0].updated_at or candidate[0].created_at,
+                candidate[0].created_at,
+                candidate[1].name,
+            ),
+        )
+
+    def _load_resumable_state(self, run_dir: Path) -> WorkflowRunState | None:
+        """Input: run directory. Output: state or none. Load a valid non-terminal durable run state."""
+        try:
+            state = load_run_state(run_dir / STATE_FILENAME)
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        if state.status in {"completed", "completed_with_warnings", "failed", "aborted"}:
+            return None
+        return state
 
     def _summary(self, state: WorkflowRunState) -> dict[str, object]:
         """Input: state. Output: summary dict. Present stable Orchestrator status."""
