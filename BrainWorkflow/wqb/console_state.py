@@ -187,7 +187,7 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
     proposal_counts = Counter(str(row.get("status", "unclassified")) for row in proposals)
     active_workflow, active_run_dir = _active_workflow_summary(paths.runs_root)
     workflow_events = [] if active_run_dir is None else [event.__dict__ for event in read_workflow_events(active_run_dir)]
-    approved_queue = [] if active_run_dir is None else load_approved_queue(active_run_dir)
+    approved_queue = load_approved_queue(paths.runs_root)
     return {
         "readiness": _latest_readiness(paths.runs_root),
         "freshness": _freshness_summary(paths.knowledge_root),

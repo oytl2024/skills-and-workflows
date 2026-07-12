@@ -90,6 +90,10 @@ class ConsoleStateTests(unittest.TestCase):
         self.assertEqual(state["option_cards"], [])
         self.assertEqual(state["jobs"], [])
         self.assertEqual(state["proposal_counts"], {})
+        self.assertEqual(state["active_workflow"], {"exists": False})
+        self.assertEqual(state["workflow_events"], [])
+        self.assertEqual(state["approved_queue"], [])
+        self.assertEqual(state["research_record"], {"exists": False})
 
     def test_load_console_state_includes_active_workflow_state_events_and_queue(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -129,3 +133,34 @@ class ConsoleStateTests(unittest.TestCase):
         self.assertEqual(state["active_workflow"]["run_id"], "run1")
         self.assertEqual(state["workflow_events"][0]["event_type"], "workflow_created")
         self.assertEqual(state["approved_queue"][0]["candidate_id"], "c1")
+
+    def test_load_console_state_reads_approved_queue_across_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            knowledge = root / "knowledge"
+            runs = root / "runs"
+            active_run = runs / "run1"
+            queued_run = runs / "run2"
+            knowledge.mkdir()
+            active_run.mkdir(parents=True)
+            queued_run.mkdir(parents=True)
+            (runs / "active_run.json").write_text(
+                json.dumps({"run_id": "run1", "run_dir": str(active_run)}), encoding="utf-8"
+            )
+            (queued_run / "approved_candidates.jsonl").write_text(
+                '{"candidate_id":"c2","status":"queued"}\n', encoding="utf-8"
+            )
+
+            state = load_console_state(
+                ConsolePaths(
+                    root,
+                    root / "BrainWorkflow",
+                    knowledge,
+                    runs,
+                    root / "milestone.md",
+                    root / "worklog.md",
+                    runs / "console_jobs",
+                )
+            )
+
+        self.assertEqual(state["approved_queue"], [{"candidate_id": "c2", "status": "queued"}])
