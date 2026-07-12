@@ -7,7 +7,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+from wqb.candidate_queue import load_approved_queue
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest
+from wqb.research_record import load_research_record
+from wqb.workflow_events import read_workflow_events
+from wqb.workflow_state import load_active_run, load_run_state
 
 
 @dataclass(frozen=True)
@@ -128,11 +132,62 @@ def _milestone_summary(path: Path) -> dict[str, str]:
     return {"exists": "true", "active_loop": active_loop, "path": str(path)}
 
 
+def _active_workflow_summary(runs_root: Path) -> tuple[dict[str, Any], Path | None]:
+    """Input: runs root. Output: workflow summary and run dir. Read active Orchestrator state once."""
+    try:
+        active = load_active_run(runs_root)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {"exists": False}, None
+    if not active:
+        return {"exists": False}, None
+    run_dir_text = active.get("run_dir", "")
+    if not run_dir_text:
+        return {"exists": True, "run_id": active.get("run_id", ""), "state_exists": False}, None
+    run_dir = Path(run_dir_text)
+    state_path = run_dir / "run_state.json"
+    if not state_path.exists():
+        return {"exists": True, "run_id": active.get("run_id", ""), "state_exists": False}, run_dir
+    try:
+        state = load_run_state(state_path)
+    except (OSError, ValueError, json.JSONDecodeError, KeyError, TypeError):
+        return {"exists": True, "run_id": active.get("run_id", ""), "state_exists": False}, run_dir
+    return (
+        {
+            "exists": True,
+            "state_exists": True,
+            "run_id": state.run_id,
+            "run_dir": state.run_dir,
+            "status": state.status,
+            "current_stage": state.current_stage,
+            "next_action": state.next_action,
+            "waiting_for_user": state.waiting_for_user,
+        },
+        run_dir,
+    )
+
+
+def _research_record_summary(run_dir: Path | None) -> dict[str, Any]:
+    """Input: active run dir or None. Output: research record summary. Read optional record safely."""
+    if run_dir is None:
+        return {"exists": False}
+    path = run_dir / "research_record.json"
+    if not path.exists():
+        return {"exists": False, "path": str(path)}
+    try:
+        record = load_research_record(path)
+    except (OSError, ValueError, json.JSONDecodeError, KeyError, TypeError):
+        return {"exists": False, "path": str(path)}
+    return {"exists": True, "path": str(path), **record.__dict__}
+
+
 def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
     """Input: console paths. Output: JSON-safe state dict. Aggregate dashboard data."""
     decisions = paths.knowledge_root / "wiki" / "70_decisions"
     proposals = _read_jsonl(decisions / "workflow_change_proposals.jsonl")
     proposal_counts = Counter(str(row.get("status", "unclassified")) for row in proposals)
+    active_workflow, active_run_dir = _active_workflow_summary(paths.runs_root)
+    workflow_events = [] if active_run_dir is None else [event.__dict__ for event in read_workflow_events(active_run_dir)]
+    approved_queue = [] if active_run_dir is None else load_approved_queue(active_run_dir)
     return {
         "readiness": _latest_readiness(paths.runs_root),
         "freshness": _freshness_summary(paths.knowledge_root),
@@ -142,4 +197,8 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
         "proposals": proposals,
         "proposal_counts": dict(proposal_counts),
         "milestone": _milestone_summary(paths.milestone_path),
+        "active_workflow": active_workflow,
+        "workflow_events": workflow_events,
+        "approved_queue": approved_queue,
+        "research_record": _research_record_summary(active_run_dir),
     }

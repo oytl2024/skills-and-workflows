@@ -56,6 +56,8 @@ decision records, job status tracking, and context-preserving guardrails.
 
 ## Architecture
 
+After the Orchestrator slice, the console should call `workflow-*` commands or Orchestrator functions for official research flow. Low-level CLI commands remain visible as diagnostic actions, not the normal control path.
+
 ```mermaid
 flowchart TD
   U["User in local browser"] --> W["Workflow Console"]

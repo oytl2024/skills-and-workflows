@@ -52,6 +52,18 @@ Run from this folder:
 python -m unittest discover -s tests -v
 ```
 
+## Orchestrator-First Workflow
+
+Long-term research should start from the Orchestrator commands instead of manually chaining low-level commands.
+
+```powershell
+python -m wqb.cli workflow-start --objective "Power Pool" --selected-option-id option-1
+python -m wqb.cli workflow-status
+python -m wqb.cli workflow-resume
+```
+
+The Orchestrator owns `run_state.json`, `workflow_events.jsonl`, Research Record sync, candidate approval, and approved candidate queue records. Legacy commands remain useful for diagnostics and focused recovery, but they are not the source of official workflow state.
+
 ## Current Phase
 
 Phase 2 is implementing the principle-led research planner. The active design is:

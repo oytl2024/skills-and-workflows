@@ -22,6 +22,7 @@
 - `research` requires an explicit `enable_live_api` checkbox.
 - `submit-candidate` requires both `enable_live_api` and a separate `confirm_submit` control.
 - Every UI-triggered action writes durable job and context artifacts.
+- Console Task 2 and later must use Orchestrator-owned state and `workflow-*` commands when controlling official research runs.
 
 ---
 
