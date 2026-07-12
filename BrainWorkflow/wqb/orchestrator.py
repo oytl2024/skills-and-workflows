@@ -5,6 +5,15 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
+from wqb.candidate_queue import approve_candidate, queue_approved_candidate
+from wqb.research_record import (
+    empty_research_record,
+    load_research_record,
+    record_approval,
+    record_candidate_gate,
+    record_queue_update,
+    write_research_record,
+)
 from wqb.workflow_events import append_workflow_event, read_workflow_events
 from wqb.workflow_stage_adapters import schedule_research_stage
 from wqb.workflow_state import (
@@ -117,6 +126,67 @@ class WorkflowOrchestrator:
             )
             return self._summary(state)
         return self._summary(state)
+
+    def request_candidate_approval(
+        self, candidates: list[dict[str, object]], now: str
+    ) -> dict[str, object]:
+        """Input: candidates and timestamp. Output: status summary. Pause run for user candidate approval."""
+        state = self._active_state()
+        if state is None:
+            return {"active": False, "status": "none"}
+        run_dir = Path(state.run_dir)
+        record = self._load_or_create_research_record(state)
+        for candidate in candidates:
+            record = record_candidate_gate(
+                record, candidate, "ready_for_approval", ["hard checks passed"]
+            )
+        write_research_record(run_dir / "research_record.json", record)
+        (run_dir / "candidate_gate.json").write_text(
+            json.dumps(candidates, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        if state.status == "created":
+            state = transition_run_state(state, "running", "")
+        state = transition_run_state(state, "waiting_for_user", "candidate approval required")
+        write_run_state(run_dir / STATE_FILENAME, state)
+        append_workflow_event(
+            run_dir, "user_approval_requested", {"candidate_count": len(candidates)}, now
+        )
+        return self._summary(state)
+
+    def approve_candidates(
+        self, candidate_ids: list[str], approved_at: str, approved_by: str
+    ) -> dict[str, object]:
+        """Input: candidate ids and approval metadata. Output: queue summary. Approve and queue exact candidates."""
+        state = self._active_state()
+        if state is None:
+            return {"active": False, "queued_count": 0}
+        run_dir = Path(state.run_dir)
+        candidates = json.loads((run_dir / "candidate_gate.json").read_text(encoding="utf-8"))
+        wanted = {str(item) for item in candidate_ids}
+        record = self._load_or_create_research_record(state)
+        queued_count = 0
+        for candidate in candidates:
+            if str(candidate.get("candidate_id", "")) not in wanted:
+                continue
+            approval = approve_candidate(run_dir, candidate, approved_at, approved_by)
+            queue_row = queue_approved_candidate(run_dir, approval)
+            record = record_approval(record, approval)
+            record = record_queue_update(record, queue_row)
+            queued_count += 1
+        write_research_record(run_dir / "research_record.json", record)
+        append_workflow_event(
+            run_dir, "candidates_approved", {"queued_count": queued_count}, approved_at
+        )
+        state = transition_run_state(state, "running", "")
+        write_run_state(run_dir / STATE_FILENAME, state)
+        return {"run_id": state.run_id, "queued_count": queued_count, "status": state.status}
+
+    def _load_or_create_research_record(self, state: WorkflowRunState):
+        """Input: state. Output: ResearchRecord. Load or create the run research record."""
+        path = Path(state.run_dir) / "research_record.json"
+        if path.exists():
+            return load_research_record(path)
+        return empty_research_record(state.run_id, state.objective)
 
     def _active_state(self) -> WorkflowRunState | None:
         """Input: none. Output: active state or none. Recover the current resumable run from durable files."""

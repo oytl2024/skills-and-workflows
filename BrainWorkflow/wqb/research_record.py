@@ -74,6 +74,16 @@ def record_candidate_gate(record: ResearchRecord, candidate: dict[str, object], 
     return replace(record, candidate_gate=[*record.candidate_gate, row])
 
 
+def record_approval(record: ResearchRecord, approval: dict[str, object]) -> ResearchRecord:
+    """Input: record and approval. Output: updated record. Store user approval evidence."""
+    return replace(record, approvals=[*record.approvals, dict(approval)])
+
+
+def record_queue_update(record: ResearchRecord, queue_row: dict[str, object]) -> ResearchRecord:
+    """Input: record and queue row. Output: updated record. Store approved queue update."""
+    return replace(record, queue_updates=[*record.queue_updates, dict(queue_row)])
+
+
 def write_research_record(path: str | Path, record: ResearchRecord) -> Path:
     """Input: path and record. Output: written path. Persist machine-readable research record."""
     target = Path(path)
@@ -108,6 +118,12 @@ def render_research_record_markdown(record: ResearchRecord) -> str:
     lines.extend(["", "## Candidate Gate", ""])
     for row in record.candidate_gate:
         lines.append(f"- `{row.get('candidate_id', '')}` {row.get('decision', '')}: {', '.join(row.get('reasons', []))}")
+    lines.extend(["", "## User Approval", ""])
+    for row in record.approvals:
+        lines.append(f"- `{row.get('candidate_id', '')}` hash `{row.get('expression_hash', '')}`")
+    lines.extend(["", "## Approved Queue", ""])
+    for row in record.queue_updates:
+        lines.append(f"- `{row.get('candidate_id', '')}` status `{row.get('status', '')}`")
     return "\n".join(lines) + "\n"
 
 

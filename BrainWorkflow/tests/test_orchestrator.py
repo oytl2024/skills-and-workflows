@@ -96,3 +96,21 @@ class WorkflowOrchestratorTests(unittest.TestCase):
 
         self.assertEqual(first["current_stage"], "schedule")
         self.assertEqual(second["current_stage"], "scout_seed")
+
+    def test_candidate_gate_pauses_for_user_and_approval_queues_exact_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            candidate = {
+                "candidate_id": "c1",
+                "platform_alpha_id": "a1",
+                "version": 1,
+                "expression_hash": "h1",
+                "source_run_id": started["run_id"],
+            }
+            gate = orchestrator.request_candidate_approval([candidate], "2026-07-12T00:10:00Z")
+            approved = orchestrator.approve_candidates(["c1"], "2026-07-12T00:11:00Z", "user")
+
+        self.assertEqual(gate["status"], "waiting_for_user")
+        self.assertEqual(approved["queued_count"], 1)

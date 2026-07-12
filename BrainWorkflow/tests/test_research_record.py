@@ -58,3 +58,13 @@ class ResearchRecordTests(unittest.TestCase):
 
         self.assertEqual(loaded.run_id, "run1")
         self.assertTrue(raw_path.name == "research_record.md")
+
+    def test_research_record_tracks_approvals_and_queue_updates(self):
+        from wqb.research_record import record_approval, record_queue_update
+
+        record = empty_research_record("run1", "Power Pool")
+        record = record_approval(record, {"candidate_id": "c1", "expression_hash": "h1"})
+        record = record_queue_update(record, {"candidate_id": "c1", "status": "queued"})
+
+        self.assertEqual(record.approvals[0]["candidate_id"], "c1")
+        self.assertEqual(record.queue_updates[0]["status"], "queued")
