@@ -1,0 +1,19 @@
+{
+  "knowledge_root": "knowledge",
+  "run_root": "runs",
+  "objective": "current-incentives",
+  "region": "USA",
+  "universe": "TOP3000",
+  "delay": 1,
+  "instrument_type": "EQUITY",
+  "mode": "plan-only",
+  "batch_size": 30,
+  "max_simulation_budget": 30,
+  "live_api_enabled": false,
+  "submit_policy": "blocked",
+  "lanes": [
+    "knowledge-readiness",
+    "data-scheduling",
+    "template-selection"
+  ]
+}

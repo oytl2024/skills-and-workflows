@@ -1,0 +1,36 @@
+region: USA
+universe: TOP3000
+delay: 1
+instrument_type: EQUITY
+language: FASTEXPR
+neutralization: SUBINDUSTRY
+decay: 4
+truncation: 0.08
+pasteurization: "ON"
+unit_handling: VERIFY
+nan_handling: "OFF"
+max_alphas_per_round: 50
+max_rounds: 5
+stop_after_first_candidate: true
+ordinary_probe_count: 3
+power_pool_operator_limit: 8
+power_pool_field_limit: 3
+request_timeout_seconds: 60
+max_retries: 8
+base_backoff_seconds: 5
+run_root: runs
+power_pool_theme_query: "USA/D1 Fast Datasets Power Pool June`26"
+knowledge_queries:
+  - Power Pool
+  - Alpha Submit Criteria
+  - submission criteria
+  - Sharpe Fitness
+  - turnover
+  - neutralization
+  - truncation
+  - self correlation
+  - prod correlation
+  - data diversity
+  - robust universe
+  - Fast D1
+  - fast datasets

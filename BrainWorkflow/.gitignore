@@ -1,0 +1,29 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local credentials and environment.
+.env
+.env.*
+*.pem
+*.key
+credentials.*
+secrets.*
+
+# WorldQuant BRAIN run artifacts and raw platform snapshots.
+runs/
+research_batches/
+tmp*/
+docs/knowledge/cache/
+docs/knowledge/*snapshot*.json
+docs/knowledge/*details*.json
+docs/knowledge/platform_metadata_*.json
+knowledge/
+
+# Local editor state.
+.vscode/
+.idea/

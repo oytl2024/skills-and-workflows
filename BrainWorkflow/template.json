@@ -1,0 +1,18 @@
+{
+    "template":[
+        "<group_compare_op>(<ts_compare_op>(<company_fundamentals>, <days>, <group>))",
+        ""
+    ]
+    ,
+    "<group>":["NONE","MARKET","SECTOR","INDUSTRY","SUBINDUSTRY","SLOW FACTORS","FAST FACTORS","SLOW + FAST FACTORS"]
+    ,
+    "<days>":[5,10,15,20,50,100,150,200,300,400]
+    ,
+    "<company_fundamentals>":["eps"]
+    ,
+    "<ts_compare_op>":["ts_mean","ts_last_diff","ts_delta"]
+    ,
+    "<group_compare_op>":["group_mean"]
+
+
+}
