@@ -1,0 +1,92 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from wqb.console_state import ConsolePaths, load_console_state
+
+
+class ConsoleStateTests(unittest.TestCase):
+    def test_load_console_state_aggregates_readiness_options_schedule_jobs_and_proposals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            knowledge = root / "knowledge"
+            runs = root / "runs"
+            decisions = knowledge / "wiki" / "70_decisions"
+            maintenance = knowledge / "wiki" / "80_maintenance"
+            decisions.mkdir(parents=True)
+            maintenance.mkdir(parents=True)
+            readiness_dir = runs / "readiness_latest"
+            readiness_dir.mkdir(parents=True)
+            job_dir = runs / "console_jobs" / "job-1"
+            job_dir.mkdir(parents=True)
+
+            (readiness_dir / "readiness_report.json").write_text(
+                json.dumps({"mode": "plan-only", "passed": True, "blocked": False, "issues": []}),
+                encoding="utf-8",
+            )
+            (maintenance / "freshness_manifest.json").write_text(
+                json.dumps([{"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-12", "max_age_days": 7}]),
+                encoding="utf-8",
+            )
+            (decisions / "research_option_cards.jsonl").write_text(
+                json.dumps({"title": "Explore current Power Pool boards", "score": {"total": 10.5}}) + "\n",
+                encoding="utf-8",
+            )
+            (decisions / "research_schedule.md").write_text("# Research Schedule\n\n- Option: Power Pool\n", encoding="utf-8")
+            (decisions / "workflow_change_proposals.jsonl").write_text(
+                json.dumps({"proposal_id": "p1", "status": "proposed", "title": "Down-rank crowded templates"}) + "\n",
+                encoding="utf-8",
+            )
+            (job_dir / "job.json").write_text(
+                json.dumps({"job_id": "job-1", "status": "completed", "action": "readiness-check"}),
+                encoding="utf-8",
+            )
+            milestone = root / "milestone.md"
+            milestone.write_text("## Active Loop\n\nLoop name: `workflow-console`\n", encoding="utf-8")
+            todo = root / "todo.md"
+            todo.write_text("# todo\n", encoding="utf-8")
+
+            state = load_console_state(
+                ConsolePaths(
+                    project_root=root,
+                    workflow_root=root / "BrainWorkflow",
+                    knowledge_root=knowledge,
+                    runs_root=runs,
+                    milestone_path=milestone,
+                    todo_path=todo,
+                    job_root=runs / "console_jobs",
+                )
+            )
+
+        self.assertTrue(state["readiness"]["passed"])
+        self.assertEqual(state["freshness"]["record_count"], 1)
+        self.assertEqual(state["option_cards"][0]["title"], "Explore current Power Pool boards")
+        self.assertIn("Research Schedule", state["schedule"]["preview"])
+        self.assertEqual(state["jobs"][0]["job_id"], "job-1")
+        self.assertEqual(state["proposal_counts"]["proposed"], 1)
+        self.assertEqual(state["milestone"]["active_loop"], "workflow-console")
+
+    def test_load_console_state_handles_missing_optional_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            knowledge = root / "knowledge"
+            runs = root / "runs"
+            knowledge.mkdir()
+            runs.mkdir()
+            state = load_console_state(
+                ConsolePaths(
+                    project_root=root,
+                    workflow_root=root / "BrainWorkflow",
+                    knowledge_root=knowledge,
+                    runs_root=runs,
+                    milestone_path=root / "milestone.md",
+                    todo_path=root / "todo.md",
+                    job_root=runs / "console_jobs",
+                )
+            )
+
+        self.assertFalse(state["readiness"]["exists"])
+        self.assertEqual(state["option_cards"], [])
+        self.assertEqual(state["jobs"], [])
+        self.assertEqual(state["proposal_counts"], {})
