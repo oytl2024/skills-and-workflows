@@ -32,6 +32,13 @@ class CandidateQueueTests(unittest.TestCase):
         changed = dict(self.candidate(), expression_hash="h2")
         self.assertFalse(approval_matches_candidate(approval, changed))
 
+    def test_approval_does_not_match_different_platform_alpha(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            approval = approve_candidate(tmp, self.candidate(), "2026-07-12T00:00:00Z", "user")
+
+        changed = dict(self.candidate(), platform_alpha_id="a2")
+        self.assertFalse(approval_matches_candidate(approval, changed))
+
     def test_queue_deduplicates_same_candidate_version_hash(self):
         with tempfile.TemporaryDirectory() as tmp:
             approval = approve_candidate(tmp, self.candidate(), "2026-07-12T00:00:00Z", "user")

@@ -52,9 +52,10 @@ def load_approvals(run_dir: str | Path) -> list[dict[str, object]]:
 
 
 def approval_matches_candidate(approval: dict[str, object], candidate: dict[str, object]) -> bool:
-    """Input: approval and candidate. Output: bool. Check exact version and hash binding."""
+    """Input: approval and candidate. Output: bool. Check exact candidate identity binding."""
     return (
         str(approval.get("candidate_id", "")) == str(candidate.get("candidate_id", ""))
+        and str(approval.get("platform_alpha_id", "")) == str(candidate.get("platform_alpha_id", ""))
         and int(approval.get("version", -1)) == int(candidate.get("version", -2))
         and str(approval.get("expression_hash", "")) == str(candidate.get("expression_hash", ""))
     )
