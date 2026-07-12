@@ -79,3 +79,20 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(result["status"], "aborted")
         self.assertEqual(state.status, "aborted")
         self.assertEqual(active, {})
+
+    def test_continue_once_advances_created_run_to_schedule_then_scout_seed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            decisions = root / "knowledge" / "wiki" / "70_decisions"
+            decisions.mkdir(parents=True)
+            (decisions / "research_option_cards.jsonl").write_text(
+                '{"option_id":"option-1","title":"Power Pool","scope":"USA D1","score":{"total":10}}\n',
+                encoding="utf-8",
+            )
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            first = orchestrator.continue_once("2026-07-12T00:01:00Z")
+            second = orchestrator.continue_once("2026-07-12T00:02:00Z")
+
+        self.assertEqual(first["current_stage"], "schedule")
+        self.assertEqual(second["current_stage"], "scout_seed")

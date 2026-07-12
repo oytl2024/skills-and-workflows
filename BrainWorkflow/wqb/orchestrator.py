@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 from uuid import uuid4
 
 from wqb.workflow_events import append_workflow_event, read_workflow_events
+from wqb.workflow_stage_adapters import schedule_research_stage
 from wqb.workflow_state import (
     STATE_FILENAME,
     WorkflowRunState,
@@ -90,6 +91,31 @@ class WorkflowOrchestrator:
                 aborted_at,
             )
         clear_active_run(self.paths.run_root)
+        return self._summary(state)
+
+    def continue_once(self, now: str) -> dict[str, object]:
+        """Input: timestamp. Output: status summary. Advance exactly one legal workflow stage."""
+        state = self._active_state()
+        if state is None:
+            return {"active": False, "status": "none", "next_action": "workflow-start"}
+        run_dir = Path(state.run_dir)
+        if state.status == "created" and state.current_stage == "objective_selected":
+            state = transition_run_state(state, "running", "")
+            state = replace(state, current_stage="schedule", next_action="workflow-continue")
+            write_run_state(run_dir / STATE_FILENAME, state)
+            append_workflow_event(run_dir, "stage_started", {"stage": "schedule"}, now)
+            return self._summary(state)
+        if state.status == "running" and state.current_stage == "schedule":
+            manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+            result = schedule_research_stage(
+                self.paths.knowledge_root, run_dir, str(manifest.get("selected_option_id", ""))
+            )
+            state = replace(state, current_stage="scout_seed", last_completed_stage="schedule")
+            write_run_state(run_dir / STATE_FILENAME, state)
+            append_workflow_event(
+                run_dir, "stage_completed", {"stage": "schedule", "result": result}, now
+            )
+            return self._summary(state)
         return self._summary(state)
 
     def _active_state(self) -> WorkflowRunState | None:
