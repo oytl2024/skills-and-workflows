@@ -13,6 +13,7 @@ from uuid import uuid4
 import requests
 
 from wqb.benchmark import benchmark_alpha_record
+from wqb.candidate_queue import QUEUE_STATUSES, update_candidate_queue_status
 from wqb.checker import fetch_check_summary
 from wqb.client import WQBClient
 from wqb.config import load_config
@@ -33,6 +34,7 @@ from wqb.knowledge_bootstrap import bootstrap_knowledge, bootstrap_summary_to_di
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest, write_freshness_report
 from wqb.novelty import score_expression_novelty
 from wqb.optimizer import actions_for_check_summary
+from wqb.orchestrator import OrchestratorPaths, WorkflowOrchestrator
 from wqb.principle_model import OptionCard, ScoreBreakdown, SourceEvidence
 from wqb.recorder import RunRecorder
 from wqb.research_planner import generate_research_options
@@ -74,6 +76,22 @@ def default_knowledge_root() -> Path:
 def default_option_output_dir() -> str:
     """Input: none. Output: str path. Return the default research option card directory."""
     return str(default_knowledge_root() / "wiki" / "70_decisions")
+
+
+def default_orchestrator_paths(config: dict[str, Any]) -> OrchestratorPaths:
+    """Input: run config. Output: OrchestratorPaths. Resolve local workflow state roots."""
+    workflow_root = Path(__file__).resolve().parents[1]
+    project_root = workflow_root.parents[1]
+    knowledge_root = Path(config.get("knowledge_root", default_knowledge_root()))
+    run_root = Path(config.get("run_root", "runs"))
+    if not run_root.is_absolute():
+        run_root = workflow_root / run_root
+    return OrchestratorPaths(
+        project_root=project_root,
+        workflow_root=workflow_root,
+        knowledge_root=knowledge_root,
+        run_root=run_root,
+    )
 
 
 def make_run_dir(config: dict[str, Any]) -> Path:
@@ -3209,6 +3227,12 @@ def parse_args() -> argparse.Namespace:
             "launch-workflow",
             "bootstrap-knowledge",
             "schedule-research",
+            "workflow-start",
+            "workflow-status",
+            "workflow-resume",
+            "workflow-abort",
+            "workflow-approve-candidates",
+            "workflow-update-candidate-status",
         ],
     )
     parser.add_argument("--config", default="configs/stage1_usa_d1.yaml")
@@ -3270,6 +3294,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--schedule-region", default="USA")
     parser.add_argument("--schedule-delay", type=int, default=1)
     parser.add_argument("--schedule-universe", default="TOP3000")
+    parser.add_argument("--objective", default="")
+    parser.add_argument("--selected-option-id", default="")
+    parser.add_argument("--now", default="")
+    parser.add_argument("--reason", default="")
+    parser.add_argument("--candidate-id", action="append", default=[])
+    parser.add_argument("--approved-by", default="user")
+    parser.add_argument("--candidate-version", type=int, default=None)
+    parser.add_argument("--candidate-expression-hash", default="")
+    parser.add_argument("--candidate-status", choices=sorted(QUEUE_STATUSES), default="")
     return parser.parse_args()
 
 
@@ -3321,6 +3354,49 @@ def main() -> None:
             submit_confirmed=args.confirm_submit,
             today_value=args.today or None,
         )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    if args.command.startswith("workflow-"):
+        orchestrator = WorkflowOrchestrator(
+            default_orchestrator_paths({"knowledge_root": args.knowledge_root})
+        )
+        now = args.now or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        if args.command == "workflow-start":
+            if not args.objective or not args.selected_option_id:
+                raise SystemExit("--objective and --selected-option-id are required for workflow-start")
+            result = orchestrator.start(args.objective, args.selected_option_id, now)
+        elif args.command == "workflow-status":
+            result = orchestrator.status()
+        elif args.command == "workflow-resume":
+            result = orchestrator.resume(now)
+        elif args.command == "workflow-abort":
+            if not args.reason:
+                raise SystemExit("--reason is required for workflow-abort")
+            result = orchestrator.abort(args.reason, now)
+        elif args.command == "workflow-approve-candidates":
+            result = orchestrator.approve_candidates(args.candidate_id, now, args.approved_by)
+        else:
+            if (
+                len(args.candidate_id) != 1
+                or args.candidate_version is None
+                or not args.candidate_expression_hash
+                or not args.candidate_status
+            ):
+                raise SystemExit(
+                    "--candidate-id, --candidate-version, --candidate-expression-hash, and --candidate-status "
+                    "are required for workflow-update-candidate-status"
+                )
+            run_dir = str(orchestrator.status().get("run_dir", ""))
+            if not run_dir:
+                raise SystemExit("an active workflow run is required for workflow-update-candidate-status")
+            result = update_candidate_queue_status(
+                run_dir,
+                args.candidate_id[0],
+                args.candidate_version,
+                args.candidate_expression_hash,
+                args.candidate_status,
+                now,
+            )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
     config = load_config(args.config, overrides=overrides)

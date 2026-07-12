@@ -3482,5 +3482,32 @@ class CliTests(unittest.TestCase):
             cleanup_run_dir(run_dir)
 
 
+class WorkflowOrchestratorCliTests(unittest.TestCase):
+    def test_parse_args_accepts_workflow_start(self):
+        with patch(
+            "sys.argv",
+            ["wqb", "workflow-start", "--objective", "Power Pool", "--selected-option-id", "option-1"],
+        ):
+            from wqb.cli import parse_args
+
+            args = parse_args()
+
+        self.assertEqual(args.command, "workflow-start")
+        self.assertEqual(args.objective, "Power Pool")
+
+    def test_workflow_status_dispatches_orchestrator(self):
+        from wqb.cli import main
+
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "workflow-status"]), patch(
+            "wqb.cli.WorkflowOrchestrator"
+        ) as orchestrator_cls, patch("wqb.cli.load_config") as load_config, redirect_stdout(output):
+            orchestrator_cls.return_value.status.return_value = {"status": "created"}
+            main()
+
+        self.assertEqual(json.loads(output.getvalue())["status"], "created")
+        load_config.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
