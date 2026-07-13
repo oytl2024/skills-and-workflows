@@ -5,12 +5,24 @@ import json
 from pathlib import Path
 from typing import Any
 
-from wqb.workflow_contract import LEGAL_RUN_TRANSITIONS, RUN_STATUSES, STAGE_NAMES
+from wqb.workflow_contract import LEGAL_RUN_TRANSITIONS, RUN_STATUSES, STAGE_NAMES, STAGE_STATUSES
 
 
 STATE_FILENAME = "run_state.json"
 ACTIVE_RUN_FILENAME = "active_run.json"
-TERMINAL_RUN_STATUSES = {"completed", "completed_with_warnings", "failed", "aborted"}
+TERMINAL_RUN_STATUSES = {"completed", "completed_with_warnings", "aborted"}
+STAGES_REQUIRING_EVIDENCE = {
+    "schedule",
+    "scout_seed",
+    "batch_generation",
+    "backtest",
+    "triage",
+    "repair",
+    "candidate_gate",
+    "user_approval",
+    "approved_queue",
+    "research_record_sync",
+}
 
 
 class WorkflowStateError(ValueError):
@@ -114,20 +126,47 @@ def _state_to_dict(state: WorkflowRunState) -> dict[str, Any]:
 
 def _state_from_dict(row: dict[str, Any]) -> WorkflowRunState:
     """Input: JSON row. Output: WorkflowRunState. Rebuild nested dataclasses."""
-    stages = {
-        name: WorkflowStageState(**dict(stage_row))
-        for name, stage_row in dict(row.get("stages", {})).items()
-        if name in STAGE_NAMES and isinstance(stage_row, dict)
-    }
+    if not isinstance(row, dict):
+        raise WorkflowStateError("workflow state must be a JSON object")
+    status = str(row["status"])
+    current_stage = str(row.get("current_stage", "objective_selected"))
+    last_completed_stage = str(row.get("last_completed_stage", ""))
+    if status not in RUN_STATUSES:
+        raise WorkflowStateError(f"unsupported run status: {status}")
+    if current_stage not in STAGE_NAMES:
+        raise WorkflowStateError(f"unsupported current stage: {current_stage}")
+    if last_completed_stage and last_completed_stage not in STAGE_NAMES:
+        raise WorkflowStateError(f"unsupported last completed stage: {last_completed_stage}")
+    raw_stages = row.get("stages", {})
+    if not isinstance(raw_stages, dict):
+        raise WorkflowStateError("workflow stages must be a JSON object")
+    stages: dict[str, WorkflowStageState] = {}
+    for name, stage_row in raw_stages.items():
+        if name not in STAGE_NAMES or not isinstance(stage_row, dict):
+            raise WorkflowStateError(f"unsupported stage name: {name}")
+        stored_name = str(stage_row.get("name", name))
+        stage_status = str(stage_row.get("status", "not_started"))
+        if stored_name != name:
+            raise WorkflowStateError(f"stage name mismatch: {name} != {stored_name}")
+        if stage_status not in STAGE_STATUSES:
+            raise WorkflowStateError(f"unsupported stage status: {stage_status}")
+        stages[name] = WorkflowStageState(
+            name=name,
+            status=stage_status,
+            started_at=str(stage_row.get("started_at", "")),
+            completed_at=str(stage_row.get("completed_at", "")),
+            evidence_paths=[str(item) for item in stage_row.get("evidence_paths", [])],
+            blocker=str(stage_row.get("blocker", "")),
+        )
     for name in STAGE_NAMES:
         stages.setdefault(name, WorkflowStageState(name=name))
     return WorkflowRunState(
         run_id=str(row["run_id"]),
         run_dir=str(row["run_dir"]),
         objective=str(row.get("objective", "")),
-        status=str(row["status"]),
-        current_stage=str(row.get("current_stage", "objective_selected")),
-        last_completed_stage=str(row.get("last_completed_stage", "")),
+        status=status,
+        current_stage=current_stage,
+        last_completed_stage=last_completed_stage,
         next_action=str(row.get("next_action", "")),
         pause_reason=str(row.get("pause_reason", "")),
         waiting_for_user=bool(row.get("waiting_for_user", False)),
@@ -183,8 +222,20 @@ def diagnose_state_consistency(run_dir: str | Path) -> list[str]:
     """Input: run dir. Output: issue codes. Detect contradictions between state and artifacts."""
     root = Path(run_dir)
     issues: list[str] = []
-    if (root / "approved_candidates.jsonl").exists() and not (root / "approval.jsonl").exists():
+    approval_path = root / "approval.jsonl"
+    queue_path = root / "approved_candidates.jsonl"
+    if queue_path.exists() and not approval_path.exists():
         issues.append("candidate_queue_without_approval")
+    elif queue_path.exists():
+        approvals = _read_jsonl_rows(approval_path)
+        approval_identities = {_candidate_identity(row) for row in approvals}
+        for queued in _read_jsonl_rows(queue_path):
+            if _candidate_identity(queued) not in approval_identities:
+                issues.append(
+                    "candidate_queue_approval_identity_mismatch:"
+                    f"{queued.get('candidate_id', '')}:{queued.get('version', '')}:"
+                    f"{queued.get('expression_hash', '')}"
+                )
     if (root / STATE_FILENAME).exists():
         state = load_run_state(root / STATE_FILENAME)
         if state.status == "completed" and not (root / "research_record.json").exists():
@@ -192,6 +243,8 @@ def diagnose_state_consistency(run_dir: str | Path) -> list[str]:
         for stage in state.stages.values():
             if stage.status != "completed":
                 continue
+            if stage.name in STAGES_REQUIRING_EVIDENCE and not stage.evidence_paths:
+                issues.append(f"completed_stage_without_evidence:{stage.name}")
             for evidence_path in stage.evidence_paths:
                 evidence = Path(evidence_path)
                 if not evidence.is_absolute():
@@ -204,6 +257,31 @@ def diagnose_state_consistency(run_dir: str | Path) -> list[str]:
         if events and events[-1].event_type == "workflow_aborted" and state.status != "aborted":
             issues.append("state_event_status_conflict")
     return issues
+
+
+def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
+    """Input: JSONL path. Output: object rows. Read artifact identities for consistency diagnostics."""
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _candidate_identity(row: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    """Input: approval or queue row. Output: exact identity tuple. Normalize identity fields for comparison."""
+    return (
+        str(row.get("candidate_id", "")),
+        str(row.get("platform_alpha_id", "")),
+        str(row.get("version", "")),
+        str(row.get("expression_hash", "")),
+        str(row.get("source_run_id", "")),
+    )
 
 
 def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:

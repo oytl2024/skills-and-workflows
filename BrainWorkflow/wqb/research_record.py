@@ -102,19 +102,45 @@ def record_candidate_gate(record: ResearchRecord, candidate: dict[str, object], 
 
 def record_approval(record: ResearchRecord, approval: dict[str, object]) -> ResearchRecord:
     """Input: record and approval. Output: updated record. Store user approval evidence."""
+    identity = _candidate_identity(approval)
+    if any(_candidate_identity(row) == identity for row in record.user_approval):
+        return record
     return replace(record, user_approval=[*record.user_approval, dict(approval)])
 
 
 def record_queue_update(record: ResearchRecord, queue_row: dict[str, object]) -> ResearchRecord:
     """Input: record and queue row. Output: updated record. Store approved queue update."""
+    identity = (*_candidate_identity(queue_row), str(queue_row.get("status", "")))
+    if any(
+        (*_candidate_identity(row), str(row.get("status", ""))) == identity
+        for row in record.approved_queue
+    ):
+        return record
     return replace(record, approved_queue=[*record.approved_queue, dict(queue_row)])
 
 
 def record_manual_submission_status(record: ResearchRecord, status_row: dict[str, object]) -> ResearchRecord:
     """Input: record and status row. Output: updated record. Store manual or API submission queue status."""
+    identity = (*_candidate_identity(status_row), str(status_row.get("status", "")))
+    if any(
+        (*_candidate_identity(row), str(row.get("status", ""))) == identity
+        for row in record.manual_submission_status
+    ):
+        return record
     return replace(
         record,
         manual_submission_status=[*record.manual_submission_status, dict(status_row)],
+    )
+
+
+def _candidate_identity(row: dict[str, object]) -> tuple[str, str, str, str, str]:
+    """Input: approval or queue row. Output: exact candidate identity. Normalize durable record keys."""
+    return (
+        str(row.get("candidate_id", "")),
+        str(row.get("platform_alpha_id", "")),
+        str(row.get("version", "")),
+        str(row.get("expression_hash", "")),
+        str(row.get("source_run_id", "")),
     )
 
 

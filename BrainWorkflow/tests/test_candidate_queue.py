@@ -30,6 +30,32 @@ class CandidateQueueTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "source_run_id"):
                 queue_approved_candidate(tmp, candidate)
 
+    def test_approval_rejects_every_blank_required_value(self):
+        cases = (
+            ("candidate_id", {"candidate_id": ""}, "2026-07-12T00:00:00Z", "user"),
+            ("platform_alpha_id", {"platform_alpha_id": " "}, "2026-07-12T00:00:00Z", "user"),
+            ("version", {"version": ""}, "2026-07-12T00:00:00Z", "user"),
+            ("expression_hash", {"expression_hash": ""}, "2026-07-12T00:00:00Z", "user"),
+            ("source_run_id", {"source_run_id": ""}, "2026-07-12T00:00:00Z", "user"),
+            ("approved_at", {}, "", "user"),
+            ("approved_by", {}, "2026-07-12T00:00:00Z", " "),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            for field, changes, approved_at, approved_by in cases:
+                with self.subTest(field=field):
+                    candidate = dict(self.candidate(), **changes)
+                    with self.assertRaisesRegex(ValueError, field):
+                        approve_candidate(tmp, candidate, approved_at, approved_by)
+
+    def test_approval_append_is_idempotent_for_exact_candidate_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = approve_candidate(tmp, self.candidate(), "2026-07-12T00:00:00Z", "user")
+            retry = approve_candidate(tmp, self.candidate(), "2026-07-12T00:01:00Z", "user")
+            rows = load_approvals(tmp)
+
+        self.assertEqual(retry, first)
+        self.assertEqual(len(rows), 1)
+
     def test_approval_binds_exact_candidate_version_and_hash(self):
         with tempfile.TemporaryDirectory() as tmp:
             approval = approve_candidate(tmp, self.candidate(), "2026-07-12T00:00:00Z", "user")

@@ -99,11 +99,28 @@ class ResearchRecordTests(unittest.TestCase):
         self.assertTrue(raw_path.name == "research_record.md")
 
     def test_research_record_tracks_approvals_and_queue_updates(self):
-        from wqb.research_record import record_approval, record_queue_update
+        from wqb.research_record import (
+            record_approval,
+            record_manual_submission_status,
+            record_queue_update,
+        )
 
         record = empty_research_record("run1", "Power Pool")
-        record = record_approval(record, {"candidate_id": "c1", "expression_hash": "h1"})
-        record = record_queue_update(record, {"candidate_id": "c1", "status": "queued"})
+        approval = {
+            "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+            "expression_hash": "h1", "source_run_id": "run1", "approved_at": "t", "approved_by": "user",
+        }
+        queue_row = dict(approval, status="queued")
+        manual_row = dict(approval, status="manually_submitted")
+        record = record_approval(record, approval)
+        record = record_approval(record, approval)
+        record = record_queue_update(record, queue_row)
+        record = record_queue_update(record, queue_row)
+        record = record_manual_submission_status(record, manual_row)
+        record = record_manual_submission_status(record, manual_row)
 
         self.assertEqual(record.approvals[0]["candidate_id"], "c1")
         self.assertEqual(record.queue_updates[0]["status"], "queued")
+        self.assertEqual(len(record.user_approval), 1)
+        self.assertEqual(len(record.approved_queue), 1)
+        self.assertEqual(len(record.manual_submission_status), 1)

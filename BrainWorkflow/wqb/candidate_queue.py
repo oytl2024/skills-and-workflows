@@ -32,20 +32,47 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 def approve_candidate(run_dir: str | Path, candidate: dict[str, object], approved_at: str, approved_by: str) -> dict[str, object]:
     """Input: run dir, candidate, approval metadata. Output: approval row. Persist exact candidate approval."""
-    if not str(candidate.get("source_run_id", "")).strip():
-        raise ValueError("source_run_id is required for candidate approval")
-    approval = {
-        "candidate_id": str(candidate["candidate_id"]),
-        "platform_alpha_id": str(candidate["platform_alpha_id"]),
-        "version": int(candidate["version"]),
-        "expression_hash": str(candidate["expression_hash"]),
-        "approved_at": str(approved_at),
-        "approved_by": str(approved_by),
-        "source_run_id": str(candidate.get("source_run_id", "")),
-    }
-    approval = {field: approval[field] for field in APPROVAL_REQUIRED_FIELDS}
-    _append_jsonl(Path(run_dir) / APPROVAL_FILENAME, approval)
+    approval = validate_candidate_approval(candidate, approved_at, approved_by)
+    path = Path(run_dir) / APPROVAL_FILENAME
+    identity = _approval_identity(approval)
+    for existing in _read_jsonl(path):
+        if _approval_identity(existing) == identity:
+            return existing
+    _append_jsonl(path, approval)
     return approval
+
+
+def validate_candidate_approval(
+    candidate: dict[str, object], approved_at: str, approved_by: str
+) -> dict[str, object]:
+    """Input: candidate and approval metadata. Output: validated approval row. Reject blank required values."""
+    raw_values = {
+        "candidate_id": candidate.get("candidate_id"),
+        "platform_alpha_id": candidate.get("platform_alpha_id"),
+        "version": candidate.get("version"),
+        "expression_hash": candidate.get("expression_hash"),
+        "approved_at": approved_at,
+        "approved_by": approved_by,
+        "source_run_id": candidate.get("source_run_id"),
+    }
+    for field in APPROVAL_REQUIRED_FIELDS:
+        value = raw_values.get(field)
+        if value is None or not str(value).strip():
+            raise ValueError(f"{field} is required for candidate approval")
+    try:
+        version = int(raw_values["version"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("version must be an integer for candidate approval") from exc
+    approval = {
+        "candidate_id": str(raw_values["candidate_id"]).strip(),
+        "platform_alpha_id": str(raw_values["platform_alpha_id"]).strip(),
+        "version": version,
+        "expression_hash": str(raw_values["expression_hash"]).strip(),
+        "approved_at": str(raw_values["approved_at"]).strip(),
+        "approved_by": str(raw_values["approved_by"]).strip(),
+        "source_run_id": str(raw_values["source_run_id"]).strip(),
+    }
+    return {field: approval[field] for field in APPROVAL_REQUIRED_FIELDS}
 
 
 def load_approvals(run_dir: str | Path) -> list[dict[str, object]]:
@@ -55,29 +82,46 @@ def load_approvals(run_dir: str | Path) -> list[dict[str, object]]:
 
 def approval_matches_candidate(approval: dict[str, object], candidate: dict[str, object]) -> bool:
     """Input: approval and candidate. Output: bool. Check exact candidate identity binding."""
+    return _approval_identity(approval) == _approval_identity(candidate)
+
+
+def _approval_identity(row: dict[str, object]) -> tuple[str, str, int, str, str]:
+    """Input: approval-like row. Output: exact candidate identity. Build durable approval and queue key."""
+    try:
+        version = int(row.get("version", -1))
+    except (TypeError, ValueError):
+        version = -1
     return (
-        str(approval.get("candidate_id", "")) == str(candidate.get("candidate_id", ""))
-        and str(approval.get("platform_alpha_id", "")) == str(candidate.get("platform_alpha_id", ""))
-        and int(approval.get("version", -1)) == int(candidate.get("version", -2))
-        and str(approval.get("expression_hash", "")) == str(candidate.get("expression_hash", ""))
-        and str(approval.get("source_run_id", "")) == str(candidate.get("source_run_id", ""))
+        str(row.get("candidate_id", "")),
+        str(row.get("platform_alpha_id", "")),
+        version,
+        str(row.get("expression_hash", "")),
+        str(row.get("source_run_id", "")),
     )
 
 
-def _queue_identity(row: dict[str, object]) -> tuple[str, int, str]:
-    """Input: queue-like row. Output: identity tuple. Build dedupe key."""
-    return (str(row.get("candidate_id", "")), int(row.get("version", 0)), str(row.get("expression_hash", "")))
+def _status_identity(row: dict[str, object]) -> tuple[str, int, str]:
+    """Input: queue row. Output: CLI-compatible status identity. Match the existing status command surface."""
+    try:
+        version = int(row.get("version", -1))
+    except (TypeError, ValueError):
+        version = -1
+    return (str(row.get("candidate_id", "")), version, str(row.get("expression_hash", "")))
 
 
 def queue_approved_candidate(run_dir: str | Path, approval: dict[str, object]) -> dict[str, object]:
     """Input: run dir and approval. Output: queue row. Add one approved candidate if not already queued."""
     if not str(approval.get("source_run_id", "")).strip():
         raise ValueError("source_run_id is required for approved queue entries")
+    for field in APPROVAL_REQUIRED_FIELDS:
+        value = approval.get(field)
+        if value is None or not str(value).strip():
+            raise ValueError(f"{field} is required for approved queue entries")
     path = Path(run_dir) / QUEUE_FILENAME
     rows = _read_jsonl(path)
-    identity = _queue_identity(approval)
+    identity = _approval_identity(approval)
     for row in rows:
-        if _queue_identity(row) == identity:
+        if _approval_identity(row) == identity:
             return row
     queued = dict(approval)
     queued["status"] = "queued"
@@ -111,15 +155,16 @@ def update_candidate_queue_status(
     path = Path(run_dir) / QUEUE_FILENAME
     rows = _read_jsonl(path)
     target = (str(candidate_id), int(version), str(expression_hash))
-    updated: dict[str, object] | None = None
-    for row in rows:
-        if _queue_identity(row) == target:
-            row["status"] = status
-            row["updated_at"] = str(updated_at)
-            updated = row
-            break
-    if updated is None:
+    matches = [row for row in rows if _status_identity(row) == target]
+    if not matches:
         raise ValueError("candidate queue entry not found")
+    if len(matches) > 1:
+        raise ValueError("candidate queue identity is ambiguous")
+    updated = matches[0]
+    if updated.get("status") == status:
+        return updated
+    updated["status"] = status
+    updated["updated_at"] = str(updated_at)
     temp = path.with_suffix(path.suffix + ".tmp")
     temp.parent.mkdir(parents=True, exist_ok=True)
     with temp.open("w", encoding="utf-8") as handle:
