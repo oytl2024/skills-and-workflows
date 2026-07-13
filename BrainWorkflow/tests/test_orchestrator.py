@@ -377,6 +377,48 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(len(final_record.approved_queue), 1)
         self.assertEqual([event.event_type for event in events].count("candidates_approved"), 1)
 
+    def test_two_candidate_interrupted_approval_retry_dedupes_each_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            candidates = [
+                {
+                    "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+                    "expression_hash": "h1", "source_run_id": started["run_id"], "hard_pass": True,
+                },
+                {
+                    "candidate_id": "c2", "platform_alpha_id": "a2", "version": 1,
+                    "expression_hash": "h2", "source_run_id": started["run_id"], "hard_pass": True,
+                },
+            ]
+            self.advance_to_candidate_gate(started)
+            orchestrator.request_candidate_approval(candidates, "2026-07-12T00:10:00Z")
+            run_dir = Path(started["run_dir"])
+            record = load_research_record(run_dir / "research_record.json")
+            for candidate in candidates:
+                approval = approve_candidate(
+                    run_dir, candidate, "2026-07-12T00:11:00Z", "user"
+                )
+                queued = queue_approved_candidate(run_dir, approval)
+                record = record_approval(record, approval)
+                record = record_queue_update(record, queued)
+            write_research_record(run_dir / "research_record.json", record)
+            append_workflow_event(
+                run_dir, "candidates_approved", {"queued_count": 2}, "2026-07-12T00:11:00Z"
+            )
+
+            orchestrator.approve_candidates(
+                ["c1", "c2"], "2026-07-12T00:11:00Z", "user"
+            )
+            final_record = load_research_record(run_dir / "research_record.json")
+            events = read_workflow_events(run_dir)
+
+        self.assertEqual(
+            [row["candidate_id"] for row in final_record.approved_queue], ["c1", "c2"]
+        )
+        self.assertEqual([event.event_type for event in events].count("candidates_approved"), 1)
+
     def test_sync_research_record_writes_raw_markdown_and_updates_official_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -758,3 +800,144 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             ]
 
         self.assertEqual(events, ["manually_submitted", "queued", "manually_submitted"])
+
+    def test_interleaved_candidate_status_retries_dedupe_per_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            candidates = [
+                {
+                    "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+                    "expression_hash": "h1", "source_run_id": started["run_id"], "hard_pass": True,
+                },
+                {
+                    "candidate_id": "c2", "platform_alpha_id": "a2", "version": 1,
+                    "expression_hash": "h2", "source_run_id": started["run_id"], "hard_pass": True,
+                },
+            ]
+            self.advance_to_candidate_gate(started)
+            orchestrator.request_candidate_approval(candidates, "2026-07-12T00:01:00Z")
+            orchestrator.approve_candidates(["c1", "c2"], "2026-07-12T00:02:00Z", "user")
+            updates = (("c1", "h1"), ("c2", "h2"), ("c1", "h1"), ("c2", "h2"))
+            for index, (candidate_id, expression_hash) in enumerate(updates, start=3):
+                orchestrator.update_candidate_status(
+                    candidate_id,
+                    1,
+                    expression_hash,
+                    "manually_submitted",
+                    f"2026-07-12T00:0{index}:00Z",
+                )
+            run_dir = Path(started["run_dir"])
+            record = load_research_record(run_dir / "research_record.json")
+            events = [
+                event
+                for event in read_workflow_events(run_dir)
+                if event.event_type == "candidate_status_updated"
+            ]
+
+        self.assertEqual(
+            [row["candidate_id"] for row in record.manual_submission_status], ["c1", "c2"]
+        )
+        self.assertEqual([event.payload["candidate_id"] for event in events], ["c1", "c2"])
+
+    def test_completed_run_candidate_status_update_uses_source_run_selector(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            candidate = {
+                "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+                "expression_hash": "h1", "source_run_id": started["run_id"], "hard_pass": True,
+            }
+            self.advance_to_candidate_gate(started)
+            orchestrator.request_candidate_approval([candidate], "2026-07-12T00:01:00Z")
+            orchestrator.approve_candidates(["c1"], "2026-07-12T00:02:00Z", "user")
+            orchestrator.sync_research_record("2026-07-12T00:03:00Z")
+            active_path = root / "runs" / "active_run.json"
+            self.assertFalse(active_path.exists())
+
+            updated = orchestrator.update_candidate_status(
+                "c1",
+                1,
+                "h1",
+                "manually_submitted",
+                "2026-07-12T00:04:00Z",
+                source_run_id=str(started["run_id"]),
+            )
+            run_dir = Path(started["run_dir"])
+            state = load_run_state(run_dir / "run_state.json")
+            record = load_research_record(run_dir / "research_record.json")
+            raw_path = root / "knowledge" / "raw" / "research" / "runs" / str(started["run_id"]) / "research_record.md"
+            events = [
+                event
+                for event in read_workflow_events(run_dir)
+                if event.event_type == "candidate_status_updated"
+            ]
+            raw_text = raw_path.read_text(encoding="utf-8")
+            active_exists = active_path.exists()
+
+        self.assertEqual(updated["status"], "manually_submitted")
+        self.assertEqual(state.status, "completed")
+        self.assertEqual(state.current_stage, "complete")
+        self.assertTrue(state.research_record_synced)
+        self.assertFalse(active_exists)
+        self.assertEqual(record.manual_submission_status[-1]["status"], "manually_submitted")
+        self.assertIn("manually_submitted", raw_text)
+        self.assertEqual(events[0].payload["platform_alpha_id"], "a1")
+        self.assertEqual(events[0].payload["source_run_id"], started["run_id"])
+
+    def test_candidate_gate_diagnostics_pause_before_writing_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            candidate = {
+                "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+                "expression_hash": "h1", "source_run_id": started["run_id"], "hard_pass": True,
+            }
+            self.advance_to_candidate_gate(started)
+            run_dir = Path(started["run_dir"])
+            (run_dir / "test_evidence" / "backtest.json").unlink()
+
+            with self.assertRaisesRegex(ValueError, "consistency diagnostics"):
+                orchestrator.request_candidate_approval([candidate], "2026-07-12T00:03:00Z")
+
+            state = load_run_state(run_dir / "run_state.json")
+            artifact_exists = {
+                name: (run_dir / name).exists()
+                for name in (
+                    "candidate_gate.json", "approval.jsonl", "approved_candidates.jsonl"
+                )
+            }
+
+        self.assertEqual(state.status, "paused")
+        self.assertIn(
+            "missing_stage_evidence:backtest", state.stages["candidate_gate"].blocker
+        )
+        self.assertFalse(any(artifact_exists.values()))
+
+    def test_approval_diagnostics_reject_before_writing_approval_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            candidate = {
+                "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+                "expression_hash": "h1", "source_run_id": started["run_id"], "hard_pass": True,
+            }
+            self.advance_to_candidate_gate(started)
+            orchestrator.request_candidate_approval([candidate], "2026-07-12T00:03:00Z")
+            run_dir = Path(started["run_dir"])
+            (run_dir / "test_evidence" / "backtest.json").unlink()
+
+            with self.assertRaisesRegex(ValueError, "consistency diagnostics"):
+                orchestrator.approve_candidates(["c1"], "2026-07-12T00:04:00Z", "user")
+
+            state = load_run_state(run_dir / "run_state.json")
+            approval_exists = (run_dir / "approval.jsonl").exists()
+            queue_exists = (run_dir / "approved_candidates.jsonl").exists()
+
+        self.assertEqual(state.status, "waiting_for_user")
+        self.assertFalse(approval_exists)
+        self.assertFalse(queue_exists)

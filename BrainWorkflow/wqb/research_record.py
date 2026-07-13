@@ -110,22 +110,32 @@ def record_approval(record: ResearchRecord, approval: dict[str, object]) -> Rese
 
 def record_queue_update(record: ResearchRecord, queue_row: dict[str, object]) -> ResearchRecord:
     """Input: record and queue row. Output: updated record. Store approved queue update."""
-    identity = (*_candidate_identity(queue_row), str(queue_row.get("status", "")))
-    if record.approved_queue and (
-        *_candidate_identity(record.approved_queue[-1]),
-        str(record.approved_queue[-1].get("status", "")),
-    ) == identity:
+    candidate_identity = _candidate_identity(queue_row)
+    latest = next(
+        (
+            row
+            for row in reversed(record.approved_queue)
+            if _candidate_identity(row) == candidate_identity
+        ),
+        None,
+    )
+    if latest is not None and str(latest.get("status", "")) == str(queue_row.get("status", "")):
         return record
     return replace(record, approved_queue=[*record.approved_queue, dict(queue_row)])
 
 
 def record_manual_submission_status(record: ResearchRecord, status_row: dict[str, object]) -> ResearchRecord:
     """Input: record and status row. Output: updated record. Store manual or API submission queue status."""
-    identity = (*_candidate_identity(status_row), str(status_row.get("status", "")))
-    if record.manual_submission_status and (
-        *_candidate_identity(record.manual_submission_status[-1]),
-        str(record.manual_submission_status[-1].get("status", "")),
-    ) == identity:
+    candidate_identity = _candidate_identity(status_row)
+    latest = next(
+        (
+            row
+            for row in reversed(record.manual_submission_status)
+            if _candidate_identity(row) == candidate_identity
+        ),
+        None,
+    )
+    if latest is not None and str(latest.get("status", "")) == str(status_row.get("status", "")):
         return record
     return replace(
         record,

@@ -3556,6 +3556,35 @@ class WorkflowOrchestratorCliTests(unittest.TestCase):
             "c1", 1, "h1", "manually_submitted", "2026-07-12T01:00:00Z"
         )
 
+    def test_workflow_update_candidate_status_forwards_source_run_selector(self):
+        from wqb.cli import main
+
+        output = io.StringIO()
+        argv = [
+            "wqb",
+            "workflow-update-candidate-status",
+            "--candidate-id", "c1",
+            "--candidate-version", "1",
+            "--candidate-expression-hash", "h1",
+            "--candidate-status", "manually_submitted",
+            "--source-run-id", "run-completed",
+            "--now", "2026-07-12T01:00:00Z",
+        ]
+        with patch("sys.argv", argv), patch("wqb.cli.WorkflowOrchestrator") as orchestrator_cls, redirect_stdout(output):
+            orchestrator_cls.return_value.update_candidate_status.return_value = {
+                "status": "manually_submitted"
+            }
+            main()
+
+        orchestrator_cls.return_value.update_candidate_status.assert_called_once_with(
+            "c1",
+            1,
+            "h1",
+            "manually_submitted",
+            "2026-07-12T01:00:00Z",
+            source_run_id="run-completed",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

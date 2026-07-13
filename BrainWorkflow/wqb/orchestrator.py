@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from wqb.candidate_queue import (
     approve_candidate,
+    load_approved_queue,
     queue_approved_candidate,
     update_candidate_queue_status,
     validate_candidate_approval,
@@ -33,6 +34,7 @@ from wqb.workflow_state import (
     create_initial_state,
     diagnose_state_consistency,
     discover_active_workflow,
+    load_run_state,
     transition_run_state,
     write_active_run,
     write_run_state,
@@ -258,6 +260,7 @@ class WorkflowOrchestrator:
             raise ValueError(
                 "candidate approval request requires the running candidate gate stage"
             )
+        state = self._reject_inconsistent_candidate_mutation(state, now)
         incomplete = [
             stage_name
             for stage_name in CANDIDATE_GATE_PREREQUISITES
@@ -323,6 +326,7 @@ class WorkflowOrchestrator:
             raise ValueError(
                 "candidate approval requires waiting_for_user at the user approval stage"
             )
+        state = self._reject_inconsistent_candidate_mutation(state, approved_at)
         run_dir = Path(state.run_dir)
         candidates = json.loads((run_dir / "candidate_gate.json").read_text(encoding="utf-8"))
         if not isinstance(candidates, list):
@@ -394,35 +398,63 @@ class WorkflowOrchestrator:
         expression_hash: str,
         status: str,
         updated_at: str,
+        source_run_id: str = "",
     ) -> dict[str, object]:
-        """Input: exact queue identity, status, timestamp. Output: updated row. Own queue status workflow updates."""
-        state = self._active_state()
+        """Input: queue identity, status, timestamp, optional source run. Output: updated row. Own status updates."""
+        state = self._candidate_status_state(source_run_id)
         if state is None:
             raise ValueError("an active workflow run is required for candidate status updates")
         run_dir = Path(state.run_dir)
+        before_rows = load_approved_queue(run_dir)
+        target = (str(candidate_id), str(version), str(expression_hash))
+        before_matches = [
+            row
+            for row in before_rows
+            if (
+                str(row.get("candidate_id", "")),
+                str(row.get("version", "")),
+                str(row.get("expression_hash", "")),
+            )
+            == target
+        ]
         updated = update_candidate_queue_status(
             run_dir, candidate_id, version, expression_hash, status, updated_at
         )
-        record = self._load_or_create_research_record(state)
+        queue_changed = len(before_matches) == 1 and str(before_matches[0].get("status", "")) != status
+        original_record = self._load_or_create_research_record(state)
+        record = original_record
         record = record_queue_update(record, updated)
         if status != "queued":
             record = record_manual_submission_status(record, updated)
-        write_research_record(run_dir / "research_record.json", record)
-        self._append_event_once(
-            run_dir,
-            "candidate_status_updated",
-            {
-                "candidate_id": candidate_id,
-                "version": version,
-                "expression_hash": expression_hash,
-                "status": status,
-            },
-            updated_at,
-        )
-        write_run_state(
-            run_dir / STATE_FILENAME,
-            replace(state, research_record_synced=False, updated_at=updated_at),
-        )
+        record_changed = record != original_record
+        mutation_recorded = queue_changed or record_changed
+        pending_state = state
+        if mutation_recorded:
+            pending_state = replace(state, research_record_synced=False, updated_at=updated_at)
+            write_run_state(run_dir / STATE_FILENAME, pending_state)
+        if record_changed:
+            write_research_record(run_dir / "research_record.json", record)
+        if queue_changed:
+            self._append_event_once(
+                run_dir,
+                "candidate_status_updated",
+                {
+                    "candidate_id": updated.get("candidate_id", ""),
+                    "platform_alpha_id": updated.get("platform_alpha_id", ""),
+                    "version": updated.get("version", ""),
+                    "expression_hash": updated.get("expression_hash", ""),
+                    "source_run_id": updated.get("source_run_id", ""),
+                    "status": status,
+                },
+                updated_at,
+            )
+        if state.status in {"completed", "completed_with_warnings"}:
+            if mutation_recorded or not state.research_record_synced:
+                sync_research_record_to_raw(record, self.paths.knowledge_root / "raw")
+                write_run_state(
+                    run_dir / STATE_FILENAME,
+                    replace(pending_state, research_record_synced=True),
+                )
         return updated
 
     def sync_research_record(self, now: str) -> dict[str, object]:
@@ -475,8 +507,31 @@ class WorkflowOrchestrator:
         payload: dict[str, object],
         occurred_at: str,
     ) -> None:
-        """Input: run dir and event data. Output: none. Skip only an immediately repeated event."""
+        """Input: run dir and event data. Output: none. Skip retry events for the same identity."""
         events = read_workflow_events(run_dir)
+        if event_type == "candidate_status_updated":
+            identity_fields = (
+                "candidate_id",
+                "platform_alpha_id",
+                "version",
+                "expression_hash",
+                "source_run_id",
+            )
+            identity = tuple(str(payload.get(field, "")) for field in identity_fields)
+            latest = next(
+                (
+                    event
+                    for event in reversed(events)
+                    if event.event_type == event_type
+                    and tuple(str(event.payload.get(field, "")) for field in identity_fields)
+                    == identity
+                ),
+                None,
+            )
+            if latest is not None and str(latest.payload.get("status", "")) == str(
+                payload.get("status", "")
+            ):
+                return
         if events and events[-1].event_type == event_type and events[-1].payload == payload:
             return
         append_workflow_event(run_dir, event_type, payload, occurred_at)
@@ -491,6 +546,21 @@ class WorkflowOrchestrator:
     def _active_state(self) -> WorkflowRunState | None:
         """Input: none. Output: active state or none. Recover the current resumable run from durable files."""
         return self._active_discovery().state
+
+    def _candidate_status_state(self, source_run_id: str) -> WorkflowRunState | None:
+        """Input: optional source run id. Output: selected state. Load completed runs without active discovery."""
+        selector = str(source_run_id).strip()
+        if not selector:
+            return self._active_state()
+        if selector in {".", ".."} or Path(selector).name != selector:
+            raise ValueError("source_run_id must be a run identifier")
+        state_path = self.paths.run_root / selector / STATE_FILENAME
+        if not state_path.exists():
+            raise ValueError(f"source workflow run not found: {selector}")
+        state = load_run_state(state_path)
+        if state.run_id != selector:
+            raise ValueError("source_run_id does not match the selected workflow state")
+        return state
 
     def _active_discovery(self) -> WorkflowStateDiscovery:
         """Input: none. Output: discovery result. Durably repair only the active pointer when recovery succeeds."""
@@ -567,6 +637,16 @@ class WorkflowOrchestrator:
             {"reason": reason, "diagnostics": diagnostics},
             now,
         )
+        return state
+
+    def _reject_inconsistent_candidate_mutation(
+        self, state: WorkflowRunState, now: str
+    ) -> WorkflowRunState:
+        """Input: state and timestamp. Output: consistent state. Pause or reject before candidate writes."""
+        diagnostics = diagnose_state_consistency(state.run_dir)
+        state = self._pause_for_diagnostics(state, diagnostics, now)
+        if diagnostics:
+            raise ValueError("workflow consistency diagnostics: " + ", ".join(diagnostics))
         return state
 
     def _candidate_has_verified_hard_pass(self, candidate: dict[str, object]) -> bool:

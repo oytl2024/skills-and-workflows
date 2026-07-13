@@ -3303,6 +3303,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-version", type=int, default=None)
     parser.add_argument("--candidate-expression-hash", default="")
     parser.add_argument("--candidate-status", choices=sorted(QUEUE_STATUSES), default="")
+    parser.add_argument("--source-run-id", default="")
     return parser.parse_args()
 
 
@@ -3388,13 +3389,19 @@ def main() -> None:
                     "--candidate-id, --candidate-version, --candidate-expression-hash, and --candidate-status "
                     "are required for workflow-update-candidate-status"
                 )
-            result = orchestrator.update_candidate_status(
+            status_args = (
                 args.candidate_id[0],
                 args.candidate_version,
                 args.candidate_expression_hash,
                 args.candidate_status,
                 now,
             )
+            if args.source_run_id:
+                result = orchestrator.update_candidate_status(
+                    *status_args, source_run_id=args.source_run_id
+                )
+            else:
+                result = orchestrator.update_candidate_status(*status_args)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
     config = load_config(args.config, overrides=overrides)

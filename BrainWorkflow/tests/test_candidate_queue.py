@@ -130,3 +130,16 @@ class CandidateQueueTests(unittest.TestCase):
         self.assertEqual(len(queue_lines), 1)
         self.assertIsInstance(json.loads(approval_lines[0]), dict)
         self.assertIsInstance(json.loads(queue_lines[0]), dict)
+
+    def test_retry_rejects_valid_non_object_trailing_jsonl_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "approval.jsonl"
+            path.write_text("[]\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "non-object JSONL row"):
+                approve_candidate(root, self.candidate(), "2026-07-12T00:00:00Z", "user")
+
+            contents = path.read_text(encoding="utf-8")
+
+        self.assertEqual(contents, "[]\n")

@@ -42,9 +42,6 @@ def _read_jsonl(path: Path, repair_trailing: bool = False) -> list[dict[str, Any
                 continue
             raise ValueError(f"malformed JSONL row {line_number} in {path.name}")
         if not isinstance(row, dict):
-            if index == len(lines) - 1:
-                trailing_invalid = True
-                continue
             raise ValueError(f"non-object JSONL row {line_number} in {path.name}")
         rows.append(row)
     if trailing_invalid and repair_trailing:
