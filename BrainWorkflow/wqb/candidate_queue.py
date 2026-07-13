@@ -12,21 +12,43 @@ QUEUE_FILENAME = "approved_candidates.jsonl"
 QUEUE_STATUSES = {"queued", "manually_submitted", "api_submitted", "skipped", "invalidated"}
 
 
-def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
-    """Input: path and row. Output: none. Append one JSONL row."""
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    """Input: path and rows. Output: none. Atomically replace JSONL after recovery."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    temp = path.with_suffix(path.suffix + ".tmp")
+    with temp.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    temp.replace(path)
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    """Input: path. Output: rows. Read valid JSONL rows."""
+def _read_jsonl(path: Path, repair_trailing: bool = False) -> list[dict[str, Any]]:
+    """Input: path and repair flag. Output: rows. Tolerate one incomplete trailing JSONL row."""
     if not path.exists():
         return []
     rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            rows.append(json.loads(line))
+    trailing_invalid = False
+    lines = [
+        (number, line)
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        if line.strip()
+    ]
+    for index, (line_number, line) in enumerate(lines):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            if index == len(lines) - 1:
+                trailing_invalid = True
+                continue
+            raise ValueError(f"malformed JSONL row {line_number} in {path.name}")
+        if not isinstance(row, dict):
+            if index == len(lines) - 1:
+                trailing_invalid = True
+                continue
+            raise ValueError(f"non-object JSONL row {line_number} in {path.name}")
+        rows.append(row)
+    if trailing_invalid and repair_trailing:
+        _write_jsonl(path, rows)
     return rows
 
 
@@ -35,10 +57,11 @@ def approve_candidate(run_dir: str | Path, candidate: dict[str, object], approve
     approval = validate_candidate_approval(candidate, approved_at, approved_by)
     path = Path(run_dir) / APPROVAL_FILENAME
     identity = _approval_identity(approval)
-    for existing in _read_jsonl(path):
+    rows = _read_jsonl(path, repair_trailing=True)
+    for existing in rows:
         if _approval_identity(existing) == identity:
             return existing
-    _append_jsonl(path, approval)
+    _write_jsonl(path, [*rows, approval])
     return approval
 
 
@@ -118,14 +141,14 @@ def queue_approved_candidate(run_dir: str | Path, approval: dict[str, object]) -
         if value is None or not str(value).strip():
             raise ValueError(f"{field} is required for approved queue entries")
     path = Path(run_dir) / QUEUE_FILENAME
-    rows = _read_jsonl(path)
+    rows = _read_jsonl(path, repair_trailing=True)
     identity = _approval_identity(approval)
     for row in rows:
         if _approval_identity(row) == identity:
             return row
     queued = dict(approval)
     queued["status"] = "queued"
-    _append_jsonl(path, queued)
+    _write_jsonl(path, [*rows, queued])
     return queued
 
 
@@ -153,7 +176,7 @@ def update_candidate_queue_status(
     if status not in QUEUE_STATUSES:
         raise ValueError(f"unsupported queue status: {status}")
     path = Path(run_dir) / QUEUE_FILENAME
-    rows = _read_jsonl(path)
+    rows = _read_jsonl(path, repair_trailing=True)
     target = (str(candidate_id), int(version), str(expression_hash))
     matches = [row for row in rows if _status_identity(row) == target]
     if not matches:
@@ -165,10 +188,5 @@ def update_candidate_queue_status(
         return updated
     updated["status"] = status
     updated["updated_at"] = str(updated_at)
-    temp = path.with_suffix(path.suffix + ".tmp")
-    temp.parent.mkdir(parents=True, exist_ok=True)
-    with temp.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
-    temp.replace(path)
+    _write_jsonl(path, rows)
     return updated

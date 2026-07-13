@@ -111,10 +111,10 @@ def record_approval(record: ResearchRecord, approval: dict[str, object]) -> Rese
 def record_queue_update(record: ResearchRecord, queue_row: dict[str, object]) -> ResearchRecord:
     """Input: record and queue row. Output: updated record. Store approved queue update."""
     identity = (*_candidate_identity(queue_row), str(queue_row.get("status", "")))
-    if any(
-        (*_candidate_identity(row), str(row.get("status", ""))) == identity
-        for row in record.approved_queue
-    ):
+    if record.approved_queue and (
+        *_candidate_identity(record.approved_queue[-1]),
+        str(record.approved_queue[-1].get("status", "")),
+    ) == identity:
         return record
     return replace(record, approved_queue=[*record.approved_queue, dict(queue_row)])
 
@@ -122,10 +122,10 @@ def record_queue_update(record: ResearchRecord, queue_row: dict[str, object]) ->
 def record_manual_submission_status(record: ResearchRecord, status_row: dict[str, object]) -> ResearchRecord:
     """Input: record and status row. Output: updated record. Store manual or API submission queue status."""
     identity = (*_candidate_identity(status_row), str(status_row.get("status", "")))
-    if any(
-        (*_candidate_identity(row), str(row.get("status", ""))) == identity
-        for row in record.manual_submission_status
-    ):
+    if record.manual_submission_status and (
+        *_candidate_identity(record.manual_submission_status[-1]),
+        str(record.manual_submission_status[-1].get("status", "")),
+    ) == identity:
         return record
     return replace(
         record,
@@ -148,7 +148,12 @@ def write_research_record(path: str | Path, record: ResearchRecord) -> Path:
     """Input: path and record. Output: written path. Persist machine-readable research record."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(asdict(record), ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    temp = target.with_suffix(target.suffix + ".tmp")
+    temp.write_text(
+        json.dumps(asdict(record), ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    temp.replace(target)
     return target
 
 

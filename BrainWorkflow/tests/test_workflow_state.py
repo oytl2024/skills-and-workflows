@@ -95,6 +95,67 @@ class WorkflowStateTests(unittest.TestCase):
 
         self.assertIn("candidate_queue_approval_identity_mismatch:c1:1:h2", issues)
 
+    def test_consistency_compares_approval_and_queue_to_candidate_gate_full_identity(self):
+        gate = {
+            "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+            "expression_hash": "h1", "source_run_id": "run1",
+        }
+        mutations = (
+            ("candidate_id", "c2"),
+            ("platform_alpha_id", "a2"),
+            ("version", 2),
+            ("expression_hash", "h2"),
+            ("source_run_id", "run2"),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                persisted = dict(gate, **{field: value})
+                (root / "candidate_gate.json").write_text(
+                    json.dumps([gate]), encoding="utf-8"
+                )
+                (root / "approval.jsonl").write_text(
+                    json.dumps(persisted) + "\n", encoding="utf-8"
+                )
+                (root / "approved_candidates.jsonl").write_text(
+                    json.dumps(dict(persisted, status="queued")) + "\n", encoding="utf-8"
+                )
+
+                issues = diagnose_state_consistency(root)
+
+                self.assertTrue(
+                    any(issue.startswith("approval_candidate_gate_identity_mismatch:") for issue in issues)
+                )
+                self.assertTrue(
+                    any(issue.startswith("candidate_queue_gate_identity_mismatch:") for issue in issues)
+                )
+
+    def test_consistency_reports_malformed_json_and_trailing_jsonl_without_raising(self):
+        valid = {
+            "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+            "expression_hash": "h1", "source_run_id": "run1",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "candidate_gate.json").write_text("{broken", encoding="utf-8")
+            (root / "approval.jsonl").write_text(
+                json.dumps(valid) + '\n{"candidate_id":', encoding="utf-8"
+            )
+            (root / "approved_candidates.jsonl").write_text(
+                json.dumps(dict(valid, status="queued")) + '\n{"candidate_id":',
+                encoding="utf-8",
+            )
+            (root / "research_record.json").write_text("{broken", encoding="utf-8")
+            (root / "run_state.json").write_text("{broken", encoding="utf-8")
+
+            issues = diagnose_state_consistency(root)
+
+        self.assertIn("malformed_json:candidate_gate.json", issues)
+        self.assertIn("malformed_jsonl:approval.jsonl:2", issues)
+        self.assertIn("malformed_jsonl:approved_candidates.jsonl:2", issues)
+        self.assertIn("malformed_json:research_record.json", issues)
+        self.assertIn("malformed_json:run_state.json", issues)
+
     def test_consistency_requires_schedule_evidence_and_existing_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

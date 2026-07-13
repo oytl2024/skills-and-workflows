@@ -224,20 +224,55 @@ def diagnose_state_consistency(run_dir: str | Path) -> list[str]:
     issues: list[str] = []
     approval_path = root / "approval.jsonl"
     queue_path = root / "approved_candidates.jsonl"
+    gate_path = root / "candidate_gate.json"
+    approvals, approval_issues = _read_jsonl_rows(approval_path)
+    queued_rows, queue_issues = _read_jsonl_rows(queue_path)
+    issues.extend(approval_issues)
+    issues.extend(queue_issues)
     if queue_path.exists() and not approval_path.exists():
         issues.append("candidate_queue_without_approval")
     elif queue_path.exists():
-        approvals = _read_jsonl_rows(approval_path)
         approval_identities = {_candidate_identity(row) for row in approvals}
-        for queued in _read_jsonl_rows(queue_path):
+        for queued in queued_rows:
             if _candidate_identity(queued) not in approval_identities:
                 issues.append(
                     "candidate_queue_approval_identity_mismatch:"
                     f"{queued.get('candidate_id', '')}:{queued.get('version', '')}:"
                     f"{queued.get('expression_hash', '')}"
                 )
-    if (root / STATE_FILENAME).exists():
-        state = load_run_state(root / STATE_FILENAME)
+
+    gate_rows: list[dict[str, Any]] | None = None
+    if gate_path.exists():
+        gate_rows = _read_candidate_gate(gate_path, issues)
+    if gate_rows is not None:
+        gate_identities = {_candidate_identity(row) for row in gate_rows}
+        for approval in approvals:
+            if _candidate_identity(approval) not in gate_identities:
+                issues.append(
+                    "approval_candidate_gate_identity_mismatch:"
+                    f"{approval.get('candidate_id', '')}:{approval.get('version', '')}:"
+                    f"{approval.get('expression_hash', '')}"
+                )
+        for queued in queued_rows:
+            if _candidate_identity(queued) not in gate_identities:
+                issues.append(
+                    "candidate_queue_gate_identity_mismatch:"
+                    f"{queued.get('candidate_id', '')}:{queued.get('version', '')}:"
+                    f"{queued.get('expression_hash', '')}"
+                )
+
+    research_record_path = root / "research_record.json"
+    if research_record_path.exists():
+        _read_json_object(research_record_path, issues)
+
+    state = None
+    state_path = root / STATE_FILENAME
+    if state_path.exists():
+        try:
+            state = load_run_state(state_path)
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            issues.append(f"malformed_json:{STATE_FILENAME}")
+    if state is not None:
         if state.status == "completed" and not (root / "research_record.json").exists():
             issues.append("completed_without_research_record")
         for stage in state.stages.values():
@@ -259,18 +294,51 @@ def diagnose_state_consistency(run_dir: str | Path) -> list[str]:
     return issues
 
 
-def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
-    """Input: JSONL path. Output: object rows. Read artifact identities for consistency diagnostics."""
+def _read_jsonl_rows(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    """Input: JSONL path. Output: rows and diagnostics. Skip malformed rows without crashing status."""
     if not path.exists():
-        return []
+        return [], []
     rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    issues: list[str] = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip():
             continue
-        row = json.loads(line)
-        if isinstance(row, dict):
-            rows.append(row)
-    return rows
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            issues.append(f"malformed_jsonl:{path.name}:{line_number}")
+            continue
+        if not isinstance(row, dict):
+            issues.append(f"malformed_jsonl:{path.name}:{line_number}")
+            continue
+        rows.append(row)
+    return rows, issues
+
+
+def _read_candidate_gate(path: Path, issues: list[str]) -> list[dict[str, Any]] | None:
+    """Input: gate path and issues. Output: candidate rows or none. Diagnose malformed gate data."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        issues.append(f"malformed_json:{path.name}")
+        return None
+    if not isinstance(payload, list) or not all(isinstance(row, dict) for row in payload):
+        issues.append(f"malformed_json:{path.name}")
+        return None
+    return payload
+
+
+def _read_json_object(path: Path, issues: list[str]) -> dict[str, Any] | None:
+    """Input: JSON path and issues. Output: object or none. Diagnose malformed object artifacts."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        issues.append(f"malformed_json:{path.name}")
+        return None
+    if not isinstance(payload, dict):
+        issues.append(f"malformed_json:{path.name}")
+        return None
+    return payload
 
 
 def _candidate_identity(row: dict[str, Any]) -> tuple[str, str, str, str, str]:

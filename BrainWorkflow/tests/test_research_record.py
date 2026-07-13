@@ -3,6 +3,7 @@ import unittest
 import json
 from dataclasses import asdict
 from pathlib import Path
+from unittest.mock import patch
 
 from wqb.research_record import (
     empty_research_record,
@@ -98,6 +99,19 @@ class ResearchRecordTests(unittest.TestCase):
         self.assertEqual(loaded.run_id, "run1")
         self.assertTrue(raw_path.name == "research_record.md")
 
+    def test_interrupted_research_record_replace_preserves_previous_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "research_record.json"
+            write_research_record(path, empty_research_record("run1", "old objective"))
+
+            with patch.object(Path, "replace", side_effect=OSError("interrupted replace")):
+                with self.assertRaisesRegex(OSError, "interrupted replace"):
+                    write_research_record(path, empty_research_record("run1", "new objective"))
+
+            loaded = load_research_record(path)
+
+        self.assertEqual(loaded.objective, "old objective")
+
     def test_research_record_tracks_approvals_and_queue_updates(self):
         from wqb.research_record import (
             record_approval,
@@ -124,3 +138,25 @@ class ResearchRecordTests(unittest.TestCase):
         self.assertEqual(len(record.user_approval), 1)
         self.assertEqual(len(record.approved_queue), 1)
         self.assertEqual(len(record.manual_submission_status), 1)
+
+    def test_status_history_dedupes_only_immediate_retries(self):
+        from wqb.research_record import record_manual_submission_status, record_queue_update
+
+        record = empty_research_record("run1", "Power Pool")
+        base = {
+            "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+            "expression_hash": "h1", "source_run_id": "run1",
+        }
+        for status in ("queued", "manually_submitted", "queued"):
+            row = dict(base, status=status)
+            record = record_queue_update(record, row)
+            record = record_manual_submission_status(record, row)
+
+        self.assertEqual(
+            [row["status"] for row in record.approved_queue],
+            ["queued", "manually_submitted", "queued"],
+        )
+        self.assertEqual(
+            [row["status"] for row in record.manual_submission_status],
+            ["queued", "manually_submitted", "queued"],
+        )

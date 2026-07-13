@@ -39,6 +39,17 @@ from wqb.workflow_state import (
 )
 
 
+CANDIDATE_GATE_PREREQUISITES = (
+    "objective_selected",
+    "schedule",
+    "scout_seed",
+    "batch_generation",
+    "backtest",
+    "triage",
+    "repair",
+)
+
+
 @dataclass(frozen=True)
 class OrchestratorPaths:
     project_root: Path
@@ -132,6 +143,29 @@ class WorkflowOrchestrator:
         state = self._active_state()
         if state is None:
             return {"active": False, "status": "none"}
+        warnings: list[str] = []
+        raw_path = ""
+        try:
+            record = self._load_or_create_research_record(state)
+            write_research_record(Path(state.run_dir) / "research_record.json", record)
+            synced_path = sync_research_record_to_raw(record, self.paths.knowledge_root / "raw")
+            raw_path = str(synced_path)
+            state = replace(state, research_record_synced=True, updated_at=aborted_at)
+            append_workflow_event(
+                state.run_dir,
+                "abort_research_record_synced",
+                {"raw_path": raw_path, "synced": True},
+                aborted_at,
+            )
+        except Exception as exc:
+            warning = f"{type(exc).__name__}: {exc}"
+            warnings.append(warning)
+            append_workflow_event(
+                state.run_dir,
+                "abort_research_record_sync_warning",
+                {"synced": False, "warning": warning},
+                aborted_at,
+            )
         if state.status != "aborted":
             state = transition_run_state(state, "aborted", reason)
             state = replace(state, updated_at=aborted_at)
@@ -143,7 +177,9 @@ class WorkflowOrchestrator:
                 aborted_at,
             )
         clear_active_run(self.paths.run_root)
-        return self._summary(state)
+        summary = self._summary(state)
+        summary.update({"warnings": warnings, "raw_path": raw_path})
+        return summary
 
     def continue_once(self, now: str) -> dict[str, object]:
         """Input: timestamp. Output: status summary. Advance exactly one legal workflow stage."""
@@ -170,8 +206,10 @@ class WorkflowOrchestrator:
             append_workflow_event(run_dir, "stage_started", {"stage": "schedule"}, now)
             return self._summary(state)
         if state.status == "running" and state.current_stage == "schedule":
-            manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
             try:
+                manifest = json.loads(
+                    (run_dir / "run_manifest.json").read_text(encoding="utf-8")
+                )
                 result = schedule_research_stage(
                     self.paths.knowledge_root, run_dir, str(manifest.get("selected_option_id", ""))
                 )
@@ -205,6 +243,8 @@ class WorkflowOrchestrator:
                 run_dir, "stage_completed", {"stage": "schedule", "result": result}, now
             )
             return self._summary(state)
+        if state.status == "running" and state.current_stage == "research_record_sync":
+            return self.sync_research_record(now)
         return self._summary(state)
 
     def request_candidate_approval(
@@ -214,6 +254,19 @@ class WorkflowOrchestrator:
         state = self._active_state()
         if state is None:
             return {"active": False, "status": "none"}
+        if state.status != "running" or state.current_stage != "candidate_gate":
+            raise ValueError(
+                "candidate approval request requires the running candidate gate stage"
+            )
+        incomplete = [
+            stage_name
+            for stage_name in CANDIDATE_GATE_PREREQUISITES
+            if state.stages[stage_name].status not in {"completed", "skipped"}
+        ]
+        if incomplete:
+            raise ValueError(
+                "candidate gate prerequisite stages are incomplete: " + ", ".join(incomplete)
+            )
         if not candidates:
             raise ValueError("at least one candidate is required for approval request")
         for candidate in candidates:
@@ -232,8 +285,6 @@ class WorkflowOrchestrator:
         gate_path.write_text(
             json.dumps(candidates, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        if state.status == "created":
-            state = transition_run_state(state, "running", "")
         state = transition_run_state(state, "waiting_for_user", "candidate approval required")
         state = self._set_stage(
             state,
@@ -268,10 +319,10 @@ class WorkflowOrchestrator:
             return {"active": False, "queued_count": 0}
         if not candidate_ids:
             raise ValueError("at least one candidate must be selected for approval")
-        if state.status != "waiting_for_user":
-            summary = self._summary(state)
-            summary["queued_count"] = 0
-            return summary
+        if state.status != "waiting_for_user" or state.current_stage != "user_approval":
+            raise ValueError(
+                "candidate approval requires waiting_for_user at the user approval stage"
+            )
         run_dir = Path(state.run_dir)
         candidates = json.loads((run_dir / "candidate_gate.json").read_text(encoding="utf-8"))
         if not isinstance(candidates, list):
@@ -396,6 +447,8 @@ class WorkflowOrchestrator:
             ),
         )
         state = replace(state, research_record_synced=True)
+        if advance_stage:
+            state = transition_run_state(state, "completed", "")
         write_run_state(run_dir / STATE_FILENAME, state)
         append_workflow_event(
             run_dir,
@@ -403,6 +456,14 @@ class WorkflowOrchestrator:
             {"raw_path": str(raw_path), "synced": True},
             now,
         )
+        if advance_stage:
+            append_workflow_event(
+                run_dir,
+                "workflow_completed",
+                {"run_id": state.run_id, "status": state.status},
+                now,
+            )
+            clear_active_run(self.paths.run_root)
         summary = self._summary(state)
         summary.update({"synced": True, "raw_path": str(raw_path)})
         return summary

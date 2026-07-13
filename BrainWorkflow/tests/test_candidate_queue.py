@@ -1,5 +1,7 @@
+import json
 import tempfile
 import unittest
+from pathlib import Path
 
 from wqb.candidate_queue import (
     approval_matches_candidate,
@@ -99,3 +101,32 @@ class CandidateQueueTests(unittest.TestCase):
 
         self.assertEqual(updated["status"], "manually_submitted")
         self.assertEqual(rows[0]["status"], "manually_submitted")
+
+    def test_retry_recovers_from_one_incomplete_trailing_jsonl_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "approval.jsonl").write_text('{"candidate_id":', encoding="utf-8")
+            approval = approve_candidate(
+                root, self.candidate(), "2026-07-12T00:00:00Z", "user"
+            )
+            approvals = load_approvals(root)
+
+            (root / "approved_candidates.jsonl").write_text(
+                json.dumps(dict(approval, status="queued")) + '\n{"candidate_id":',
+                encoding="utf-8",
+            )
+            queued = queue_approved_candidate(root, approval)
+            queue = load_approved_queue(root)
+            approval_lines = (root / "approval.jsonl").read_text(encoding="utf-8").splitlines()
+            queue_lines = (root / "approved_candidates.jsonl").read_text(
+                encoding="utf-8"
+            ).splitlines()
+
+        self.assertEqual(len(approvals), 1)
+        self.assertEqual(approvals[0]["candidate_id"], "c1")
+        self.assertEqual(queued["candidate_id"], "c1")
+        self.assertEqual(len(queue), 1)
+        self.assertEqual(len(approval_lines), 1)
+        self.assertEqual(len(queue_lines), 1)
+        self.assertIsInstance(json.loads(approval_lines[0]), dict)
+        self.assertIsInstance(json.loads(queue_lines[0]), dict)
