@@ -404,6 +404,7 @@ class WorkflowOrchestrator:
         state = self._candidate_status_state(source_run_id)
         if state is None:
             raise ValueError("an active workflow run is required for candidate status updates")
+        state = self._reject_inconsistent_candidate_mutation(state, updated_at)
         run_dir = Path(state.run_dir)
         before_rows = load_approved_queue(run_dir)
         target = (str(candidate_id), str(version), str(expression_hash))
@@ -434,20 +435,19 @@ class WorkflowOrchestrator:
             write_run_state(run_dir / STATE_FILENAME, pending_state)
         if record_changed:
             write_research_record(run_dir / "research_record.json", record)
-        if queue_changed:
-            self._append_event_once(
-                run_dir,
-                "candidate_status_updated",
-                {
-                    "candidate_id": updated.get("candidate_id", ""),
-                    "platform_alpha_id": updated.get("platform_alpha_id", ""),
-                    "version": updated.get("version", ""),
-                    "expression_hash": updated.get("expression_hash", ""),
-                    "source_run_id": updated.get("source_run_id", ""),
-                    "status": status,
-                },
-                updated_at,
-            )
+        self._append_event_once(
+            run_dir,
+            "candidate_status_updated",
+            {
+                "candidate_id": updated.get("candidate_id", ""),
+                "platform_alpha_id": updated.get("platform_alpha_id", ""),
+                "version": updated.get("version", ""),
+                "expression_hash": updated.get("expression_hash", ""),
+                "source_run_id": updated.get("source_run_id", ""),
+                "status": status,
+            },
+            updated_at,
+        )
         if state.status in {"completed", "completed_with_warnings"}:
             if mutation_recorded or not state.research_record_synced:
                 sync_research_record_to_raw(record, self.paths.knowledge_root / "raw")
@@ -560,6 +560,11 @@ class WorkflowOrchestrator:
         state = load_run_state(state_path)
         if state.run_id != selector:
             raise ValueError("source_run_id does not match the selected workflow state")
+        selected_run_dir = state_path.parent.resolve()
+        if Path(state.run_dir).resolve() != selected_run_dir:
+            raise ValueError("selected workflow state run_dir does not match its directory")
+        if state.status not in {"completed", "completed_with_warnings"}:
+            raise ValueError("source_run_id must select a completed workflow run")
         return state
 
     def _active_discovery(self) -> WorkflowStateDiscovery:

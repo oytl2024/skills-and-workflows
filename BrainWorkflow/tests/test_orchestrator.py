@@ -70,6 +70,35 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         )
         write_run_state(state_path, state)
 
+    def create_approved_candidate_run(
+        self, root: Path
+    ) -> tuple[WorkflowOrchestrator, dict[str, object]]:
+        """Input: temp root Path. Output: orchestrator and run summary. Create one queued candidate."""
+        orchestrator = WorkflowOrchestrator(self.paths(root))
+        started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+        candidate = {
+            "candidate_id": "c1",
+            "platform_alpha_id": "a1",
+            "version": 1,
+            "expression_hash": "h1",
+            "source_run_id": started["run_id"],
+            "hard_pass": True,
+        }
+        self.advance_to_candidate_gate(started)
+        orchestrator.request_candidate_approval([candidate], "2026-07-12T00:01:00Z")
+        orchestrator.approve_candidates(["c1"], "2026-07-12T00:02:00Z", "user")
+        return orchestrator, started
+
+    def candidate_artifact_bytes(self, run_dir: Path) -> dict[str, bytes]:
+        """Input: run directory Path. Output: artifact bytes by name. Snapshot mutation targets."""
+        names = (
+            "approved_candidates.jsonl",
+            "run_state.json",
+            "workflow_events.jsonl",
+            "research_record.json",
+        )
+        return {name: (run_dir / name).read_bytes() for name in names}
+
     def test_start_creates_manifest_state_events_and_active_pointer(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -801,6 +830,45 @@ class WorkflowOrchestratorTests(unittest.TestCase):
 
         self.assertEqual(events, ["manually_submitted", "queued", "manually_submitted"])
 
+    def test_candidate_status_retry_restores_event_after_post_queue_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator, started = self.create_approved_candidate_run(root)
+            run_dir = Path(started["run_dir"])
+
+            with patch.object(
+                orchestrator,
+                "_load_or_create_research_record",
+                side_effect=OSError("record read unavailable"),
+            ):
+                with self.assertRaisesRegex(OSError, "record read unavailable"):
+                    orchestrator.update_candidate_status(
+                        "c1", 1, "h1", "manually_submitted", "2026-07-12T00:03:00Z"
+                    )
+
+            self.assertEqual(load_approved_queue(run_dir)[0]["status"], "manually_submitted")
+            self.assertNotIn(
+                "candidate_status_updated",
+                [event.event_type for event in read_workflow_events(run_dir)],
+            )
+
+            orchestrator.update_candidate_status(
+                "c1", 1, "h1", "manually_submitted", "2026-07-12T00:04:00Z"
+            )
+            events = [
+                event
+                for event in read_workflow_events(run_dir)
+                if event.event_type == "candidate_status_updated"
+            ]
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].payload["candidate_id"], "c1")
+        self.assertEqual(events[0].payload["platform_alpha_id"], "a1")
+        self.assertEqual(events[0].payload["version"], 1)
+        self.assertEqual(events[0].payload["expression_hash"], "h1")
+        self.assertEqual(events[0].payload["source_run_id"], started["run_id"])
+        self.assertEqual(events[0].payload["status"], "manually_submitted")
+
     def test_interleaved_candidate_status_retries_dedupe_per_candidate(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -886,6 +954,78 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertIn("manually_submitted", raw_text)
         self.assertEqual(events[0].payload["platform_alpha_id"], "a1")
         self.assertEqual(events[0].payload["source_run_id"], started["run_id"])
+
+    def test_source_run_selector_rejects_non_completed_states_without_mutation(self):
+        for selected_status in ("running", "failed", "aborted"):
+            with self.subTest(selected_status=selected_status), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                orchestrator, started = self.create_approved_candidate_run(root)
+                run_dir = Path(started["run_dir"])
+                state_path = run_dir / "run_state.json"
+                state = load_run_state(state_path)
+                if selected_status != "running":
+                    state = transition_run_state(state, selected_status, "test terminal state")
+                    write_run_state(state_path, state)
+                before = self.candidate_artifact_bytes(run_dir)
+
+                with self.assertRaisesRegex(ValueError, "completed workflow run"):
+                    orchestrator.update_candidate_status(
+                        "c1",
+                        1,
+                        "h1",
+                        "manually_submitted",
+                        "2026-07-12T00:03:00Z",
+                        source_run_id=str(started["run_id"]),
+                    )
+
+                self.assertEqual(self.candidate_artifact_bytes(run_dir), before)
+
+    def test_source_run_selector_rejects_inconsistent_completed_run_without_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator, started = self.create_approved_candidate_run(root)
+            orchestrator.sync_research_record("2026-07-12T00:03:00Z")
+            run_dir = Path(started["run_dir"])
+            approval_path = run_dir / "approval.jsonl"
+            approval = json.loads(approval_path.read_text(encoding="utf-8"))
+            approval["expression_hash"] = "mismatched-hash"
+            approval_path.write_text(json.dumps(approval) + "\n", encoding="utf-8")
+            before = self.candidate_artifact_bytes(run_dir)
+
+            with self.assertRaisesRegex(ValueError, "consistency diagnostics"):
+                orchestrator.update_candidate_status(
+                    "c1",
+                    1,
+                    "h1",
+                    "manually_submitted",
+                    "2026-07-12T00:04:00Z",
+                    source_run_id=str(started["run_id"]),
+                )
+
+            self.assertEqual(self.candidate_artifact_bytes(run_dir), before)
+
+    def test_source_run_selector_rejects_state_run_dir_mismatch_without_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator, started = self.create_approved_candidate_run(root)
+            orchestrator.sync_research_record("2026-07-12T00:03:00Z")
+            run_dir = Path(started["run_dir"])
+            state_path = run_dir / "run_state.json"
+            state = load_run_state(state_path)
+            write_run_state(state_path, replace(state, run_dir=str(run_dir / "other")))
+            before = self.candidate_artifact_bytes(run_dir)
+
+            with self.assertRaisesRegex(ValueError, "run_dir"):
+                orchestrator.update_candidate_status(
+                    "c1",
+                    1,
+                    "h1",
+                    "manually_submitted",
+                    "2026-07-12T00:04:00Z",
+                    source_run_id=str(started["run_id"]),
+                )
+
+            self.assertEqual(self.candidate_artifact_bytes(run_dir), before)
 
     def test_candidate_gate_diagnostics_pause_before_writing_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
