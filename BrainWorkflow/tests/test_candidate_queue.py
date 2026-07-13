@@ -18,8 +18,17 @@ class CandidateQueueTests(unittest.TestCase):
             "platform_alpha_id": "a1",
             "version": 1,
             "expression_hash": "h1",
+            "source_run_id": "run1",
             "sharpe": 1.4,
         }
+
+    def test_approval_and_queue_require_source_run_id(self):
+        candidate = dict(self.candidate(), source_run_id="")
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "source_run_id"):
+                approve_candidate(tmp, candidate, "2026-07-12T00:00:00Z", "user")
+            with self.assertRaisesRegex(ValueError, "source_run_id"):
+                queue_approved_candidate(tmp, candidate)
 
     def test_approval_binds_exact_candidate_version_and_hash(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -38,6 +47,12 @@ class CandidateQueueTests(unittest.TestCase):
 
         changed = dict(self.candidate(), platform_alpha_id="a2")
         self.assertFalse(approval_matches_candidate(approval, changed))
+
+    def test_approval_does_not_match_different_source_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            approval = approve_candidate(tmp, self.candidate(), "2026-07-12T00:00:00Z", "user")
+
+        self.assertFalse(approval_matches_candidate(approval, dict(self.candidate(), source_run_id="run2")))
 
     def test_queue_deduplicates_same_candidate_version_hash(self):
         with tempfile.TemporaryDirectory() as tmp:

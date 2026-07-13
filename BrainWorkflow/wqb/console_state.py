@@ -11,7 +11,8 @@ from wqb.candidate_queue import load_approved_queue
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest
 from wqb.research_record import load_research_record
 from wqb.workflow_events import read_workflow_events
-from wqb.workflow_state import load_active_run, load_run_state
+from wqb.workflow_paths import resolve_project_root, resolve_run_root
+from wqb.workflow_state import discover_active_workflow
 
 
 @dataclass(frozen=True)
@@ -31,9 +32,9 @@ def default_console_paths(
 ) -> ConsolePaths:
     """Input: optional roots. Output: ConsolePaths. Resolve default local console paths."""
     workflow_root = Path(__file__).resolve().parents[1]
-    project_root = workflow_root.parents[1]
+    project_root = resolve_project_root(workflow_root)
     knowledge = Path(knowledge_root) if knowledge_root is not None else project_root / "knowledge"
-    runs = Path(runs_root) if runs_root is not None else project_root / "runs"
+    runs = resolve_run_root(workflow_root, runs_root)
     return ConsolePaths(
         project_root=project_root,
         workflow_root=workflow_root,
@@ -134,23 +135,17 @@ def _milestone_summary(path: Path) -> dict[str, str]:
 
 def _active_workflow_summary(runs_root: Path) -> tuple[dict[str, Any], Path | None]:
     """Input: runs root. Output: workflow summary and run dir. Read active Orchestrator state once."""
-    try:
-        active = load_active_run(runs_root)
-    except (OSError, ValueError, json.JSONDecodeError):
+    discovery = discover_active_workflow(runs_root)
+    if discovery.state is None and discovery.run_dir is None:
         return {"exists": False}, None
-    if not active:
-        return {"exists": False}, None
-    run_dir_text = active.get("run_dir", "")
-    if not run_dir_text:
-        return {"exists": True, "run_id": active.get("run_id", ""), "state_exists": False}, None
-    run_dir = Path(run_dir_text)
-    state_path = run_dir / "run_state.json"
-    if not state_path.exists():
-        return {"exists": True, "run_id": active.get("run_id", ""), "state_exists": False}, run_dir
-    try:
-        state = load_run_state(state_path)
-    except (OSError, ValueError, json.JSONDecodeError, KeyError, TypeError):
-        return {"exists": True, "run_id": active.get("run_id", ""), "state_exists": False}, run_dir
+    if discovery.state is None:
+        return {
+            "exists": True,
+            "run_id": discovery.run_id,
+            "state_exists": False,
+            "diagnostics": discovery.diagnostics,
+        }, discovery.run_dir
+    state = discovery.state
     return (
         {
             "exists": True,
@@ -161,8 +156,10 @@ def _active_workflow_summary(runs_root: Path) -> tuple[dict[str, Any], Path | No
             "current_stage": state.current_stage,
             "next_action": state.next_action,
             "waiting_for_user": state.waiting_for_user,
+            "diagnostics": discovery.diagnostics,
+            "recovered_read_only": discovery.recovered,
         },
-        run_dir,
+        discovery.run_dir,
     )
 
 

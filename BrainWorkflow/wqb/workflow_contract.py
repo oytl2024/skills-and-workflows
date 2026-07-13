@@ -94,6 +94,13 @@ def render_workflow_contract_pages() -> dict[str, str]:
             "",
             "Stage statuses: " + ", ".join(STAGE_STATUSES),
             "",
+            "Legal run transitions:",
+            *[
+                f"- {source} -> {target}"
+                for source, targets in LEGAL_RUN_TRANSITIONS.items()
+                for target in targets
+            ],
+            "",
         ]
     )
     record = "\n".join(

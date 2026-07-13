@@ -3483,6 +3483,15 @@ class CliTests(unittest.TestCase):
 
 
 class WorkflowOrchestratorCliTests(unittest.TestCase):
+    def test_cli_and_console_defaults_share_run_root(self):
+        from wqb.cli import default_orchestrator_paths
+        from wqb.console_state import default_console_paths
+
+        self.assertEqual(
+            default_orchestrator_paths({"knowledge_root": "knowledge"}).run_root,
+            default_console_paths().runs_root,
+        )
+
     def test_parse_args_accepts_workflow_start(self):
         with patch(
             "sys.argv",
@@ -3507,6 +3516,45 @@ class WorkflowOrchestratorCliTests(unittest.TestCase):
 
         self.assertEqual(json.loads(output.getvalue())["status"], "created")
         load_config.assert_not_called()
+
+    def test_workflow_continue_dispatches_orchestrator(self):
+        from wqb.cli import main
+
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "workflow-continue", "--now", "2026-07-12T00:01:00Z"]), patch(
+            "wqb.cli.WorkflowOrchestrator"
+        ) as orchestrator_cls, redirect_stdout(output):
+            orchestrator_cls.return_value.continue_once.return_value = {"current_stage": "schedule"}
+            main()
+
+        orchestrator_cls.return_value.continue_once.assert_called_once_with("2026-07-12T00:01:00Z")
+        self.assertEqual(json.loads(output.getvalue())["current_stage"], "schedule")
+
+    def test_workflow_update_candidate_status_dispatches_through_orchestrator(self):
+        from wqb.cli import main
+
+        output = io.StringIO()
+        argv = [
+            "wqb",
+            "workflow-update-candidate-status",
+            "--candidate-id",
+            "c1",
+            "--candidate-version",
+            "1",
+            "--candidate-expression-hash",
+            "h1",
+            "--candidate-status",
+            "manually_submitted",
+            "--now",
+            "2026-07-12T01:00:00Z",
+        ]
+        with patch("sys.argv", argv), patch("wqb.cli.WorkflowOrchestrator") as orchestrator_cls, redirect_stdout(output):
+            orchestrator_cls.return_value.update_candidate_status.return_value = {"status": "manually_submitted"}
+            main()
+
+        orchestrator_cls.return_value.update_candidate_status.assert_called_once_with(
+            "c1", 1, "h1", "manually_submitted", "2026-07-12T01:00:00Z"
+        )
 
 
 if __name__ == "__main__":

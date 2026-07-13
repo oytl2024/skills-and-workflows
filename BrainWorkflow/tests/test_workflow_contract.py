@@ -52,6 +52,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("Only the Orchestrator may write", pages["workflow_state_machine.md"])
         self.assertIn("candidate_id", pages["candidate_approval_policy.md"])
         self.assertIn("near-miss", pages["research_record_schema.md"])
+        self.assertIn("created -> running", pages["workflow_state_machine.md"])
 
     def test_write_workflow_contract_pages_writes_markdown_files(self):
         with tempfile.TemporaryDirectory() as tmp:

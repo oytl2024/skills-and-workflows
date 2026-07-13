@@ -58,6 +58,7 @@ Long-term research should start from the Orchestrator commands instead of manual
 
 ```powershell
 python -m wqb.cli workflow-start --objective "Power Pool" --selected-option-id option-1
+python -m wqb.cli workflow-continue
 python -m wqb.cli workflow-status
 python -m wqb.cli workflow-resume
 ```

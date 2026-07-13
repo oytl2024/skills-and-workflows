@@ -3,10 +3,27 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from wqb.console_state import ConsolePaths, load_console_state
+from wqb.console_state import ConsolePaths, _active_workflow_summary, load_console_state
 
 
 class ConsoleStateTests(unittest.TestCase):
+    def test_active_workflow_discovery_recovers_missing_pointer_without_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runs = root / "runs"
+            run_dir = runs / "run1"
+            run_dir.mkdir(parents=True)
+            from wqb.workflow_state import create_initial_state, write_run_state
+
+            write_run_state(
+                run_dir / "run_state.json",
+                create_initial_state("run1", run_dir, "Power Pool", "2026-07-12T00:00:00Z"),
+            )
+            summary, recovered_dir = _active_workflow_summary(runs)
+
+            self.assertEqual(recovered_dir, run_dir)
+            self.assertEqual(summary["run_id"], "run1")
+            self.assertFalse((runs / "active_run.json").exists())
     def test_load_console_state_aggregates_readiness_options_schedule_jobs_and_proposals(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

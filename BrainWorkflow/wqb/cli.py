@@ -13,7 +13,7 @@ from uuid import uuid4
 import requests
 
 from wqb.benchmark import benchmark_alpha_record
-from wqb.candidate_queue import QUEUE_STATUSES, update_candidate_queue_status
+from wqb.candidate_queue import QUEUE_STATUSES
 from wqb.checker import fetch_check_summary
 from wqb.client import WQBClient
 from wqb.config import load_config
@@ -46,6 +46,7 @@ from wqb.simulator import extract_alpha_id, poll_simulation, resolve_multisimula
 from wqb.subagent_handoff import build_handoff_packets, write_handoff_packets
 from wqb.template_library import load_template_library
 from wqb.workflow_launcher import create_run_manifest, load_workflow_launch_config, write_run_manifest
+from wqb.workflow_paths import resolve_project_root, resolve_run_root
 
 
 FIELD_BATCH_MULTI_CHUNK_SIZE = 5
@@ -81,11 +82,9 @@ def default_option_output_dir() -> str:
 def default_orchestrator_paths(config: dict[str, Any]) -> OrchestratorPaths:
     """Input: run config. Output: OrchestratorPaths. Resolve local workflow state roots."""
     workflow_root = Path(__file__).resolve().parents[1]
-    project_root = workflow_root.parents[1]
+    project_root = resolve_project_root(workflow_root)
     knowledge_root = Path(config.get("knowledge_root", default_knowledge_root()))
-    run_root = Path(config.get("run_root", "runs"))
-    if not run_root.is_absolute():
-        run_root = workflow_root / run_root
+    run_root = resolve_run_root(workflow_root, config.get("run_root", "runs"))
     return OrchestratorPaths(
         project_root=project_root,
         workflow_root=workflow_root,
@@ -3228,6 +3227,7 @@ def parse_args() -> argparse.Namespace:
             "bootstrap-knowledge",
             "schedule-research",
             "workflow-start",
+            "workflow-continue",
             "workflow-status",
             "workflow-resume",
             "workflow-abort",
@@ -3365,6 +3365,8 @@ def main() -> None:
             if not args.objective or not args.selected_option_id:
                 raise SystemExit("--objective and --selected-option-id are required for workflow-start")
             result = orchestrator.start(args.objective, args.selected_option_id, now)
+        elif args.command == "workflow-continue":
+            result = orchestrator.continue_once(now)
         elif args.command == "workflow-status":
             result = orchestrator.status()
         elif args.command == "workflow-resume":
@@ -3386,11 +3388,7 @@ def main() -> None:
                     "--candidate-id, --candidate-version, --candidate-expression-hash, and --candidate-status "
                     "are required for workflow-update-candidate-status"
                 )
-            run_dir = str(orchestrator.status().get("run_dir", ""))
-            if not run_dir:
-                raise SystemExit("an active workflow run is required for workflow-update-candidate-status")
-            result = update_candidate_queue_status(
-                run_dir,
+            result = orchestrator.update_candidate_status(
                 args.candidate_id[0],
                 args.candidate_version,
                 args.candidate_expression_hash,

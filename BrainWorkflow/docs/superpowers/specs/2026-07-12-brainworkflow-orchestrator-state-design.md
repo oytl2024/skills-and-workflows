@@ -654,6 +654,7 @@ Gets a small high-level command surface:
 
 ```text
 workflow-start
+workflow-continue
 workflow-status
 workflow-resume
 workflow-abort

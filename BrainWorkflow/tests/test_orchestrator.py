@@ -38,7 +38,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
             status = orchestrator.status()
 
-        self.assertEqual(status["next_action"], "workflow-start")
+        self.assertEqual(status["next_action"], "workflow-continue")
         self.assertEqual(status["current_stage"], "objective_selected")
 
     def test_status_recovers_durable_run_when_active_pointer_is_missing(self):
@@ -112,6 +112,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 "version": 1,
                 "expression_hash": "h1",
                 "source_run_id": started["run_id"],
+                "hard_pass": True,
             }
             second_candidate = {
                 "candidate_id": "c2",
@@ -119,6 +120,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 "version": 1,
                 "expression_hash": "h2",
                 "source_run_id": started["run_id"],
+                "hard_pass": True,
             }
             gate = orchestrator.request_candidate_approval(
                 [first_candidate, second_candidate], "2026-07-12T00:10:00Z"
@@ -158,6 +160,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 "version": 1,
                 "expression_hash": "h1",
                 "source_run_id": started["run_id"],
+                "hard_pass": True,
             }
             orchestrator.request_candidate_approval([candidate], "2026-07-12T00:10:00Z")
             synced = orchestrator.sync_research_record("2026-07-12T00:12:00Z")
@@ -175,3 +178,170 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertIn("## Candidate Gate", markdown)
         self.assertIn("`c1`", markdown)
         self.assertIn("research_record_synced", [event.event_type for event in events])
+
+    def test_candidate_gate_rejects_non_hard_pass_and_source_run_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            base = {
+                "candidate_id": "c1",
+                "platform_alpha_id": "a1",
+                "version": 1,
+                "expression_hash": "h1",
+                "source_run_id": started["run_id"],
+            }
+
+            with self.assertRaisesRegex(ValueError, "verified hard-pass"):
+                orchestrator.request_candidate_approval([dict(base, hard_pass=False)], "2026-07-12T00:10:00Z")
+            with self.assertRaisesRegex(ValueError, "source_run_id"):
+                orchestrator.request_candidate_approval(
+                    [dict(base, hard_pass=True, source_run_id="other-run")], "2026-07-12T00:10:00Z"
+                )
+
+    def test_candidate_approval_rejects_empty_and_unknown_selection_without_leaving_wait(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            candidate = {
+                "candidate_id": "c1",
+                "platform_alpha_id": "a1",
+                "version": 1,
+                "expression_hash": "h1",
+                "source_run_id": started["run_id"],
+                "hard_pass": True,
+            }
+            orchestrator.request_candidate_approval([candidate], "2026-07-12T00:10:00Z")
+
+            with self.assertRaisesRegex(ValueError, "at least one candidate"):
+                orchestrator.approve_candidates([], "2026-07-12T00:11:00Z", "user")
+            with self.assertRaisesRegex(ValueError, "unknown candidate"):
+                orchestrator.approve_candidates(["missing"], "2026-07-12T00:11:00Z", "user")
+            state = load_run_state(Path(started["run_dir"]) / "run_state.json")
+
+        self.assertEqual(state.status, "waiting_for_user")
+        self.assertTrue(state.waiting_for_user)
+
+    def test_start_rejects_second_resumable_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+
+            with self.assertRaisesRegex(ValueError, "active workflow"):
+                orchestrator.start("Other", "option-2", "2026-07-12T00:01:00Z")
+
+    def test_status_exposes_and_pauses_on_consistency_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            orchestrator.continue_once("2026-07-12T00:01:00Z")
+            run_dir = Path(started["run_dir"])
+            (run_dir / "approved_candidates.jsonl").write_text('{"candidate_id":"c1"}\n', encoding="utf-8")
+
+            status = orchestrator.status()
+            state = load_run_state(run_dir / "run_state.json")
+
+        self.assertIn("candidate_queue_without_approval", status["diagnostics"])
+        self.assertFalse(status["consistent"])
+        self.assertEqual(state.status, "paused")
+
+    def test_status_exposes_damaged_active_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runs = root / "runs"
+            run_dir = runs / "run1"
+            run_dir.mkdir(parents=True)
+            (runs / "active_run.json").write_text(
+                json.dumps({"run_id": "run1", "run_dir": str(run_dir)}), encoding="utf-8"
+            )
+            (run_dir / "run_state.json").write_text("{broken", encoding="utf-8")
+
+            status = WorkflowOrchestrator(self.paths(root)).status()
+
+        self.assertTrue(status["active"])
+        self.assertIn("run_state_invalid", status["diagnostics"])
+
+    def test_continue_and_resume_expose_damaged_active_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runs = root / "runs"
+            run_dir = runs / "run1"
+            run_dir.mkdir(parents=True)
+            (runs / "active_run.json").write_text(
+                json.dumps({"run_id": "run1", "run_dir": str(run_dir)}), encoding="utf-8"
+            )
+            (run_dir / "run_state.json").write_text("{broken", encoding="utf-8")
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+
+            continued = orchestrator.continue_once("2026-07-12T00:01:00Z")
+            resumed = orchestrator.resume("2026-07-12T00:02:00Z")
+
+        self.assertTrue(continued["active"])
+        self.assertIn("run_state_invalid", continued["diagnostics"])
+        self.assertTrue(resumed["active"])
+        self.assertIn("run_state_invalid", resumed["diagnostics"])
+
+    def test_stage_state_tracks_schedule_and_candidate_transitions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            decisions = root / "knowledge" / "wiki" / "70_decisions"
+            decisions.mkdir(parents=True)
+            (decisions / "research_option_cards.jsonl").write_text(
+                '{"option_id":"option-1","title":"Power Pool","scope":"USA D1"}\n', encoding="utf-8"
+            )
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            orchestrator.continue_once("2026-07-12T00:01:00Z")
+            running_schedule = load_run_state(Path(started["run_dir"]) / "run_state.json")
+            orchestrator.continue_once("2026-07-12T00:02:00Z")
+            completed_schedule = load_run_state(Path(started["run_dir"]) / "run_state.json")
+            candidate = {
+                "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+                "expression_hash": "h1", "source_run_id": started["run_id"], "hard_pass": True,
+            }
+            orchestrator.request_candidate_approval([candidate], "2026-07-12T00:03:00Z")
+            waiting = load_run_state(Path(started["run_dir"]) / "run_state.json")
+            orchestrator.approve_candidates(["c1"], "2026-07-12T00:04:00Z", "user")
+            approved = load_run_state(Path(started["run_dir"]) / "run_state.json")
+
+        self.assertEqual(running_schedule.stages["schedule"].status, "running")
+        self.assertEqual(running_schedule.stages["schedule"].started_at, "2026-07-12T00:01:00Z")
+        self.assertEqual(completed_schedule.stages["schedule"].status, "completed")
+        self.assertTrue(completed_schedule.stages["schedule"].evidence_paths)
+        self.assertEqual(completed_schedule.updated_at, "2026-07-12T00:02:00Z")
+        self.assertEqual(waiting.current_stage, "user_approval")
+        self.assertEqual(waiting.stages["candidate_gate"].status, "completed")
+        self.assertEqual(waiting.stages["user_approval"].status, "paused")
+        self.assertTrue(waiting.waiting_for_user)
+        self.assertEqual(waiting.next_action, "workflow-approve-candidates")
+        self.assertEqual(approved.current_stage, "research_record_sync")
+        self.assertEqual(approved.last_completed_stage, "approved_queue")
+        self.assertEqual(approved.stages["user_approval"].status, "completed")
+        self.assertEqual(approved.stages["approved_queue"].status, "completed")
+        self.assertFalse(approved.waiting_for_user)
+        self.assertEqual(approved.next_action, "workflow-continue")
+
+    def test_update_candidate_status_records_event_and_research_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            candidate = {
+                "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+                "expression_hash": "h1", "source_run_id": started["run_id"], "hard_pass": True,
+            }
+            orchestrator.request_candidate_approval([candidate], "2026-07-12T00:01:00Z")
+            orchestrator.approve_candidates(["c1"], "2026-07-12T00:02:00Z", "user")
+            updated = orchestrator.update_candidate_status(
+                "c1", 1, "h1", "manually_submitted", "2026-07-12T00:03:00Z"
+            )
+            run_dir = Path(started["run_dir"])
+            events = read_workflow_events(run_dir)
+            record = load_research_record(run_dir / "research_record.json")
+
+        self.assertEqual(updated["status"], "manually_submitted")
+        self.assertIn("candidate_status_updated", [event.event_type for event in events])
+        self.assertEqual(record.manual_submission_status[-1]["status"], "manually_submitted")

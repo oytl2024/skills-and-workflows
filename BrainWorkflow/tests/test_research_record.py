@@ -1,5 +1,7 @@
 import tempfile
 import unittest
+import json
+from dataclasses import asdict
 from pathlib import Path
 
 from wqb.research_record import (
@@ -15,6 +17,43 @@ from wqb.research_record import (
 
 
 class ResearchRecordTests(unittest.TestCase):
+    def test_json_roundtrip_and_markdown_include_all_contract_sections(self):
+        from wqb.research_record import ResearchRecord
+        from wqb.workflow_contract import RESEARCH_RECORD_SECTIONS
+
+        sections = {
+            "backtest": [{"alpha_id": "a1"}],
+            "triage": [{"alpha_id": "a1", "decision": "hard_pass"}],
+            "repair": {"c1": [{"version": 1}]},
+            "candidate_gate": [{"candidate_id": "c1"}],
+            "user_approval": [{"candidate_id": "c1"}],
+            "approved_queue": [{"candidate_id": "c1", "status": "queued"}],
+            "manual_submission_status": [{"candidate_id": "c1", "status": "manually_submitted"}],
+        }
+        record = ResearchRecord(run_id="run1", objective="Power Pool", **sections)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_research_record(Path(tmp) / "research_record.json", record)
+            loaded = load_research_record(path)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        markdown = render_research_record_markdown(loaded)
+
+        self.assertEqual(asdict(loaded), asdict(record))
+        self.assertTrue(set(RESEARCH_RECORD_SECTIONS).issubset(payload))
+        for heading in (
+            "## Backtest", "## Triage", "## Repair", "## Candidate Gate",
+            "## User Approval", "## Approved Queue", "## Manual Submission Status",
+        ):
+            self.assertIn(heading, markdown)
+
+    def test_load_old_record_uses_backward_compatible_section_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "research_record.json"
+            path.write_text(json.dumps({"run_id": "run1", "objective": "old", "failures": []}), encoding="utf-8")
+            loaded = load_research_record(path)
+
+        self.assertEqual(loaded.backtest, [])
+        self.assertEqual(loaded.manual_submission_status, [])
     def test_failed_alpha_summary_is_compact(self):
         record = empty_research_record("run1", "Power Pool")
         record = record_alpha_result(

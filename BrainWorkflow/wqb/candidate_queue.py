@@ -32,6 +32,8 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 def approve_candidate(run_dir: str | Path, candidate: dict[str, object], approved_at: str, approved_by: str) -> dict[str, object]:
     """Input: run dir, candidate, approval metadata. Output: approval row. Persist exact candidate approval."""
+    if not str(candidate.get("source_run_id", "")).strip():
+        raise ValueError("source_run_id is required for candidate approval")
     approval = {
         "candidate_id": str(candidate["candidate_id"]),
         "platform_alpha_id": str(candidate["platform_alpha_id"]),
@@ -58,6 +60,7 @@ def approval_matches_candidate(approval: dict[str, object], candidate: dict[str,
         and str(approval.get("platform_alpha_id", "")) == str(candidate.get("platform_alpha_id", ""))
         and int(approval.get("version", -1)) == int(candidate.get("version", -2))
         and str(approval.get("expression_hash", "")) == str(candidate.get("expression_hash", ""))
+        and str(approval.get("source_run_id", "")) == str(candidate.get("source_run_id", ""))
     )
 
 
@@ -68,6 +71,8 @@ def _queue_identity(row: dict[str, object]) -> tuple[str, int, str]:
 
 def queue_approved_candidate(run_dir: str | Path, approval: dict[str, object]) -> dict[str, object]:
     """Input: run dir and approval. Output: queue row. Add one approved candidate if not already queued."""
+    if not str(approval.get("source_run_id", "")).strip():
+        raise ValueError("source_run_id is required for approved queue entries")
     path = Path(run_dir) / QUEUE_FILENAME
     rows = _read_jsonl(path)
     identity = _queue_identity(approval)
@@ -115,7 +120,10 @@ def update_candidate_queue_status(
             break
     if updated is None:
         raise ValueError("candidate queue entry not found")
-    path.write_text("", encoding="utf-8")
-    for row in rows:
-        _append_jsonl(path, row)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.parent.mkdir(parents=True, exist_ok=True)
+    with temp.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    temp.replace(path)
     return updated
