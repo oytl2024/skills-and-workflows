@@ -9,6 +9,7 @@ from wqb.workflow_state import (
     WorkflowStageState,
     create_initial_state,
     diagnose_state_consistency,
+    discover_active_workflow,
     load_active_run,
     load_run_state,
     transition_run_state,
@@ -175,3 +176,183 @@ class WorkflowStateTests(unittest.TestCase):
         self.assertIn(
             "missing_stage_evidence:schedule:stages/schedule/missing.json", missing_issues
         )
+
+    def test_discovery_diagnoses_non_object_active_pointer_without_writes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            root.mkdir()
+            pointer_path = root / "active_run.json"
+            pointer_path.write_text("[]", encoding="utf-8")
+            before = pointer_path.read_bytes()
+
+            discovery = discover_active_workflow(root)
+
+            self.assertIsNone(discovery.state)
+            self.assertIn("active_run_invalid", discovery.diagnostics)
+            self.assertEqual(pointer_path.read_bytes(), before)
+
+    def test_discovery_rejects_out_of_root_active_pointer_without_writes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            outside = Path(tmp) / "outside" / "run1"
+            outside.mkdir(parents=True)
+            root.mkdir()
+            write_run_state(
+                outside / "run_state.json",
+                create_initial_state(
+                    "run1", outside, "Power Pool", "2026-07-12T00:00:00Z"
+                ),
+            )
+            write_active_run(root, "run1", outside)
+            before = {
+                "pointer": (root / "active_run.json").read_bytes(),
+                "state": (outside / "run_state.json").read_bytes(),
+            }
+
+            discovery = discover_active_workflow(root)
+
+            self.assertIsNone(discovery.state)
+            self.assertIn("active_run_outside_run_root", discovery.diagnostics)
+            self.assertEqual((root / "active_run.json").read_bytes(), before["pointer"])
+            self.assertEqual((outside / "run_state.json").read_bytes(), before["state"])
+
+    def test_discovery_rejects_pointer_and_state_directory_mismatches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            mismatched_dir = root / "run2"
+            write_run_state(
+                run_dir / "run_state.json",
+                create_initial_state(
+                    "run1", mismatched_dir, "Power Pool", "2026-07-12T00:00:00Z"
+                ),
+            )
+            write_active_run(root, "run1", run_dir)
+            before = {
+                "pointer": (root / "active_run.json").read_bytes(),
+                "state": (run_dir / "run_state.json").read_bytes(),
+            }
+
+            discovery = discover_active_workflow(root)
+
+            self.assertIsNone(discovery.state)
+            self.assertIn("run_state_run_dir_mismatch", discovery.diagnostics)
+            self.assertEqual((root / "active_run.json").read_bytes(), before["pointer"])
+            self.assertEqual((run_dir / "run_state.json").read_bytes(), before["state"])
+
+    def test_scanned_discovery_rejects_out_of_root_state_run_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            outside = Path(tmp) / "outside" / "run1"
+            run_dir.mkdir(parents=True)
+            write_run_state(
+                run_dir / "run_state.json",
+                create_initial_state(
+                    "run1", outside, "Power Pool", "2026-07-12T00:00:00Z"
+                ),
+            )
+            before = (run_dir / "run_state.json").read_bytes()
+
+            discovery = discover_active_workflow(root)
+
+            self.assertIsNone(discovery.state)
+            self.assertIn("run_state_run_dir_mismatch", discovery.diagnostics)
+            self.assertFalse((root / "active_run.json").exists())
+            self.assertEqual((run_dir / "run_state.json").read_bytes(), before)
+
+    def test_discovery_diagnoses_pointer_run_id_directory_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            write_run_state(
+                run_dir / "run_state.json",
+                create_initial_state(
+                    "run1", run_dir, "Power Pool", "2026-07-12T00:00:00Z"
+                ),
+            )
+            write_active_run(root, "run2", run_dir)
+            before = (root / "active_run.json").read_bytes()
+
+            discovery = discover_active_workflow(root)
+
+            self.assertEqual(discovery.state.run_id, "run1")
+            self.assertTrue(discovery.recovered)
+            self.assertIn("active_run_directory_mismatch", discovery.diagnostics)
+            self.assertEqual((root / "active_run.json").read_bytes(), before)
+
+    def test_scanned_discovery_rejects_state_run_id_directory_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            write_run_state(
+                run_dir / "run_state.json",
+                create_initial_state(
+                    "run2", run_dir, "Power Pool", "2026-07-12T00:00:00Z"
+                ),
+            )
+            before = (run_dir / "run_state.json").read_bytes()
+
+            discovery = discover_active_workflow(root)
+
+            self.assertIsNone(discovery.state)
+            self.assertIn("run_state_run_id_mismatch", discovery.diagnostics)
+            self.assertFalse((root / "active_run.json").exists())
+            self.assertEqual((run_dir / "run_state.json").read_bytes(), before)
+
+    def test_consistency_binds_research_and_candidate_artifacts_to_state_run(self):
+        candidate = {
+            "candidate_id": "c1",
+            "platform_alpha_id": "a1",
+            "version": 1,
+            "expression_hash": "h1",
+            "source_run_id": "other-run",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = create_initial_state(
+                "run1", root, "Power Pool", "2026-07-12T00:00:00Z"
+            )
+            write_run_state(root / "run_state.json", state)
+            (root / "research_record.json").write_text(
+                json.dumps({"run_id": "other-run"}), encoding="utf-8"
+            )
+            (root / "candidate_gate.json").write_text(
+                json.dumps([candidate]), encoding="utf-8"
+            )
+            (root / "approval.jsonl").write_text(
+                json.dumps(candidate) + "\n", encoding="utf-8"
+            )
+            (root / "approved_candidates.jsonl").write_text(
+                json.dumps(dict(candidate, status="queued")) + "\n", encoding="utf-8"
+            )
+
+            issues = diagnose_state_consistency(root)
+
+        self.assertIn("research_record_run_id_mismatch:other-run", issues)
+        for artifact in (
+            "candidate_gate.json",
+            "approval.jsonl",
+            "approved_candidates.jsonl",
+        ):
+            self.assertIn(
+                f"candidate_source_run_id_mismatch:{artifact}:c1:other-run", issues
+            )
+
+    def test_consistency_requires_research_record_for_completed_with_warnings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = create_initial_state(
+                "run1", root, "Power Pool", "2026-07-12T00:00:00Z"
+            )
+            write_run_state(
+                root / "run_state.json",
+                replace(state, status="completed_with_warnings"),
+            )
+
+            issues = diagnose_state_consistency(root)
+
+        self.assertIn("completed_without_research_record", issues)

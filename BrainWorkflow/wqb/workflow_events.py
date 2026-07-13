@@ -22,6 +22,12 @@ def append_workflow_event(run_dir: str | Path, event_type: str, payload: dict[st
     root.mkdir(parents=True, exist_ok=True)
     path = root / EVENTS_FILENAME
     event = WorkflowEvent(event_type=str(event_type), occurred_at=str(occurred_at), payload=dict(payload))
+    if path.exists() and path.stat().st_size:
+        with path.open("rb+") as handle:
+            handle.seek(-1, 2)
+            if handle.read(1) not in {b"\n", b"\r"}:
+                handle.seek(0, 2)
+                handle.write(b"\n")
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(asdict(event), ensure_ascii=False, sort_keys=True) + "\n")
     return path

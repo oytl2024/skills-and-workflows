@@ -35,3 +35,20 @@ class WorkflowEventsTests(unittest.TestCase):
             events = read_workflow_events(tmp)
 
         self.assertEqual([event.event_type for event in events], ["workflow_created"])
+
+    def test_append_after_incomplete_tail_preserves_exactly_one_new_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "workflow_events.jsonl"
+            path.write_text('{"event_type":"candidate_status_updated"', encoding="utf-8")
+
+            append_workflow_event(
+                tmp,
+                "candidate_status_updated",
+                {"candidate_id": "c1", "status": "manually_submitted"},
+                "2026-07-12T00:01:00Z",
+            )
+            events = read_workflow_events(tmp)
+
+        self.assertEqual([event.event_type for event in events], ["candidate_status_updated"])
+        self.assertEqual(events[0].payload["candidate_id"], "c1")
+        self.assertEqual(events[0].payload["status"], "manually_submitted")

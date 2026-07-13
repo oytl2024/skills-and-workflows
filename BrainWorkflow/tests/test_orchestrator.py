@@ -89,15 +89,20 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         orchestrator.approve_candidates(["c1"], "2026-07-12T00:02:00Z", "user")
         return orchestrator, started
 
-    def candidate_artifact_bytes(self, run_dir: Path) -> dict[str, bytes]:
-        """Input: run directory Path. Output: artifact bytes by name. Snapshot mutation targets."""
+    def candidate_artifact_bytes(self, run_dir: Path) -> dict[str, bytes | None]:
+        """Input: run directory Path. Output: optional artifact bytes by name. Snapshot mutation targets."""
         names = (
+            "candidate_gate.json",
+            "approval.jsonl",
             "approved_candidates.jsonl",
             "run_state.json",
             "workflow_events.jsonl",
             "research_record.json",
         )
-        return {name: (run_dir / name).read_bytes() for name in names}
+        return {
+            name: (run_dir / name).read_bytes() if (run_dir / name).exists() else None
+            for name in names
+        }
 
     def test_start_creates_manifest_state_events_and_active_pointer(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1026,6 +1031,54 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 )
 
             self.assertEqual(self.candidate_artifact_bytes(run_dir), before)
+
+    def test_source_run_selector_rejects_cross_run_artifact_identities_without_mutation(self):
+        corruptions = (
+            "research_record",
+            "candidate_artifacts",
+            "missing_warning_record",
+        )
+        for corruption in corruptions:
+            with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                orchestrator, started = self.create_approved_candidate_run(root)
+                orchestrator.sync_research_record("2026-07-12T00:03:00Z")
+                run_dir = Path(started["run_dir"])
+                if corruption == "research_record":
+                    record_path = run_dir / "research_record.json"
+                    payload = json.loads(record_path.read_text(encoding="utf-8"))
+                    payload["run_id"] = "other-run"
+                    record_path.write_text(json.dumps(payload), encoding="utf-8")
+                elif corruption == "candidate_artifacts":
+                    gate_path = run_dir / "candidate_gate.json"
+                    gate_rows = json.loads(gate_path.read_text(encoding="utf-8"))
+                    gate_rows[0]["source_run_id"] = "other-run"
+                    gate_path.write_text(json.dumps(gate_rows), encoding="utf-8")
+                    for filename in ("approval.jsonl", "approved_candidates.jsonl"):
+                        path = run_dir / filename
+                        row = json.loads(path.read_text(encoding="utf-8"))
+                        row["source_run_id"] = "other-run"
+                        path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+                else:
+                    state_path = run_dir / "run_state.json"
+                    state = load_run_state(state_path)
+                    write_run_state(
+                        state_path, replace(state, status="completed_with_warnings")
+                    )
+                    (run_dir / "research_record.json").unlink()
+                before = self.candidate_artifact_bytes(run_dir)
+
+                with self.assertRaisesRegex(ValueError, "consistency diagnostics"):
+                    orchestrator.update_candidate_status(
+                        "c1",
+                        1,
+                        "h1",
+                        "manually_submitted",
+                        "2026-07-12T00:04:00Z",
+                        source_run_id=str(started["run_id"]),
+                    )
+
+                self.assertEqual(self.candidate_artifact_bytes(run_dir), before)
 
     def test_candidate_gate_diagnostics_pause_before_writing_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
