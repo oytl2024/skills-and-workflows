@@ -18,6 +18,7 @@ QUEUE_STATUSES = {"queued", "manually_submitted", "api_submitted", "skipped", "i
 DAILY_API_SUBMISSION_LIMIT = 1
 API_SUBMISSION_LOCK_TIMEOUT_SECONDS = 5.0
 API_SUBMISSION_LOCK_SLEEP_SECONDS = 0.05
+API_SUBMISSION_LOCK_STALE_SECONDS = 300.0
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -203,23 +204,79 @@ def _read_submission_claims(root: Path, repair_trailing: bool = False) -> list[d
 def _api_submission_claim_lock(root: Path):
     """Input: run root Path. Output: context manager. Hold an exclusive run-root claim lock."""
     path = root / API_SUBMISSION_CLAIMS_LOCK_FILENAME
+    token = f"{os.getpid()}-{time.time_ns()}"
     deadline = time.monotonic() + API_SUBMISSION_LOCK_TIMEOUT_SECONDS
-    fd: int | None = None
-    while fd is None:
+    acquired = False
+    while not acquired:
         try:
             fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
+            if _api_submission_lock_is_stale(path, time.time()):
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+                continue
             if time.monotonic() >= deadline:
                 raise ValueError("API submission claim lock is busy") from None
             time.sleep(API_SUBMISSION_LOCK_SLEEP_SECONDS)
+        else:
+            try:
+                _write_api_submission_lock_payload(fd, token)
+            except Exception:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+                raise
+            acquired = True
     try:
-        os.close(fd)
         yield
     finally:
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
+        _release_api_submission_lock(path, token)
+
+
+def _write_api_submission_lock_payload(fd: int, token: str) -> None:
+    """Input: OS file descriptor and token. Output: none. Persist lock owner metadata."""
+    payload = {
+        "token": token,
+        "pid": os.getpid(),
+        "created_at": time.time(),
+    }
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, sort_keys=True)
+
+
+def _api_submission_lock_is_stale(path: Path, now_seconds: float) -> bool:
+    """Input: lock path and epoch seconds. Output: bool. Decide whether a lock lease expired."""
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return False
+    ages = [now_seconds - stat.st_mtime]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        created_at = float(payload.get("created_at", stat.st_mtime))
+        ages.append(now_seconds - created_at)
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        pass
+    return max(ages) >= API_SUBMISSION_LOCK_STALE_SECONDS
+
+
+def _release_api_submission_lock(path: Path, token: str) -> None:
+    """Input: lock path and owner token. Output: none. Remove only the caller-owned lock file."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return
+    if str(payload.get("token", "")) != token:
+        return
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def queue_approved_candidate(run_dir: str | Path, approval: dict[str, object]) -> dict[str, object]:

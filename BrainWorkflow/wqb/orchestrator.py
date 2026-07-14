@@ -589,18 +589,19 @@ class WorkflowOrchestrator:
             summary = self._summary(state)
             summary.update({"synced": False, "raw_path": "", "warnings": [warning]})
             return summary
-        state = self._set_stage(
-            state,
-            "research_record_sync",
-            "completed",
-            now,
-            evidence_paths=[str(raw_path)],
-            current_stage="complete" if advance_stage else state.current_stage,
-            last_completed_stage=(
-                "research_record_sync" if advance_stage else state.last_completed_stage
-            ),
-        )
-        state = replace(state, research_record_synced=True)
+        if advance_stage:
+            state = self._set_stage(
+                state,
+                "research_record_sync",
+                "completed",
+                now,
+                evidence_paths=[str(raw_path)],
+                current_stage="complete",
+                last_completed_stage="research_record_sync",
+            )
+            state = replace(state, research_record_synced=True)
+        else:
+            state = replace(state, research_record_synced=True, updated_at=now)
         if advance_stage:
             state = transition_run_state(state, "completed", "")
         write_run_state(run_dir / STATE_FILENAME, state)
@@ -857,7 +858,7 @@ class WorkflowOrchestrator:
         ]
         if alpha_rows is None or not matching_rows:
             return False
-        return any(
+        return all(
             row.get("hard_pass") is True
             and not bool(row.get("failed"))
             and not bool(row.get("pending"))

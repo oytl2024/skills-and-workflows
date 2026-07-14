@@ -694,6 +694,10 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             root / "knowledge" / "raw" / "research" / "runs" / started["run_id"] / "research_record.md",
         )
         self.assertTrue(state.research_record_synced)
+        self.assertEqual(state.current_stage, "user_approval")
+        self.assertEqual(state.last_completed_stage, "candidate_gate")
+        self.assertEqual(state.stages["research_record_sync"].status, "not_started")
+        self.assertEqual(state.stages["research_record_sync"].evidence_paths, [])
         self.assertIn("## Candidate Gate", markdown)
         self.assertIn("`c1`", markdown)
         self.assertIn("research_record_synced", [event.event_type for event in events])
@@ -1479,6 +1483,28 @@ class WorkflowOrchestratorTests(unittest.TestCase):
 
                 with self.assertRaisesRegex(ValueError, "hard-pass evidence"):
                     orchestrator.request_candidate_approval([candidate], "2026-07-12T00:03:00Z")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            self.advance_to_candidate_gate(started)
+            run_dir = Path(str(started["run_dir"]))
+            candidate = {
+                "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+                "expression_hash": "h1", "source_run_id": started["run_id"], "hard_pass": True,
+            }
+            duplicate_rows = (
+                {"alpha_id": "a1", "expression_hash": "h1", "hard_pass": True},
+                {"alpha_id": "a1", "expression_hash": "h1", "hard_pass": False},
+            )
+            (run_dir / "all_alphas.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in duplicate_rows),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "hard-pass evidence"):
+                orchestrator.request_candidate_approval([candidate], "2026-07-12T00:03:00Z")
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

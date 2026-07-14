@@ -1,11 +1,15 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from wqb.candidate_queue import (
+    API_SUBMISSION_CLAIMS_LOCK_FILENAME,
     approval_matches_candidate,
     approve_candidate,
+    claim_api_submission_slot,
     load_approved_queue,
     load_approvals,
     queue_approved_candidate,
@@ -196,6 +200,23 @@ class CandidateQueueTests(unittest.TestCase):
 
         self.assertEqual(updated["status"], "api_submitted")
         self.assertEqual(updated["updated_at"], "2026-07-13T01:00:00Z")
+
+    def test_api_submission_claim_recovers_stale_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock_path = root / API_SUBMISSION_CLAIMS_LOCK_FILENAME
+            lock_path.write_text(json.dumps({"token": "stale"}), encoding="utf-8")
+            os.utime(lock_path, (1, 1))
+
+            with patch("wqb.candidate_queue.API_SUBMISSION_LOCK_TIMEOUT_SECONDS", 0.01), patch(
+                "wqb.candidate_queue.API_SUBMISSION_LOCK_SLEEP_SECONDS", 0.001
+            ), patch("wqb.candidate_queue.API_SUBMISSION_LOCK_STALE_SECONDS", 0.001):
+                claim = claim_api_submission_slot(
+                    root, self.candidate(), "2026-07-12T01:00:00Z"
+                )
+
+        self.assertEqual(claim["candidate_id"], "c1")
+        self.assertFalse(lock_path.exists())
 
     def test_retry_recovers_from_one_incomplete_trailing_jsonl_row(self):
         with tempfile.TemporaryDirectory() as tmp:
