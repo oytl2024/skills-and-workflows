@@ -11,6 +11,7 @@ from uuid import uuid4
 from wqb.candidate_queue import (
     approve_candidate,
     claim_api_submission_slot,
+    invalidate_candidate_queue_entry,
     load_approved_queue,
     queue_approved_candidate,
     update_candidate_queue_status,
@@ -564,6 +565,70 @@ class WorkflowOrchestrator:
                 candidate_id, version, expression_hash, status, updated_at, source_run_id
             )
 
+    def invalidate_candidate_approval(
+        self,
+        candidate_id: str,
+        version: int,
+        expression_hash: str,
+        reason: str,
+        invalidated_at: str,
+        source_run_id: str = "",
+    ) -> dict[str, object]:
+        """Input: queue identity and reason. Output: invalidated row. Invalidate a superseded approval."""
+        with _workflow_mutation_lock(self.paths.run_root):
+            return self._invalidate_candidate_approval_unlocked(
+                candidate_id, version, expression_hash, reason, invalidated_at, source_run_id
+            )
+
+    def _invalidate_candidate_approval_unlocked(
+        self,
+        candidate_id: str,
+        version: int,
+        expression_hash: str,
+        reason: str,
+        invalidated_at: str,
+        source_run_id: str = "",
+    ) -> dict[str, object]:
+        """Input: queue identity and reason. Output: invalidated row. Mark old approval non-actionable."""
+        state = self._candidate_invalidation_state(source_run_id)
+        if state is None:
+            raise ValueError("an active workflow run is required for candidate invalidation")
+        state = self._reject_inconsistent_candidate_mutation(state, invalidated_at)
+        run_dir = Path(state.run_dir)
+        invalidated = invalidate_candidate_queue_entry(
+            run_dir, candidate_id, version, expression_hash, reason, invalidated_at
+        )
+        original_record = self._load_or_create_research_record(state)
+        record = record_queue_update(original_record, invalidated)
+        record_changed = record != original_record
+        pending_state = state
+        if record_changed or not state.research_record_synced:
+            pending_state = replace(state, research_record_synced=False, updated_at=invalidated_at)
+            write_run_state(run_dir / STATE_FILENAME, pending_state)
+        if record_changed:
+            write_research_record(run_dir / "research_record.json", record)
+        self._append_event_once(
+            run_dir,
+            "candidate_approval_invalidated",
+            {
+                "candidate_id": invalidated.get("candidate_id", ""),
+                "platform_alpha_id": invalidated.get("platform_alpha_id", ""),
+                "version": invalidated.get("version", ""),
+                "expression_hash": invalidated.get("expression_hash", ""),
+                "source_run_id": invalidated.get("source_run_id", ""),
+                "reason": invalidated.get("invalidation_reason", ""),
+            },
+            invalidated_at,
+        )
+        if state.status in {"completed", "completed_with_warnings"}:
+            if record_changed or not state.research_record_synced:
+                sync_research_record_to_raw(record, self.paths.knowledge_root / "raw")
+                write_run_state(
+                    run_dir / STATE_FILENAME,
+                    replace(pending_state, research_record_synced=True),
+                )
+        return invalidated
+
     def _update_candidate_status_unlocked(
         self,
         candidate_id: str,
@@ -787,6 +852,16 @@ class WorkflowOrchestrator:
         if state.status not in {"completed", "completed_with_warnings"}:
             raise ValueError("source_run_id must select a completed workflow run")
         return state
+
+    def _candidate_invalidation_state(self, source_run_id: str) -> WorkflowRunState | None:
+        """Input: optional source run id. Output: state. Select active run or completed run for invalidation."""
+        selector = str(source_run_id).strip()
+        if not selector:
+            return self._active_state()
+        active = self._active_state()
+        if active is not None and active.run_id == selector:
+            return active
+        return self._candidate_status_state(selector)
 
     def _active_discovery(self) -> WorkflowStateDiscovery:
         """Input: none. Output: discovery result. Repair official state and pointer only after read-only recovery."""

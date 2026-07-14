@@ -280,9 +280,12 @@ def update_candidate_queue_status(
     if len(matches) > 1:
         raise ValueError("candidate queue identity is ambiguous")
     updated = matches[0]
-    if updated.get("status") == status:
+    current_status = str(updated.get("status", ""))
+    if current_status == status:
         return updated
-    if updated.get("status") == "api_submitted":
+    if current_status == "invalidated":
+        raise ValueError("invalidated candidate queue entry cannot be updated")
+    if current_status == "api_submitted":
         raise ValueError("api_submitted status is immutable")
     if status == "api_submitted":
         requested_date = _timestamp_date(updated_at)
@@ -296,5 +299,35 @@ def update_candidate_queue_status(
             raise ValueError("daily API submission limit reached")
     updated["status"] = status
     updated["updated_at"] = str(updated_at)
+    _write_jsonl(path, rows)
+    return updated
+
+
+def invalidate_candidate_queue_entry(
+    run_dir: str | Path,
+    candidate_id: str,
+    version: int,
+    expression_hash: str,
+    reason: str,
+    invalidated_at: str,
+) -> dict[str, object]:
+    """Input: identity, reason, timestamp. Output: invalidated row. Mark a superseded candidate non-actionable."""
+    path = Path(run_dir) / QUEUE_FILENAME
+    rows = _read_jsonl(path)
+    target = (str(candidate_id), int(version), str(expression_hash))
+    matches = [row for row in rows if _status_identity(row) == target]
+    if not matches:
+        raise ValueError("candidate queue entry not found")
+    if len(matches) > 1:
+        raise ValueError("candidate queue identity is ambiguous")
+    updated = matches[0]
+    current_status = str(updated.get("status", ""))
+    if current_status == "invalidated":
+        return updated
+    if current_status in {"manually_submitted", "api_submitted"}:
+        raise ValueError("submitted candidate queue entry is immutable")
+    updated["status"] = "invalidated"
+    updated["updated_at"] = str(invalidated_at)
+    updated["invalidation_reason"] = str(reason).strip() or "candidate approval invalidated"
     _write_jsonl(path, rows)
     return updated

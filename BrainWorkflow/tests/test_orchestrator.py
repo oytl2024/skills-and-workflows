@@ -205,6 +205,26 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertFalse(active_exists)
         self.assertTrue(run_state_exists)
 
+    def test_status_pauses_running_workflow_on_malformed_workflow_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            run_dir = Path(str(started["run_dir"]))
+            state_path = run_dir / "run_state.json"
+            state = transition_run_state(load_run_state(state_path), "running", "")
+            write_run_state(state_path, replace(state, current_stage="schedule"))
+            with (run_dir / "workflow_events.jsonl").open("ab") as file:
+                file.write(b"{broken\n")
+
+            status = orchestrator.status()
+            persisted = load_run_state(state_path)
+
+        self.assertEqual(status["status"], "paused")
+        self.assertIn("malformed_workflow_events", status["diagnostics"])
+        self.assertEqual(persisted.status, "paused")
+        self.assertIn("malformed_workflow_events", persisted.pause_reason)
+
     def test_continue_once_respects_run_root_mutation_lock_without_advancing_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -257,6 +277,42 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             after = queue_path.read_bytes()
 
         self.assertEqual(after, before)
+
+    def test_invalidate_candidate_approval_marks_superseded_identity_and_blocks_status_updates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator, started = self.create_approved_candidate_run(root)
+            run_dir = Path(str(started["run_dir"]))
+
+            invalidated = orchestrator.invalidate_candidate_approval(
+                "c1",
+                1,
+                "h1",
+                "candidate expression revised",
+                "2026-07-12T00:03:00Z",
+                source_run_id=str(started["run_id"]),
+            )
+            rows = load_approved_queue(run_dir)
+            orchestrator.sync_research_record("2026-07-12T00:03:30Z")
+
+            with self.assertRaisesRegex(ValueError, "invalidated"):
+                orchestrator.update_candidate_status(
+                    "c1",
+                    1,
+                    "h1",
+                    "manually_submitted",
+                    "2026-07-12T00:04:00Z",
+                    source_run_id=str(started["run_id"]),
+                )
+
+            events = read_workflow_events(run_dir)
+            record = load_research_record(run_dir / "research_record.json")
+
+        self.assertEqual(invalidated["status"], "invalidated")
+        self.assertEqual(rows[0]["status"], "invalidated")
+        self.assertEqual(rows[0]["invalidation_reason"], "candidate expression revised")
+        self.assertIn("candidate_approval_invalidated", [event.event_type for event in events])
+        self.assertEqual(record.approved_queue[-1]["status"], "invalidated")
 
     def test_start_rejects_malformed_active_run_pointer(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -319,9 +319,13 @@ def diagnose_state_consistency(run_dir: str | Path) -> list[str]:
                     evidence = root / evidence
                 if not evidence.exists():
                     issues.append(f"missing_stage_evidence:{stage.name}:{evidence_path}")
-        from wqb.workflow_events import read_workflow_events
+        from wqb.workflow_events import WorkflowEventReadError, read_workflow_events_strict
 
-        events = read_workflow_events(root)
+        try:
+            events = read_workflow_events_strict(root)
+        except WorkflowEventReadError:
+            issues.append("malformed_workflow_events")
+            events = []
         if events and events[-1].event_type == "workflow_aborted" and state.status != "aborted":
             issues.append("state_event_status_conflict")
     return issues

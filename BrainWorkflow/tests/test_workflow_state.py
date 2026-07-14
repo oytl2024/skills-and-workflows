@@ -158,6 +158,40 @@ class WorkflowStateTests(unittest.TestCase):
         self.assertIn("malformed_json:research_record.json", issues)
         self.assertIn("malformed_json:run_state.json", issues)
 
+    def test_consistency_reports_malformed_workflow_event_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = create_initial_state("run1", root, "Power Pool", "2026-07-12T00:00:00Z")
+            write_run_state(root / "run_state.json", state)
+            (root / "workflow_events.jsonl").write_text(
+                json.dumps(
+                    {
+                        "event_type": "workflow_created",
+                        "occurred_at": "2026-07-12T00:00:00Z",
+                        "payload": {"run_id": "run1"},
+                    }
+                )
+                + "\n{broken\n",
+                encoding="utf-8",
+            )
+
+            issues = diagnose_state_consistency(root)
+
+        self.assertIn("malformed_workflow_events", issues)
+
+    def test_consistency_reports_malformed_workflow_event_utf8(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = create_initial_state("run1", root, "Power Pool", "2026-07-12T00:00:00Z")
+            write_run_state(root / "run_state.json", state)
+            (root / "workflow_events.jsonl").write_bytes(
+                b'{"event_type":"workflow_created","occurred_at":"2026-07-12T00:00:00Z","payload":{}}\n\xff\n'
+            )
+
+            issues = diagnose_state_consistency(root)
+
+        self.assertIn("malformed_workflow_events", issues)
+
     def test_consistency_requires_schedule_evidence_and_existing_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
