@@ -39,7 +39,11 @@ def read_workflow_events(run_dir: str | Path) -> list[WorkflowEvent]:
     if not path.exists():
         return []
     events: list[WorkflowEvent] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for raw_line in path.read_bytes().splitlines():
+        try:
+            line = raw_line.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
         if not line.strip():
             continue
         try:

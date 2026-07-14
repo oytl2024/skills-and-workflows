@@ -52,3 +52,17 @@ class WorkflowEventsTests(unittest.TestCase):
         self.assertEqual([event.event_type for event in events], ["candidate_status_updated"])
         self.assertEqual(events[0].payload["candidate_id"], "c1")
         self.assertEqual(events[0].payload["status"], "manually_submitted")
+
+    def test_append_recovers_from_truncated_multibyte_utf8_event_tail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "workflow_events.jsonl"
+            valid_row = '{"event_type":"workflow_created","occurred_at":"t1","payload":{}}\n'
+            truncated_row = (
+                '{"event_type":"stage_started","occurred_at":"t2","payload":{"note":"中"}}\n'
+            ).encode("utf-8")
+            path.write_bytes(valid_row.encode("utf-8") + truncated_row[: truncated_row.index("中".encode("utf-8")) + 1])
+
+            append_workflow_event(tmp, "stage_completed", {"stage": "schedule"}, "t3")
+            events = read_workflow_events(tmp)
+
+        self.assertEqual([event.event_type for event in events], ["workflow_created", "stage_completed"])

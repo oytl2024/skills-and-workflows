@@ -68,13 +68,14 @@ class WorkflowOrchestrator:
     def start(self, objective: str, selected_option_id: str, created_at: str) -> dict[str, object]:
         """Input: objective, option id, timestamp. Output: start summary. Create a formal workflow run."""
         self.paths.run_root.mkdir(parents=True, exist_ok=True)
-        discovery = discover_active_workflow(self.paths.run_root)
-        if discovery.state is not None or (
-            discovery.run_dir is not None and "run_state_invalid" in discovery.diagnostics
-        ):
+        discovery = self._active_discovery()
+        if not self._start_is_allowed(discovery):
             raise ValueError("an active workflow run already exists")
-        run_id = f"{created_at.replace(':', '').replace('-', '').replace('+', 'plus')}-{uuid4().hex[:8]}"
-        run_dir = self.paths.run_root / run_id
+        run_id = self._new_run_id(created_at)
+        resolved_run_root = self.paths.run_root.resolve()
+        run_dir = resolved_run_root / run_id
+        if Path(run_id).name != run_id or run_dir.resolve().parent != resolved_run_root:
+            raise ValueError("workflow run directory must be an immediate child of run_root")
         run_dir.mkdir(parents=True, exist_ok=False)
         manifest = {
             "run_id": run_id,
@@ -570,6 +571,13 @@ class WorkflowOrchestrator:
     def _active_discovery(self) -> WorkflowStateDiscovery:
         """Input: none. Output: discovery result. Durably repair only the active pointer when recovery succeeds."""
         discovery = discover_active_workflow(self.paths.run_root)
+        if (
+            discovery.state is None
+            and discovery.run_dir is not None
+            and discovery.diagnostics == ["active_run_terminal"]
+        ):
+            clear_active_run(self.paths.run_root)
+            return WorkflowStateDiscovery(None, None, "", [])
         if discovery.state is not None and discovery.run_dir is not None and discovery.recovered:
             write_active_run(self.paths.run_root, discovery.state.run_id, discovery.run_dir)
             return WorkflowStateDiscovery(
@@ -580,6 +588,19 @@ class WorkflowOrchestrator:
                 False,
             )
         return discovery
+
+    def _start_is_allowed(self, discovery: WorkflowStateDiscovery) -> bool:
+        """Input: active discovery. Output: whether start is safe. Allow only a clean no-active-run result."""
+        return discovery.state is None and discovery.diagnostics in ([], ["active_run_missing"])
+
+    def _new_run_id(self, created_at: str) -> str:
+        """Input: user timestamp. Output: single-segment run id. Format valid timestamps or use a safe fallback."""
+        try:
+            timestamp = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+            prefix = timestamp.strftime("%Y%m%dT%H%M%S%f")
+        except ValueError:
+            prefix = "run"
+        return f"{prefix}-{uuid4().hex[:8]}"
 
     def _set_stage(
         self,

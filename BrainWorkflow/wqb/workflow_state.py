@@ -406,7 +406,7 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
                 )
             if state is not None and state.status not in TERMINAL_RUN_STATUSES:
                 return WorkflowStateDiscovery(state, pointer_dir, state.run_id, [])
-            pointer_issue = "active_run_stale"
+            pointer_issue = "active_run_terminal"
 
     candidates: list[tuple[WorkflowRunState, Path]] = []
     invalid_dirs: list[tuple[Path, str]] = []

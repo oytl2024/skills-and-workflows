@@ -116,6 +116,60 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(state.objective, "Power Pool")
         self.assertEqual(active["run_id"], result["run_id"])
 
+    def test_start_keeps_user_controlled_timestamp_run_directory_inside_run_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+
+            result = orchestrator.start("Power Pool", "option-1", "../escaped")
+
+            self.assertEqual(Path(str(result["run_dir"])).resolve().parent, (root / "runs").resolve())
+            self.assertFalse(any(path.is_dir() for path in root.iterdir() if path.name.startswith("escaped-")))
+
+    def test_start_rejects_malformed_active_run_pointer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            (root / "runs").mkdir()
+            (root / "runs" / "active_run.json").write_text("{not-json", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "active workflow"):
+                orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+
+            self.assertEqual(list((root / "runs").iterdir()), [root / "runs" / "active_run.json"])
+
+    def test_start_rejects_active_run_state_identity_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            run_dir = Path(str(started["run_dir"]))
+            state_path = run_dir / "run_state.json"
+            write_run_state(state_path, replace(load_run_state(state_path), run_id="other-run"))
+
+            with self.assertRaisesRegex(ValueError, "active workflow"):
+                orchestrator.start("Quality Pool", "option-2", "2026-07-12T00:01:00Z")
+
+            self.assertEqual([path for path in (root / "runs").iterdir() if path.is_dir()], [run_dir])
+
+    def test_abort_clears_canonical_pointer_to_terminal_state_idempotently(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            run_dir = Path(str(started["run_dir"]))
+            state_path = run_dir / "run_state.json"
+            terminal_state = transition_run_state(load_run_state(state_path), "aborted", "interrupted")
+            write_run_state(state_path, terminal_state)
+
+            result = orchestrator.abort("retry abort", "2026-07-12T00:01:00Z")
+            active = load_active_run(root / "runs")
+            persisted = load_run_state(state_path)
+
+        self.assertEqual(result, {"active": False, "status": "none"})
+        self.assertEqual(active, {})
+        self.assertEqual(persisted, terminal_state)
+
     def test_status_reports_next_action_without_chat_context(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
