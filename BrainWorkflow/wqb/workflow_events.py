@@ -16,6 +16,10 @@ class WorkflowEvent:
     payload: dict[str, Any]
 
 
+class WorkflowEventReadError(ValueError):
+    """Input: malformed workflow event data. Output: exception. Block unsafe event-backed recovery."""
+
+
 def append_workflow_event(run_dir: str | Path, event_type: str, payload: dict[str, object], occurred_at: str) -> Path:
     """Input: run dir, event type, payload, timestamp. Output: event path. Append one workflow event."""
     root = Path(run_dir)
@@ -35,25 +39,43 @@ def append_workflow_event(run_dir: str | Path, event_type: str, payload: dict[st
 
 def read_workflow_events(run_dir: str | Path) -> list[WorkflowEvent]:
     """Input: run dir. Output: workflow events. Read valid append-only events in file order."""
+    return _read_workflow_events(run_dir, strict=False)
+
+
+def read_workflow_events_strict(run_dir: str | Path) -> list[WorkflowEvent]:
+    """Input: run dir. Output: workflow events. Read events or raise on any malformed non-empty row."""
+    return _read_workflow_events(run_dir, strict=True)
+
+
+def _read_workflow_events(run_dir: str | Path, strict: bool) -> list[WorkflowEvent]:
+    """Input: run dir and strict flag. Output: workflow events. Parse workflow event rows."""
     path = Path(run_dir) / EVENTS_FILENAME
     if not path.exists():
         return []
     events: list[WorkflowEvent] = []
-    for raw_line in path.read_bytes().splitlines():
+    for line_number, raw_line in enumerate(path.read_bytes().splitlines(), start=1):
         try:
             line = raw_line.decode("utf-8")
         except UnicodeDecodeError:
+            if strict:
+                raise WorkflowEventReadError(f"malformed UTF-8 event row {line_number}") from None
             continue
         if not line.strip():
             continue
         try:
             row = json.loads(line)
         except json.JSONDecodeError:
+            if strict:
+                raise WorkflowEventReadError(f"malformed JSON event row {line_number}") from None
             continue
         if not isinstance(row, dict) or "event_type" not in row or "occurred_at" not in row:
+            if strict:
+                raise WorkflowEventReadError(f"malformed event object row {line_number}")
             continue
         payload = row.get("payload", {})
         if not isinstance(payload, dict):
+            if strict:
+                raise WorkflowEventReadError(f"malformed event payload row {line_number}")
             continue
         events.append(
             WorkflowEvent(

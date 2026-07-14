@@ -537,9 +537,12 @@ def _load_discovery_state(root: Path, run_dir: Path) -> tuple[WorkflowRunState |
 
 def _recover_minimal_state_from_events(run_dir: Path) -> WorkflowRunState | None:
     """Input: run directory Path. Output: minimal WorkflowRunState or None. Rebuild only the creation checkpoint proven by the event log."""
-    from wqb.workflow_events import read_workflow_events
+    from wqb.workflow_events import WorkflowEventReadError, read_workflow_events_strict
 
-    events = read_workflow_events(run_dir)
+    try:
+        events = read_workflow_events_strict(run_dir)
+    except WorkflowEventReadError:
+        return None
     if any(event.event_type not in {"workflow_created", "objective_selected"} for event in events):
         return None
     created = next((event for event in events if event.event_type == "workflow_created"), None)
@@ -568,8 +571,12 @@ def _recover_minimal_state_from_events(run_dir: Path) -> WorkflowRunState | None
 
 def _event_backed_issue(run_dir: Path, original_issue: str) -> str:
     """Input: run directory Path and state issue. Output: issue code. Distinguish unreadable state with readable event evidence."""
-    from wqb.workflow_events import read_workflow_events
+    from wqb.workflow_events import WorkflowEventReadError, read_workflow_events_strict
 
-    if read_workflow_events(run_dir):
+    try:
+        events = read_workflow_events_strict(run_dir)
+    except WorkflowEventReadError:
+        return f"{original_issue}_with_malformed_events"
+    if events:
         return f"{original_issue}_with_events"
     return original_issue

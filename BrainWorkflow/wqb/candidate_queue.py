@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
+import os
 from pathlib import Path
+import time
 from typing import Any
 
 from wqb.workflow_contract import APPROVAL_REQUIRED_FIELDS
@@ -9,8 +12,12 @@ from wqb.workflow_contract import APPROVAL_REQUIRED_FIELDS
 
 APPROVAL_FILENAME = "approval.jsonl"
 QUEUE_FILENAME = "approved_candidates.jsonl"
+API_SUBMISSION_CLAIMS_FILENAME = "api_submission_claims.jsonl"
+API_SUBMISSION_CLAIMS_LOCK_FILENAME = "api_submission_claims.lock"
 QUEUE_STATUSES = {"queued", "manually_submitted", "api_submitted", "skipped", "invalidated"}
 DAILY_API_SUBMISSION_LIMIT = 1
+API_SUBMISSION_LOCK_TIMEOUT_SECONDS = 5.0
+API_SUBMISSION_LOCK_SLEEP_SECONDS = 0.05
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -138,12 +145,81 @@ def _timestamp_date(timestamp: object) -> str:
 def count_api_submissions_for_date(run_root: str | Path, updated_at: str) -> int:
     """Input: run root and timestamp string. Output: int. Count durable API submissions across all run queues for one date."""
     requested_date = _timestamp_date(updated_at)
-    return sum(
-        1
+    identities = {
+        _approval_identity(row)
         for row in load_approved_queue(run_root)
         if row.get("status") == "api_submitted"
         and _timestamp_date(row.get("updated_at", "")) == requested_date
+    }
+    identities.update(
+        _approval_identity(row)
+        for row in _read_submission_claims(Path(run_root))
+        if _timestamp_date(row.get("updated_at", "")) == requested_date
     )
+    return len(identities)
+
+
+def claim_api_submission_slot(
+    run_root: str | Path, candidate: dict[str, object], updated_at: str
+) -> dict[str, object]:
+    """Input: run root, candidate row, timestamp. Output: claim row. Atomically reserve one daily API slot."""
+    root = Path(run_root)
+    root.mkdir(parents=True, exist_ok=True)
+    requested_date = _timestamp_date(updated_at)
+    identity = _approval_identity(candidate)
+    with _api_submission_claim_lock(root):
+        rows = _read_submission_claims(root, repair_trailing=True)
+        for row in rows:
+            if (
+                _timestamp_date(row.get("updated_at", "")) == requested_date
+                and _approval_identity(row) == identity
+            ):
+                return row
+        submission_count = sum(
+            1
+            for row in rows
+            if _timestamp_date(row.get("updated_at", "")) == requested_date
+        )
+        if submission_count >= DAILY_API_SUBMISSION_LIMIT:
+            raise ValueError("daily API submission limit reached")
+        claim = {
+            "candidate_id": str(candidate.get("candidate_id", "")).strip(),
+            "platform_alpha_id": str(candidate.get("platform_alpha_id", "")).strip(),
+            "version": int(candidate.get("version", -1)),
+            "expression_hash": str(candidate.get("expression_hash", "")).strip(),
+            "source_run_id": str(candidate.get("source_run_id", "")).strip(),
+            "updated_at": str(updated_at),
+        }
+        _write_jsonl(root / API_SUBMISSION_CLAIMS_FILENAME, [*rows, claim])
+        return claim
+
+
+def _read_submission_claims(root: Path, repair_trailing: bool = False) -> list[dict[str, Any]]:
+    """Input: run root Path. Output: claim rows. Load durable API submission claims."""
+    return _read_jsonl(root / API_SUBMISSION_CLAIMS_FILENAME, repair_trailing=repair_trailing)
+
+
+@contextmanager
+def _api_submission_claim_lock(root: Path):
+    """Input: run root Path. Output: context manager. Hold an exclusive run-root claim lock."""
+    path = root / API_SUBMISSION_CLAIMS_LOCK_FILENAME
+    deadline = time.monotonic() + API_SUBMISSION_LOCK_TIMEOUT_SECONDS
+    fd: int | None = None
+    while fd is None:
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise ValueError("API submission claim lock is busy") from None
+            time.sleep(API_SUBMISSION_LOCK_SLEEP_SECONDS)
+    try:
+        os.close(fd)
+        yield
+    finally:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def queue_approved_candidate(run_dir: str | Path, approval: dict[str, object]) -> dict[str, object]:

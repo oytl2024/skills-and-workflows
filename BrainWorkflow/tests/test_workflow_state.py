@@ -305,6 +305,29 @@ class WorkflowStateTests(unittest.TestCase):
         self.assertTrue(discovery.recovered)
         self.assertIn("run_state_recovered_from_events", discovery.diagnostics)
 
+    def test_discovery_keeps_damaged_state_when_later_event_row_is_malformed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run_state.json").write_text("{broken", encoding="utf-8")
+            (run_dir / "run_state_checkpoint.json").write_text("{broken", encoding="utf-8")
+            append_workflow_event(
+                run_dir,
+                "workflow_created",
+                {"run_id": "run1", "objective": "Power Pool", "created_at": "2026-07-12T00:00:00Z"},
+                "2026-07-12T00:00:00Z",
+            )
+            with (run_dir / "workflow_events.jsonl").open("ab") as handle:
+                handle.write(b'{"event_type":"stage_completed"\n')
+            write_active_run(root, "run1", run_dir)
+
+            discovery = discover_active_workflow(root)
+
+        self.assertIsNone(discovery.state)
+        self.assertEqual(discovery.run_dir, run_dir)
+        self.assertIn("run_state_invalid_with_malformed_events", discovery.diagnostics)
+
     def test_discovery_keeps_damaged_state_when_events_prove_later_progress(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "runs"

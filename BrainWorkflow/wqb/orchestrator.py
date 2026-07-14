@@ -9,8 +9,7 @@ from uuid import uuid4
 
 from wqb.candidate_queue import (
     approve_candidate,
-    count_api_submissions_for_date,
-    DAILY_API_SUBMISSION_LIMIT,
+    claim_api_submission_slot,
     load_approved_queue,
     queue_approved_candidate,
     update_candidate_queue_status,
@@ -506,10 +505,8 @@ class WorkflowOrchestrator:
             status == "api_submitted"
             and len(before_matches) == 1
             and str(before_matches[0].get("status", "")) != "api_submitted"
-            and count_api_submissions_for_date(self.paths.run_root, updated_at)
-            >= DAILY_API_SUBMISSION_LIMIT
         ):
-            raise ValueError("daily API submission limit reached")
+            claim_api_submission_slot(self.paths.run_root, before_matches[0], updated_at)
         updated = update_candidate_queue_status(
             run_dir, candidate_id, version, expression_hash, status, updated_at
         )
@@ -812,27 +809,37 @@ class WorkflowOrchestrator:
 
     def _validate_candidate_gate_identity(self, candidate: dict[str, object]) -> None:
         """Input: candidate row. Output: none. Require approval identity fields before candidate-gate writes."""
-        if not str(candidate.get("candidate_id", "")).strip() or not str(
-            candidate.get("version", "")
-        ).strip():
-            raise ValueError("candidate_id and version must be non-empty")
+        for field in ("candidate_id", "platform_alpha_id", "expression_hash", "source_run_id"):
+            value = candidate.get(field)
+            if value is None or not str(value).strip():
+                if field == "candidate_id":
+                    raise ValueError(
+                        "candidate_id and version must be non-empty; candidate_id is required for candidate gate"
+                    )
+                raise ValueError(f"{field} is required for candidate gate")
+        version_value = candidate.get("version")
+        if version_value is None or not str(version_value).strip():
+            raise ValueError(
+                "candidate_id and version must be non-empty; version is required for candidate gate"
+            )
+        try:
+            int(version_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("version must be an integer for candidate gate") from exc
 
     def _candidate_has_verified_hard_pass(
         self, state: WorkflowRunState, candidate: dict[str, object]
     ) -> bool:
         """Input: active state and candidate row. Output: bool. Bind hard-pass eligibility to local run artifacts."""
-        if candidate.get("hard_pass") is False:
+        if candidate.get("hard_pass") is not True:
             return False
-        alpha_id = str(
-            candidate.get("platform_alpha_id", candidate.get("alpha_id", ""))
-        ).strip()
+        alpha_id = str(candidate.get("platform_alpha_id", "")).strip()
         expression_hash = str(candidate.get("expression_hash", "")).strip()
         if not alpha_id or not expression_hash:
             return False
         run_dir = Path(state.run_dir)
         csv_path = run_dir / "candidates.csv"
         all_alphas_path = run_dir / "all_alphas.jsonl"
-        found_evidence = False
         if csv_path.exists():
             csv_rows = self._read_candidate_csv(csv_path)
             if csv_rows is None or not any(
@@ -840,27 +847,22 @@ class WorkflowOrchestrator:
                 for row in csv_rows
             ):
                 return False
-            found_evidence = True
-        if all_alphas_path.exists():
-            alpha_rows = self._read_jsonl_rows(all_alphas_path)
-            matching_rows = [
-                row
-                for row in alpha_rows or []
-                if self._artifact_identity_matches(row, alpha_id, expression_hash)
-            ]
-            if (
-                alpha_rows is None
-                or not matching_rows
-                or any(
-                    row.get("hard_pass") is not True
-                    or bool(row.get("failed"))
-                    or bool(row.get("pending"))
-                    for row in matching_rows
-                )
-            ):
-                return False
-            found_evidence = True
-        return found_evidence
+        if not all_alphas_path.exists():
+            return False
+        alpha_rows = self._read_jsonl_rows(all_alphas_path)
+        matching_rows = [
+            row
+            for row in alpha_rows or []
+            if self._artifact_identity_matches(row, alpha_id, expression_hash)
+        ]
+        if alpha_rows is None or not matching_rows:
+            return False
+        return any(
+            row.get("hard_pass") is True
+            and not bool(row.get("failed"))
+            and not bool(row.get("pending"))
+            for row in matching_rows
+        )
 
     def _read_candidate_csv(self, path: Path) -> list[dict[str, str]] | None:
         """Input: candidates CSV path. Output: rows or none. Read local candidate evidence without mutation."""
