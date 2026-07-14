@@ -387,6 +387,37 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(first["current_stage"], "schedule")
         self.assertEqual(second["current_stage"], "scout_seed")
 
+    def test_continue_once_advances_post_schedule_stages_from_local_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            decisions = root / "knowledge" / "wiki" / "70_decisions"
+            decisions.mkdir(parents=True)
+            (decisions / "research_option_cards.jsonl").write_text(
+                '{"option_id":"option-1","title":"Power Pool","scope":"USA D1","score":{"total":10}}\n',
+                encoding="utf-8",
+            )
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            orchestrator.continue_once("2026-07-12T00:01:00Z")
+            orchestrator.continue_once("2026-07-12T00:02:00Z")
+            self.persist_hard_pass_artifacts(Path(str(started["run_dir"])))
+
+            summaries = [
+                orchestrator.continue_once(f"2026-07-12T00:0{minute}:00Z")
+                for minute in range(3, 8)
+            ]
+            state = load_run_state(Path(str(started["run_dir"])) / "run_state.json")
+            events = read_workflow_events(Path(str(started["run_dir"])))
+
+        self.assertEqual(summaries[-1]["current_stage"], "candidate_gate")
+        self.assertTrue(all(summary["current_stage"] != "scout_seed" for summary in summaries[1:]))
+        for stage_name in ("scout_seed", "batch_generation", "backtest", "triage", "repair"):
+            self.assertEqual(state.stages[stage_name].status, "completed")
+            self.assertTrue(state.stages[stage_name].evidence_paths)
+        self.assertGreaterEqual(
+            [event.event_type for event in events].count("stage_completed"), 6
+        )
+
     def test_continue_once_completes_research_record_sync_and_releases_active_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -646,6 +677,36 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(after_sync.updated_at, "2026-07-12T00:05:00Z")
         self.assertEqual(after_sync.status, "completed")
         self.assertFalse(after_status.research_record_synced)
+
+    def test_final_research_record_sync_failure_completes_with_warning_and_releases_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator, started = self.create_approved_candidate_run(root)
+            run_dir = Path(str(started["run_dir"]))
+
+            with patch(
+                "wqb.orchestrator.sync_research_record_to_raw",
+                side_effect=OSError("raw vault unavailable"),
+            ):
+                summary = orchestrator.sync_research_record("2026-07-12T00:03:00Z")
+
+            state = load_run_state(run_dir / "run_state.json")
+            events = read_workflow_events(run_dir)
+            active = load_active_run(root / "runs")
+            local_record_exists = (run_dir / "research_record.json").exists()
+
+        self.assertTrue(local_record_exists)
+        self.assertEqual(summary["status"], "completed_with_warnings")
+        self.assertFalse(summary["synced"])
+        self.assertTrue(summary["warnings"])
+        self.assertEqual(state.status, "completed_with_warnings")
+        self.assertEqual(state.current_stage, "complete")
+        self.assertFalse(state.research_record_synced)
+        self.assertIn("raw vault unavailable", state.stages["research_record_sync"].blocker)
+        self.assertEqual(active, {})
+        self.assertIn(
+            "research_record_sync_warning", [event.event_type for event in events]
+        )
 
     def test_candidate_gate_rejects_non_hard_pass_and_source_run_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1238,6 +1299,38 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertIn("manually_submitted", raw_text)
         self.assertEqual(events[0].payload["platform_alpha_id"], "a1")
         self.assertEqual(events[0].payload["source_run_id"], started["run_id"])
+
+    def test_api_submission_limit_applies_across_completed_workflow_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first_orchestrator, first = self.create_approved_candidate_run(root)
+            first_orchestrator.sync_research_record("2026-07-12T00:03:00Z")
+            second_orchestrator, second = self.create_approved_candidate_run(root)
+            second_orchestrator.sync_research_record("2026-07-12T00:04:00Z")
+            first_orchestrator.update_candidate_status(
+                "c1",
+                1,
+                "h1",
+                "api_submitted",
+                "2026-07-12T01:00:00Z",
+                source_run_id=str(first["run_id"]),
+            )
+            second_dir = Path(str(second["run_dir"]))
+            before = self.candidate_artifact_bytes(second_dir)
+
+            with self.assertRaisesRegex(ValueError, "daily API submission limit"):
+                second_orchestrator.update_candidate_status(
+                    "c1",
+                    1,
+                    "h1",
+                    "api_submitted",
+                    "2026-07-12T01:01:00Z",
+                    source_run_id=str(second["run_id"]),
+                )
+
+            after = self.candidate_artifact_bytes(second_dir)
+
+        self.assertEqual(after, before)
 
     def test_source_run_selector_rejects_non_completed_states_without_mutation(self):
         for selected_status in ("running", "failed", "aborted"):

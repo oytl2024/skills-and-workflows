@@ -12,6 +12,75 @@ from wqb.research_scheduler import build_research_schedule, research_schedule_to
 from wqb.template_library import load_template_library
 
 
+POST_SCHEDULE_STAGES = (
+    "scout_seed",
+    "batch_generation",
+    "backtest",
+    "triage",
+    "repair",
+)
+
+
+def advance_post_schedule_stage(run_dir: str | Path, stage_name: str) -> dict[str, object]:
+    """Input: run directory and post-schedule stage name. Output: stage summary. Complete from local artifacts or write a plan-only handoff."""
+    if stage_name not in POST_SCHEDULE_STAGES:
+        raise ValueError(f"unsupported post-schedule stage: {stage_name}")
+    root = Path(run_dir)
+    artifacts = summarize_stage_artifacts(root)
+    required_paths = {
+        "scout_seed": [root / "candidates.csv"],
+        "batch_generation": [root / "all_alphas.jsonl"],
+        "backtest": [root / "all_alphas.jsonl"],
+        "triage": [root / "candidates.csv"],
+        "repair": [root / "all_alphas.jsonl"],
+    }[stage_name]
+    stage_dir = root / "stages" / stage_name
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    missing = [str(path) for path in required_paths if not path.exists()]
+    if missing:
+        blocker = "local artifacts required before plan-only stage completion"
+        handoff_path = stage_dir / f"{stage_name}_handoff.json"
+        handoff_path.write_text(
+            json.dumps(
+                {
+                    "stage": stage_name,
+                    "mode": "plan_only",
+                    "blocker": blocker,
+                    "missing_artifacts": missing,
+                    "artifact_summary": artifacts,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "stage": stage_name,
+            "status": "paused",
+            "blocker": blocker,
+            "evidence_paths": [str(handoff_path)],
+        }
+    summary_path = stage_dir / f"{stage_name}_summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "stage": stage_name,
+                "mode": "local_artifacts",
+                "artifact_summary": artifacts,
+                "source_artifacts": [str(path) for path in required_paths],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "stage": stage_name,
+        "status": "completed",
+        "evidence_paths": [str(summary_path), *[str(path) for path in required_paths]],
+    }
+
+
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     """Input: JSONL path. Output: rows. Read valid JSONL rows."""
     if not path.exists():

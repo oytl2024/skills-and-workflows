@@ -135,6 +135,17 @@ def _timestamp_date(timestamp: object) -> str:
     return str(timestamp).strip().split("T", 1)[0]
 
 
+def count_api_submissions_for_date(run_root: str | Path, updated_at: str) -> int:
+    """Input: run root and timestamp string. Output: int. Count durable API submissions across all run queues for one date."""
+    requested_date = _timestamp_date(updated_at)
+    return sum(
+        1
+        for row in load_approved_queue(run_root)
+        if row.get("status") == "api_submitted"
+        and _timestamp_date(row.get("updated_at", "")) == requested_date
+    )
+
+
 def queue_approved_candidate(run_dir: str | Path, approval: dict[str, object]) -> dict[str, object]:
     """Input: run dir and approval. Output: queue row. Add one approved candidate if not already queued."""
     if not str(approval.get("source_run_id", "")).strip():

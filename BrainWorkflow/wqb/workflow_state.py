@@ -409,7 +409,10 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
             pointer_issue = pointer_directory_issue
         else:
             state, issue, _ = _load_discovery_state(root, pointer_dir)
-            if issue and issue != "run_state_recovered_from_checkpoint":
+            if issue and issue not in {
+                "run_state_recovered_from_checkpoint",
+                "run_state_recovered_from_events",
+            }:
                 pointer_state_issue = issue
             elif state is not None and state.status in TERMINAL_RUN_STATUSES:
                 pointer_issue = "active_run_terminal"
@@ -427,7 +430,9 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
                 continue
             state, issue, recovered_from_checkpoint = _load_discovery_state(root, run_dir)
             if issue and issue not in {
-                "run_state_missing", "run_state_recovered_from_checkpoint"
+                "run_state_missing",
+                "run_state_recovered_from_checkpoint",
+                "run_state_recovered_from_events",
             }:
                 invalid_dirs.append((run_dir, issue))
             if state is not None and state.status not in TERMINAL_RUN_STATUSES:
@@ -491,16 +496,19 @@ def _load_discovery_state(root: Path, run_dir: Path) -> tuple[WorkflowRunState |
     except ValueError:
         return None, "run_directory_outside_run_root", False
     path = run_dir / STATE_FILENAME
-    if not path.exists():
-        return None, "run_state_missing", False
     recovered_from_checkpoint = False
+    state: WorkflowRunState | None = None
+    original_issue = "run_state_missing" if not path.exists() else "run_state_invalid"
     try:
         state = load_run_state(path)
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         try:
             state = load_run_state(run_dir / STATE_CHECKPOINT_FILENAME)
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-            return None, "run_state_invalid", False
+            state = _recover_minimal_state_from_events(run_dir)
+            if state is None:
+                return None, _event_backed_issue(run_dir, original_issue), False
+            return state, "run_state_recovered_from_events", True
         recovered_from_checkpoint = True
     if state.run_id != run_dir.name:
         return None, "run_state_run_id_mismatch", False
@@ -509,3 +517,41 @@ def _load_discovery_state(root: Path, run_dir: Path) -> tuple[WorkflowRunState |
     if recovered_from_checkpoint:
         return state, "run_state_recovered_from_checkpoint", True
     return state, "", False
+
+
+def _recover_minimal_state_from_events(run_dir: Path) -> WorkflowRunState | None:
+    """Input: run directory Path. Output: minimal WorkflowRunState or None. Rebuild only the creation checkpoint proven by the event log."""
+    from wqb.workflow_events import read_workflow_events
+
+    events = read_workflow_events(run_dir)
+    created = next((event for event in events if event.event_type == "workflow_created"), None)
+    if created is None:
+        return None
+    run_id = str(created.payload.get("run_id", "")).strip()
+    objective = str(created.payload.get("objective", "")).strip()
+    if run_id != run_dir.name or not objective:
+        return None
+    created_at = str(created.payload.get("created_at", created.occurred_at)).strip()
+    state = create_initial_state(run_id, run_dir, objective, created_at)
+    stages = dict(state.stages)
+    stages["objective_selected"] = WorkflowStageState(
+        name="objective_selected",
+        status="completed",
+        started_at=created_at,
+        completed_at=created_at,
+    )
+    return replace(
+        state,
+        stages=stages,
+        last_completed_stage="objective_selected",
+        next_action="workflow-continue",
+    )
+
+
+def _event_backed_issue(run_dir: Path, original_issue: str) -> str:
+    """Input: run directory Path and state issue. Output: issue code. Distinguish unreadable state with readable event evidence."""
+    from wqb.workflow_events import read_workflow_events
+
+    if read_workflow_events(run_dir):
+        return f"{original_issue}_with_events"
+    return original_issue

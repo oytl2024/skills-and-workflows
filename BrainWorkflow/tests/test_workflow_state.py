@@ -16,6 +16,7 @@ from wqb.workflow_state import (
     write_active_run,
     write_run_state,
 )
+from wqb.workflow_events import append_workflow_event
 
 
 class WorkflowStateTests(unittest.TestCase):
@@ -273,6 +274,42 @@ class WorkflowStateTests(unittest.TestCase):
         self.assertEqual(discovery.state, state)
         self.assertTrue(discovery.recovered)
         self.assertIn("run_state_recovered_from_checkpoint", discovery.diagnostics)
+
+    def test_discovery_recovers_minimal_state_from_valid_events_when_state_and_checkpoint_are_damaged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run_state.json").write_text("{broken", encoding="utf-8")
+            (run_dir / "run_state_checkpoint.json").write_text("{broken", encoding="utf-8")
+            append_workflow_event(
+                run_dir,
+                "workflow_created",
+                {
+                    "run_id": "run1",
+                    "objective": "Power Pool",
+                    "selected_option_id": "option-1",
+                    "created_at": "2026-07-12T00:00:00Z",
+                },
+                "2026-07-12T00:00:00Z",
+            )
+            append_workflow_event(
+                run_dir,
+                "stage_started",
+                {"stage": "schedule"},
+                "2026-07-12T00:01:00Z",
+            )
+            write_active_run(root, "run1", run_dir)
+
+            discovery = discover_active_workflow(root)
+
+        self.assertIsNotNone(discovery.state)
+        self.assertEqual(discovery.state.run_id, "run1")
+        self.assertEqual(discovery.state.status, "created")
+        self.assertEqual(discovery.state.current_stage, "objective_selected")
+        self.assertEqual(discovery.state.stages["objective_selected"].status, "completed")
+        self.assertTrue(discovery.recovered)
+        self.assertIn("run_state_recovered_from_events", discovery.diagnostics)
 
     def test_discovery_rejects_checkpoint_with_mismatched_run_identity(self):
         with tempfile.TemporaryDirectory() as tmp:

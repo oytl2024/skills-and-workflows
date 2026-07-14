@@ -9,6 +9,8 @@ from uuid import uuid4
 
 from wqb.candidate_queue import (
     approve_candidate,
+    count_api_submissions_for_date,
+    DAILY_API_SUBMISSION_LIMIT,
     load_approved_queue,
     queue_approved_candidate,
     update_candidate_queue_status,
@@ -25,7 +27,7 @@ from wqb.research_record import (
     write_research_record,
 )
 from wqb.workflow_events import append_workflow_event, read_workflow_events
-from wqb.workflow_stage_adapters import schedule_research_stage
+from wqb.workflow_stage_adapters import POST_SCHEDULE_STAGES, advance_post_schedule_stage, schedule_research_stage
 from wqb.workflow_state import (
     STATE_FILENAME,
     WorkflowRunState,
@@ -248,6 +250,46 @@ class WorkflowOrchestrator:
                 run_dir, "stage_completed", {"stage": "schedule", "result": result}, now
             )
             return self._summary(state)
+        if state.status == "running" and state.current_stage in POST_SCHEDULE_STAGES:
+            stage_name = state.current_stage
+            result = advance_post_schedule_stage(run_dir, stage_name)
+            if result["status"] == "paused":
+                blocker = str(result["blocker"])
+                state = transition_run_state(state, "paused", blocker)
+                state = self._set_stage(
+                    state,
+                    stage_name,
+                    "paused",
+                    now,
+                    evidence_paths=[str(item) for item in result["evidence_paths"]],
+                    blocker=blocker,
+                )
+                write_run_state(run_dir / STATE_FILENAME, state)
+                append_workflow_event(
+                    run_dir,
+                    "stage_paused",
+                    {"stage": stage_name, "blocker": blocker, "result": result},
+                    now,
+                )
+                return self._summary(state)
+            next_stage = POST_SCHEDULE_STAGES[POST_SCHEDULE_STAGES.index(stage_name) + 1] if stage_name != "repair" else "candidate_gate"
+            state = self._set_stage(
+                state,
+                stage_name,
+                "completed",
+                now,
+                evidence_paths=[str(item) for item in result["evidence_paths"]],
+                current_stage=next_stage,
+                last_completed_stage=stage_name,
+            )
+            write_run_state(run_dir / STATE_FILENAME, state)
+            append_workflow_event(
+                run_dir,
+                "stage_completed",
+                {"stage": stage_name, "result": result},
+                now,
+            )
+            return self._summary(state)
         if state.status == "running" and state.current_stage == "research_record_sync":
             return self.sync_research_record(now)
         return self._summary(state)
@@ -423,6 +465,14 @@ class WorkflowOrchestrator:
             )
             == target
         ]
+        if (
+            status == "api_submitted"
+            and len(before_matches) == 1
+            and str(before_matches[0].get("status", "")) != "api_submitted"
+            and count_api_submissions_for_date(self.paths.run_root, updated_at)
+            >= DAILY_API_SUBMISSION_LIMIT
+        ):
+            raise ValueError("daily API submission limit reached")
         updated = update_candidate_queue_status(
             run_dir, candidate_id, version, expression_hash, status, updated_at
         )
@@ -470,8 +520,41 @@ class WorkflowOrchestrator:
         run_dir = Path(state.run_dir)
         record = self._load_or_create_research_record(state)
         write_research_record(run_dir / "research_record.json", record)
-        raw_path = sync_research_record_to_raw(record, self.paths.knowledge_root / "raw")
         advance_stage = state.current_stage == "research_record_sync"
+        try:
+            raw_path = sync_research_record_to_raw(record, self.paths.knowledge_root / "raw")
+        except Exception as exc:
+            if not advance_stage:
+                raise
+            warning = f"{type(exc).__name__}: {exc}"
+            state = self._set_stage(
+                state,
+                "research_record_sync",
+                "completed",
+                now,
+                evidence_paths=[str(run_dir / "research_record.json")],
+                blocker=warning,
+                current_stage="complete",
+                last_completed_stage="research_record_sync",
+            )
+            state = replace(state, research_record_synced=False)
+            state = transition_run_state(state, "completed_with_warnings", "")
+            write_run_state(run_dir / STATE_FILENAME, state)
+            append_workflow_event(
+                run_dir,
+                "research_record_sync_warning",
+                {
+                    "synced": False,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                    "local_record_path": str(run_dir / "research_record.json"),
+                },
+                now,
+            )
+            clear_active_run(self.paths.run_root)
+            summary = self._summary(state)
+            summary.update({"synced": False, "raw_path": "", "warnings": [warning]})
+            return summary
         state = self._set_stage(
             state,
             "research_record_sync",
@@ -502,7 +585,7 @@ class WorkflowOrchestrator:
             )
             clear_active_run(self.paths.run_root)
         summary = self._summary(state)
-        summary.update({"synced": True, "raw_path": str(raw_path)})
+        summary.update({"synced": True, "raw_path": str(raw_path), "warnings": []})
         return summary
 
     def _append_event_once(
@@ -586,7 +669,13 @@ class WorkflowOrchestrator:
             clear_active_run(self.paths.run_root)
             return WorkflowStateDiscovery(None, None, "", [])
         if discovery.state is not None and discovery.run_dir is not None and discovery.recovered:
-            if "run_state_recovered_from_checkpoint" in discovery.diagnostics:
+            if any(
+                diagnostic in {
+                    "run_state_recovered_from_checkpoint",
+                    "run_state_recovered_from_events",
+                }
+                for diagnostic in discovery.diagnostics
+            ):
                 write_run_state(discovery.run_dir / STATE_FILENAME, discovery.state)
             write_active_run(self.paths.run_root, discovery.state.run_id, discovery.run_dir)
             return WorkflowStateDiscovery(
