@@ -363,6 +363,36 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             self.assertIn("run_state_missing", status["diagnostics"])
             self.assertTrue((runs / "active_run.json").exists())
 
+    def test_contradictory_terminal_completed_state_stays_damaged_and_keeps_pointer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            run_dir = Path(str(started["run_dir"]))
+            state_path = run_dir / "run_state.json"
+            state = load_run_state(state_path)
+            write_research_record(
+                run_dir / "research_record.json",
+                empty_research_record(str(started["run_id"]), "Power Pool"),
+            )
+            write_run_state(
+                state_path,
+                replace(
+                    state,
+                    status="completed",
+                    current_stage="complete",
+                    last_completed_stage="research_record_sync",
+                    research_record_synced=True,
+                ),
+            )
+
+            status = orchestrator.status()
+            active = load_active_run(root / "runs")
+
+        self.assertEqual(status["status"], "damaged")
+        self.assertIn("terminal_state_incomplete_stages", status["diagnostics"])
+        self.assertEqual(active["run_id"], started["run_id"])
+
     def test_multiple_active_runs_remain_ambiguous_without_creating_a_pointer(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1569,6 +1599,35 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             after = self.candidate_artifact_bytes(second_dir)
 
         self.assertEqual(after, before)
+
+    def test_invalidated_api_submission_rejection_does_not_consume_daily_claim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator, started = self.create_approved_candidate_run(root)
+            orchestrator.invalidate_candidate_approval(
+                "c1",
+                1,
+                "h1",
+                "candidate expression revised",
+                "2026-07-12T00:03:00Z",
+                source_run_id=str(started["run_id"]),
+            )
+            orchestrator.sync_research_record("2026-07-12T00:03:30Z")
+            claims_path = root / "runs" / "api_submission_claims.jsonl"
+
+            with self.assertRaisesRegex(ValueError, "invalidated"):
+                orchestrator.update_candidate_status(
+                    "c1",
+                    1,
+                    "h1",
+                    "api_submitted",
+                    "2026-07-12T01:00:00Z",
+                    source_run_id=str(started["run_id"]),
+                )
+
+            claim_exists = claims_path.exists()
+
+        self.assertFalse(claim_exists)
 
     def test_candidate_gate_rejects_incomplete_approval_identity_without_writing_artifacts(self):
         cases = (

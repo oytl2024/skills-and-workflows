@@ -659,7 +659,7 @@ class WorkflowOrchestrator:
         if (
             status == "api_submitted"
             and len(before_matches) == 1
-            and str(before_matches[0].get("status", "")) != "api_submitted"
+            and str(before_matches[0].get("status", "")) not in {"api_submitted", "invalidated"}
         ):
             claim_api_submission_slot(self.paths.run_root, before_matches[0], updated_at)
         updated = update_candidate_queue_status(

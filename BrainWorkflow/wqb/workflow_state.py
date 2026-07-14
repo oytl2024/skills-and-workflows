@@ -290,6 +290,18 @@ def diagnose_state_consistency(run_dir: str | Path) -> list[str]:
     if state is not None:
         if state.status in {"completed", "completed_with_warnings"} and research_record is None:
             issues.append("completed_without_research_record")
+        if state.status in {"completed", "completed_with_warnings"}:
+            incomplete_terminal_stages = [
+                stage_name
+                for stage_name in STAGES_REQUIRING_EVIDENCE
+                if state.stages[stage_name].status not in {"completed", "skipped"}
+            ]
+            if (
+                state.current_stage != "complete"
+                or state.last_completed_stage != "research_record_sync"
+                or incomplete_terminal_stages
+            ):
+                issues.append("terminal_state_incomplete_stages")
         if research_record is not None and str(research_record.get("run_id", "")) != state.run_id:
             issues.append(
                 "research_record_run_id_mismatch:"
@@ -419,6 +431,14 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
             }:
                 pointer_state_issue = issue
             elif state is not None and state.status in TERMINAL_RUN_STATUSES:
+                terminal_issues = diagnose_state_consistency(pointer_dir)
+                if terminal_issues:
+                    return WorkflowStateDiscovery(
+                        None,
+                        pointer_dir,
+                        pointer.get("run_id", ""),
+                        ["terminal_state_inconsistent", *terminal_issues],
+                    )
                 pointer_issue = "active_run_terminal"
 
     candidates: list[tuple[WorkflowRunState, Path, str, bool]] = []
