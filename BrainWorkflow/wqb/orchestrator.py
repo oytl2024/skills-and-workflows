@@ -58,6 +58,10 @@ WORKFLOW_START_LOCK_FILENAME = "workflow_start.lock"
 WORKFLOW_START_LOCK_TIMEOUT_SECONDS = 5.0
 WORKFLOW_START_LOCK_SLEEP_SECONDS = 0.05
 WORKFLOW_START_LOCK_STALE_SECONDS = 300.0
+WORKFLOW_MUTATION_LOCK_FILENAME = "workflow_mutation.lock"
+WORKFLOW_MUTATION_LOCK_TIMEOUT_SECONDS = 5.0
+WORKFLOW_MUTATION_LOCK_SLEEP_SECONDS = 0.05
+WORKFLOW_MUTATION_LOCK_STALE_SECONDS = 300.0
 
 
 @contextmanager
@@ -69,6 +73,19 @@ def _workflow_start_lock(run_root: Path):
         WORKFLOW_START_LOCK_SLEEP_SECONDS,
         WORKFLOW_START_LOCK_STALE_SECONDS,
         "workflow start lock is busy",
+    ):
+        yield
+
+
+@contextmanager
+def _workflow_mutation_lock(run_root: Path):
+    """Input: run root Path. Output: context manager. Serialize workflow state mutations."""
+    with exclusive_json_lock(
+        run_root / WORKFLOW_MUTATION_LOCK_FILENAME,
+        WORKFLOW_MUTATION_LOCK_TIMEOUT_SECONDS,
+        WORKFLOW_MUTATION_LOCK_SLEEP_SECONDS,
+        WORKFLOW_MUTATION_LOCK_STALE_SECONDS,
+        "workflow mutation lock is busy",
     ):
         yield
 
@@ -149,6 +166,11 @@ class WorkflowOrchestrator:
 
     def resume(self, resumed_at: str) -> dict[str, object]:
         """Input: timestamp. Output: status summary. Resume a paused run without repeating completed work."""
+        with _workflow_mutation_lock(self.paths.run_root):
+            return self._resume_unlocked(resumed_at)
+
+    def _resume_unlocked(self, resumed_at: str) -> dict[str, object]:
+        """Input: timestamp. Output: status summary. Resume while caller holds mutation lock."""
         discovery = self._active_discovery()
         state = discovery.state
         if state is None:
@@ -166,6 +188,11 @@ class WorkflowOrchestrator:
 
     def abort(self, reason: str, aborted_at: str) -> dict[str, object]:
         """Input: reason and timestamp. Output: status summary. Abort active run and release pointer."""
+        with _workflow_mutation_lock(self.paths.run_root):
+            return self._abort_unlocked(reason, aborted_at)
+
+    def _abort_unlocked(self, reason: str, aborted_at: str) -> dict[str, object]:
+        """Input: reason and timestamp. Output: status summary. Abort while caller holds mutation lock."""
         state = self._active_state()
         if state is None:
             return {"active": False, "status": "none"}
@@ -209,6 +236,11 @@ class WorkflowOrchestrator:
 
     def continue_once(self, now: str) -> dict[str, object]:
         """Input: timestamp. Output: status summary. Advance exactly one legal workflow stage."""
+        with _workflow_mutation_lock(self.paths.run_root):
+            return self._continue_once_unlocked(now)
+
+    def _continue_once_unlocked(self, now: str) -> dict[str, object]:
+        """Input: timestamp. Output: status summary. Advance one stage while mutation lock is held."""
         discovery = self._active_discovery()
         state = discovery.state
         if state is None:
@@ -340,13 +372,20 @@ class WorkflowOrchestrator:
             )
             return self._summary(state)
         if state.status == "running" and state.current_stage == "research_record_sync":
-            return self.sync_research_record(now)
+            return self._sync_research_record_unlocked(now)
         return self._summary(state)
 
     def request_candidate_approval(
         self, candidates: list[dict[str, object]], now: str
     ) -> dict[str, object]:
         """Input: candidates and timestamp. Output: status summary. Pause run for user candidate approval."""
+        with _workflow_mutation_lock(self.paths.run_root):
+            return self._request_candidate_approval_unlocked(candidates, now)
+
+    def _request_candidate_approval_unlocked(
+        self, candidates: list[dict[str, object]], now: str
+    ) -> dict[str, object]:
+        """Input: candidates and timestamp. Output: status summary. Request approval under mutation lock."""
         state = self._active_state()
         if state is None:
             return {"active": False, "status": "none"}
@@ -419,6 +458,13 @@ class WorkflowOrchestrator:
         self, candidate_ids: list[str], approved_at: str, approved_by: str
     ) -> dict[str, object]:
         """Input: candidate ids and approval metadata. Output: queue summary. Approve and queue exact candidates."""
+        with _workflow_mutation_lock(self.paths.run_root):
+            return self._approve_candidates_unlocked(candidate_ids, approved_at, approved_by)
+
+    def _approve_candidates_unlocked(
+        self, candidate_ids: list[str], approved_at: str, approved_by: str
+    ) -> dict[str, object]:
+        """Input: candidate ids and metadata. Output: queue summary. Approve under mutation lock."""
         state = self._active_state()
         if state is None:
             return {"active": False, "queued_count": 0}
@@ -504,6 +550,21 @@ class WorkflowOrchestrator:
         source_run_id: str = "",
     ) -> dict[str, object]:
         """Input: queue identity, status, timestamp, optional source run. Output: updated row. Own status updates."""
+        with _workflow_mutation_lock(self.paths.run_root):
+            return self._update_candidate_status_unlocked(
+                candidate_id, version, expression_hash, status, updated_at, source_run_id
+            )
+
+    def _update_candidate_status_unlocked(
+        self,
+        candidate_id: str,
+        version: int,
+        expression_hash: str,
+        status: str,
+        updated_at: str,
+        source_run_id: str = "",
+    ) -> dict[str, object]:
+        """Input: queue identity and status. Output: updated row. Update status under mutation lock."""
         state = self._candidate_status_state(source_run_id)
         if state is None:
             raise ValueError("an active workflow run is required for candidate status updates")
@@ -568,6 +629,11 @@ class WorkflowOrchestrator:
 
     def sync_research_record(self, now: str) -> dict[str, object]:
         """Input: timestamp. Output: sync summary. Sync the active Research Record to knowledge raw."""
+        with _workflow_mutation_lock(self.paths.run_root):
+            return self._sync_research_record_unlocked(now)
+
+    def _sync_research_record_unlocked(self, now: str) -> dict[str, object]:
+        """Input: timestamp. Output: sync summary. Sync record while mutation lock is held."""
         state = self._active_state()
         if state is None:
             return {"active": False, "synced": False, "raw_path": ""}
