@@ -161,6 +161,28 @@ class CandidateQueueTests(unittest.TestCase):
         self.assertEqual(retry, first)
         self.assertEqual(after, before)
 
+    def test_api_submitted_status_cannot_be_reverted_or_free_daily_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.queue_two_candidates(root)
+            update_candidate_queue_status(
+                root, "c1", 1, "h1", "api_submitted", "2026-07-12T01:00:00Z"
+            )
+            path = root / "approved_candidates.jsonl"
+            before = path.read_bytes()
+
+            with self.assertRaisesRegex(ValueError, "api_submitted.*immutable"):
+                update_candidate_queue_status(
+                    root, "c1", 1, "h1", "queued", "2026-07-12T01:01:00Z"
+                )
+            with self.assertRaisesRegex(ValueError, "daily API submission limit"):
+                update_candidate_queue_status(
+                    root, "c2", 1, "h2", "api_submitted", "2026-07-12T01:02:00Z"
+                )
+            after = path.read_bytes()
+
+        self.assertEqual(after, before)
+
     def test_daily_api_submission_limit_allows_a_new_date(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

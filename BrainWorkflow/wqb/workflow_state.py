@@ -417,11 +417,6 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
             elif state is not None and state.status in TERMINAL_RUN_STATUSES:
                 pointer_issue = "active_run_terminal"
 
-    if pointer_state_issue:
-        return WorkflowStateDiscovery(
-            None, pointer_dir, pointer.get("run_id", ""), [pointer_state_issue]
-        )
-
     candidates: list[tuple[WorkflowRunState, Path, str, bool]] = []
     invalid_dirs: list[tuple[Path, str]] = []
     if root.exists():
@@ -438,8 +433,23 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
             if state is not None and state.status not in TERMINAL_RUN_STATUSES:
                 candidates.append((state, run_dir, issue, recovered_from_checkpoint))
     if len(candidates) > 1:
-        return WorkflowStateDiscovery(None, None, "", ["multiple_active_runs"])
+        diagnostics = ["multiple_active_runs"]
+        if pointer_state_issue:
+            diagnostics.insert(0, pointer_state_issue)
+        return WorkflowStateDiscovery(
+            None,
+            pointer_dir if pointer_state_issue else None,
+            pointer.get("run_id", "") if pointer_state_issue else "",
+            diagnostics,
+        )
     if candidates:
+        if pointer_state_issue.endswith("_with_events"):
+            return WorkflowStateDiscovery(
+                None,
+                pointer_dir,
+                pointer.get("run_id", ""),
+                [pointer_state_issue, "multiple_active_runs"],
+            )
         state, run_dir, state_issue, recovered_from_checkpoint = max(
             candidates,
             key=lambda candidate: (
@@ -455,6 +465,8 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
             and pointer.get("run_id", "") == state.run_id
         )
         diagnostics: list[str] = []
+        if pointer_state_issue:
+            diagnostics.append(pointer_state_issue)
         if not pointer_matches_state and pointer_issue:
             diagnostics.append(pointer_issue)
         if state_issue:
@@ -469,6 +481,10 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
     if invalid_dirs and pointer_issue == "active_run_missing":
         run_dir, issue = max(invalid_dirs, key=lambda item: item[0].name)
         return WorkflowStateDiscovery(None, run_dir, run_dir.name, [issue])
+    if pointer_state_issue:
+        return WorkflowStateDiscovery(
+            None, pointer_dir, pointer.get("run_id", ""), [pointer_state_issue]
+        )
     return WorkflowStateDiscovery(
         None, pointer_dir, pointer.get("run_id", ""), [pointer_issue] if pointer_issue else []
     )
@@ -524,6 +540,8 @@ def _recover_minimal_state_from_events(run_dir: Path) -> WorkflowRunState | None
     from wqb.workflow_events import read_workflow_events
 
     events = read_workflow_events(run_dir)
+    if any(event.event_type not in {"workflow_created", "objective_selected"} for event in events):
+        return None
     created = next((event for event in events if event.event_type == "workflow_created"), None)
     if created is None:
         return None

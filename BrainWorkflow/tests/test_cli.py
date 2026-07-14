@@ -3530,6 +3530,37 @@ class WorkflowOrchestratorCliTests(unittest.TestCase):
         orchestrator_cls.return_value.continue_once.assert_called_once_with("2026-07-12T00:01:00Z")
         self.assertEqual(json.loads(output.getvalue())["current_stage"], "schedule")
 
+    def test_workflow_request_candidate_approval_loads_json_and_dispatches(self):
+        from wqb.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            candidate_path = Path(tmp) / "candidates.json"
+            candidates = [{"candidate_id": "c1"}]
+            candidate_path.write_text(json.dumps(candidates), encoding="utf-8")
+            output = io.StringIO()
+            argv = [
+                "wqb", "workflow-request-candidate-approval", "--candidate-json", str(candidate_path),
+                "--now", "2026-07-12T00:01:00Z",
+            ]
+            with patch("sys.argv", argv), patch("wqb.cli.WorkflowOrchestrator") as orchestrator_cls, redirect_stdout(output):
+                orchestrator_cls.return_value.request_candidate_approval.return_value = {"status": "waiting_for_user"}
+                main()
+
+        orchestrator_cls.return_value.request_candidate_approval.assert_called_once_with(
+            candidates, "2026-07-12T00:01:00Z"
+        )
+        self.assertEqual(json.loads(output.getvalue())["status"], "waiting_for_user")
+
+    def test_workflow_request_candidate_approval_rejects_non_object_list_items(self):
+        from wqb.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            candidate_path = Path(tmp) / "candidates.json"
+            candidate_path.write_text(json.dumps(["c1"]), encoding="utf-8")
+            with patch("sys.argv", ["wqb", "workflow-request-candidate-approval", "--candidate-json", str(candidate_path)]):
+                with self.assertRaisesRegex(SystemExit, "list of objects"):
+                    main()
+
     def test_workflow_update_candidate_status_dispatches_through_orchestrator(self):
         from wqb.cli import main
 

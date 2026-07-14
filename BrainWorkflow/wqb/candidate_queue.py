@@ -200,6 +200,8 @@ def update_candidate_queue_status(
     updated = matches[0]
     if updated.get("status") == status:
         return updated
+    if updated.get("status") == "api_submitted":
+        raise ValueError("api_submitted status is immutable")
     if status == "api_submitted":
         requested_date = _timestamp_date(updated_at)
         submission_count = sum(

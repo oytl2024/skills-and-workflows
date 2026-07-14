@@ -290,6 +290,36 @@ class WorkflowOrchestrator:
                 now,
             )
             return self._summary(state)
+        if state.status == "running" and state.current_stage == "candidate_gate":
+            blocker = "candidate approval request required"
+            handoff_path = run_dir / "stages" / "candidate_gate" / "candidate_approval_request.json"
+            handoff_path.parent.mkdir(parents=True, exist_ok=True)
+            handoff_path.write_text(
+                json.dumps(
+                    {"run_id": state.run_id, "blocker": blocker, "requested_at": now},
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            state = transition_run_state(state, "paused", blocker)
+            state = self._set_stage(
+                state,
+                "candidate_gate",
+                "paused",
+                now,
+                evidence_paths=[str(handoff_path)],
+                blocker=blocker,
+            )
+            state = replace(state, next_action="workflow-request-candidate-approval")
+            write_run_state(run_dir / STATE_FILENAME, state)
+            append_workflow_event(
+                run_dir,
+                "candidate_approval_request_required",
+                {"stage": "candidate_gate", "blocker": blocker, "handoff_path": str(handoff_path)},
+                now,
+            )
+            return self._summary(state)
         if state.status == "running" and state.current_stage == "research_record_sync":
             return self.sync_research_record(now)
         return self._summary(state)
@@ -301,10 +331,17 @@ class WorkflowOrchestrator:
         state = self._active_state()
         if state is None:
             return {"active": False, "status": "none"}
-        if state.status != "running" or state.current_stage != "candidate_gate":
+        if state.current_stage != "candidate_gate" or state.status not in {"running", "paused"}:
             raise ValueError(
                 "candidate approval request requires the running candidate gate stage"
             )
+        if state.status == "paused" and state.stages["candidate_gate"].blocker != "candidate approval request required":
+            raise ValueError(
+                "candidate approval request requires the running candidate gate stage"
+            )
+        if state.status == "paused":
+            state = transition_run_state(state, "running", "")
+            state = self._set_stage(state, "candidate_gate", "running", now)
         state = self._reject_inconsistent_candidate_mutation(state, now)
         incomplete = [
             stage_name

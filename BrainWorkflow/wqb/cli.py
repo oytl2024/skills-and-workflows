@@ -3232,6 +3232,7 @@ def parse_args() -> argparse.Namespace:
             "workflow-resume",
             "workflow-abort",
             "workflow-approve-candidates",
+            "workflow-request-candidate-approval",
             "workflow-update-candidate-status",
         ],
     )
@@ -3302,6 +3303,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--approved-by", default="user")
     parser.add_argument("--candidate-version", type=int, default=None)
     parser.add_argument("--candidate-expression-hash", default="")
+    parser.add_argument("--candidate-json", default="")
     parser.add_argument("--candidate-status", choices=sorted(QUEUE_STATUSES), default="")
     parser.add_argument("--source-run-id", default="")
     return parser.parse_args()
@@ -3378,6 +3380,18 @@ def main() -> None:
             result = orchestrator.abort(args.reason, now)
         elif args.command == "workflow-approve-candidates":
             result = orchestrator.approve_candidates(args.candidate_id, now, args.approved_by)
+        elif args.command == "workflow-request-candidate-approval":
+            if not args.candidate_json:
+                raise SystemExit("--candidate-json is required for workflow-request-candidate-approval")
+            try:
+                candidates = json.loads(Path(args.candidate_json).read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise SystemExit(f"unable to load --candidate-json: {exc}") from exc
+            if not isinstance(candidates, list) or not all(
+                isinstance(candidate, dict) for candidate in candidates
+            ):
+                raise SystemExit("--candidate-json must contain a list of objects")
+            result = orchestrator.request_candidate_approval(candidates, now)
         else:
             if (
                 len(args.candidate_id) != 1

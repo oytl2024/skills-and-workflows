@@ -418,6 +418,58 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             [event.event_type for event in events].count("stage_completed"), 6
         )
 
+    def test_continue_once_pauses_candidate_gate_with_durable_approval_handoff(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            self.advance_to_candidate_gate(started)
+            run_dir = Path(str(started["run_dir"]))
+
+            summary = orchestrator.continue_once("2026-07-12T00:03:00Z")
+            state = load_run_state(run_dir / "run_state.json")
+            events = read_workflow_events(run_dir)
+            handoff_path = run_dir / "stages" / "candidate_gate" / "candidate_approval_request.json"
+            handoff_exists = handoff_path.exists()
+
+        self.assertEqual(summary["status"], "paused")
+        self.assertEqual(summary["next_action"], "workflow-request-candidate-approval")
+        self.assertEqual(state.stages["candidate_gate"].status, "paused")
+        self.assertIn("candidate approval request required", state.stages["candidate_gate"].blocker)
+        self.assertTrue(handoff_exists)
+        self.assertIn("candidate_approval_request_required", [event.event_type for event in events])
+
+    def test_status_and_continue_leave_progress_events_without_stale_state_rewrite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runs = root / "runs"
+            run_dir = runs / "run1"
+            run_dir.mkdir(parents=True)
+            state_path = run_dir / "run_state.json"
+            checkpoint_path = run_dir / "run_state_checkpoint.json"
+            state_path.write_text("{broken", encoding="utf-8")
+            checkpoint_path.write_text("{broken", encoding="utf-8")
+            append_workflow_event(
+                run_dir, "workflow_created",
+                {"run_id": "run1", "objective": "Power Pool", "created_at": "2026-07-12T00:00:00Z"},
+                "2026-07-12T00:00:00Z",
+            )
+            append_workflow_event(
+                run_dir, "stage_completed", {"stage": "schedule"}, "2026-07-12T00:01:00Z"
+            )
+            write_active_run(runs, "run1", run_dir)
+            before = state_path.read_bytes()
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+
+            status = orchestrator.status()
+            continued = orchestrator.continue_once("2026-07-12T00:02:00Z")
+            after = state_path.read_bytes()
+
+        self.assertEqual(after, before)
+        for summary in (status, continued):
+            self.assertEqual(summary["status"], "damaged")
+            self.assertIn("run_state_invalid_with_events", summary["diagnostics"])
+
     def test_continue_once_completes_research_record_sync_and_releases_active_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

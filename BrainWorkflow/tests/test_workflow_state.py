@@ -275,7 +275,7 @@ class WorkflowStateTests(unittest.TestCase):
         self.assertTrue(discovery.recovered)
         self.assertIn("run_state_recovered_from_checkpoint", discovery.diagnostics)
 
-    def test_discovery_recovers_minimal_state_from_valid_events_when_state_and_checkpoint_are_damaged(self):
+    def test_discovery_recovers_minimal_state_from_creation_event_when_state_and_checkpoint_are_damaged(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "runs"
             run_dir = root / "run1"
@@ -293,12 +293,6 @@ class WorkflowStateTests(unittest.TestCase):
                 },
                 "2026-07-12T00:00:00Z",
             )
-            append_workflow_event(
-                run_dir,
-                "stage_started",
-                {"stage": "schedule"},
-                "2026-07-12T00:01:00Z",
-            )
             write_active_run(root, "run1", run_dir)
 
             discovery = discover_active_workflow(root)
@@ -310,6 +304,54 @@ class WorkflowStateTests(unittest.TestCase):
         self.assertEqual(discovery.state.stages["objective_selected"].status, "completed")
         self.assertTrue(discovery.recovered)
         self.assertIn("run_state_recovered_from_events", discovery.diagnostics)
+
+    def test_discovery_keeps_damaged_state_when_events_prove_later_progress(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run_state.json").write_text("{broken", encoding="utf-8")
+            (run_dir / "run_state_checkpoint.json").write_text("{broken", encoding="utf-8")
+            append_workflow_event(
+                run_dir,
+                "workflow_created",
+                {"run_id": "run1", "objective": "Power Pool", "created_at": "2026-07-12T00:00:00Z"},
+                "2026-07-12T00:00:00Z",
+            )
+            append_workflow_event(
+                run_dir,
+                "stage_completed",
+                {"stage": "schedule"},
+                "2026-07-12T00:01:00Z",
+            )
+            write_active_run(root, "run1", run_dir)
+
+            discovery = discover_active_workflow(root)
+
+        self.assertIsNone(discovery.state)
+        self.assertEqual(discovery.run_dir, run_dir)
+        self.assertIn("run_state_invalid_with_events", discovery.diagnostics)
+
+    def test_discovery_recovers_valid_sibling_when_pointer_target_is_damaged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            damaged = root / "damaged"
+            sibling = root / "run1"
+            damaged.mkdir(parents=True)
+            sibling.mkdir()
+            (damaged / "run_state.json").write_text("{broken", encoding="utf-8")
+            (damaged / "run_state_checkpoint.json").write_text("{broken", encoding="utf-8")
+            write_run_state(
+                sibling / "run_state.json",
+                create_initial_state("run1", sibling, "Power Pool", "2026-07-12T00:00:00Z"),
+            )
+            write_active_run(root, "damaged", damaged)
+
+            discovery = discover_active_workflow(root)
+
+        self.assertEqual(discovery.state.run_id, "run1")
+        self.assertTrue(discovery.recovered)
+        self.assertIn("run_state_invalid", discovery.diagnostics)
 
     def test_discovery_rejects_checkpoint_with_mismatched_run_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
