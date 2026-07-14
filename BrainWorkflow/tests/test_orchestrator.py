@@ -160,26 +160,50 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             self.assertEqual(Path(str(result["run_dir"])).resolve().parent, (root / "runs").resolve())
             self.assertFalse(any(path.is_dir() for path in root.iterdir() if path.name.startswith("escaped-")))
 
-    def test_start_respects_existing_run_root_creation_lock_without_creating_run(self):
+    def test_start_respects_existing_run_root_mutation_lock_without_creating_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             runs = root / "runs"
             runs.mkdir()
-            (runs / "workflow_start.lock").write_text(
+            (runs / "workflow_mutation.lock").write_text(
                 json.dumps({"token": "other", "created_at": "9999999999"}),
                 encoding="utf-8",
             )
             orchestrator = WorkflowOrchestrator(self.paths(root))
 
-            with patch("wqb.orchestrator.WORKFLOW_START_LOCK_TIMEOUT_SECONDS", 0.01, create=True), patch(
-                "wqb.orchestrator.WORKFLOW_START_LOCK_SLEEP_SECONDS", 0.001, create=True
+            with patch("wqb.orchestrator.WORKFLOW_MUTATION_LOCK_TIMEOUT_SECONDS", 0.01, create=True), patch(
+                "wqb.orchestrator.WORKFLOW_MUTATION_LOCK_SLEEP_SECONDS", 0.001, create=True
             ):
-                with self.assertRaisesRegex(ValueError, "workflow start lock is busy"):
+                with self.assertRaisesRegex(ValueError, "workflow mutation lock is busy"):
                     orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
 
             run_dirs = [path for path in runs.iterdir() if path.is_dir()]
 
         self.assertEqual(run_dirs, [])
+
+    def test_status_respects_run_root_mutation_lock_without_repairing_pointer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            runs = root / "runs"
+            (runs / "active_run.json").unlink()
+            (runs / "workflow_mutation.lock").write_text(
+                json.dumps({"token": "other", "created_at": 9999999999}),
+                encoding="utf-8",
+            )
+
+            with patch("wqb.orchestrator.WORKFLOW_MUTATION_LOCK_TIMEOUT_SECONDS", 0.01, create=True), patch(
+                "wqb.orchestrator.WORKFLOW_MUTATION_LOCK_SLEEP_SECONDS", 0.001, create=True
+            ):
+                with self.assertRaisesRegex(ValueError, "workflow mutation lock is busy"):
+                    orchestrator.status()
+
+            active_exists = (runs / "active_run.json").exists()
+            run_state_exists = (Path(str(started["run_dir"])) / "run_state.json").exists()
+
+        self.assertFalse(active_exists)
+        self.assertTrue(run_state_exists)
 
     def test_continue_once_respects_run_root_mutation_lock_without_advancing_state(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -32,8 +32,8 @@ def exclusive_json_lock(
     token = f"{os.getpid()}-{time.time_ns()}"
     deadline = time.monotonic() + timeout_seconds
     acquired = False
-    while not acquired:
-        with json_lock_transition_guard(path, timeout_seconds, sleep_seconds, busy_message):
+    with json_lock_transition_guard(path, timeout_seconds, sleep_seconds, busy_message):
+        while not acquired:
             try:
                 fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except FileExistsError:
@@ -53,12 +53,12 @@ def exclusive_json_lock(
                         pass
                     raise
                 acquired = True
-        if not acquired:
-            time.sleep(sleep_seconds)
-    try:
-        yield
-    finally:
-        release_json_lock(path, token, timeout_seconds, sleep_seconds, busy_message)
+            if not acquired:
+                time.sleep(sleep_seconds)
+        try:
+            yield
+        finally:
+            release_json_lock_unlocked(path, token)
 
 
 @contextmanager
@@ -240,15 +240,21 @@ def release_json_lock(
     with json_lock_transition_guard(
         lock_path, timeout_seconds, sleep_seconds, busy_message
     ):
-        try:
-            payload = json.loads(lock_path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            return
-        if not isinstance(payload, dict) or str(payload.get("token", "")) != token:
-            return
-        try:
-            lock_path.unlink()
-        except FileNotFoundError:
-            pass
+        release_json_lock_unlocked(lock_path, token)
+
+
+def release_json_lock_unlocked(path: str | Path, token: str) -> None:
+    """Input: lock path and owner token. Output: none. Release lock while transition guard is held."""
+    lock_path = Path(path)
+    try:
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return
+    if not isinstance(payload, dict) or str(payload.get("token", "")) != token:
+        return
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        pass

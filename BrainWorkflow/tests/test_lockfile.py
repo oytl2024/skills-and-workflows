@@ -8,6 +8,31 @@ from wqb.lockfile import exclusive_json_lock
 
 
 class LockfileTests(unittest.TestCase):
+    def test_live_lock_holder_is_not_evicted_after_stale_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock_path = root / "api_submission_claims.lock"
+            nested_acquired = False
+
+            with exclusive_json_lock(lock_path, 0.1, 0.001, 0.001, "outer lock is busy"):
+                lock_path.write_text(
+                    json.dumps({"token": "old-live", "created_at": 1}),
+                    encoding="utf-8",
+                )
+                try:
+                    with exclusive_json_lock(
+                        lock_path,
+                        0.01,
+                        0.001,
+                        0.001,
+                        "nested lock is busy",
+                    ):
+                        nested_acquired = True
+                except ValueError:
+                    pass
+
+        self.assertFalse(nested_acquired)
+
     def test_stale_recovery_blocks_nested_acquire_during_rename_window(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -105,44 +105,53 @@ class WorkflowOrchestrator:
 
     def start(self, objective: str, selected_option_id: str, created_at: str) -> dict[str, object]:
         """Input: objective, option id, timestamp. Output: start summary. Create a formal workflow run."""
+        with _workflow_mutation_lock(self.paths.run_root):
+            return self._start_unlocked(objective, selected_option_id, created_at)
+
+    def _start_unlocked(self, objective: str, selected_option_id: str, created_at: str) -> dict[str, object]:
+        """Input: objective, option id, timestamp. Output: start summary. Create run under mutation lock."""
         self.paths.run_root.mkdir(parents=True, exist_ok=True)
-        with _workflow_start_lock(self.paths.run_root):
-            discovery = self._active_discovery()
-            if not self._start_is_allowed(discovery):
-                raise ValueError("an active workflow run already exists")
-            run_id = self._new_run_id(created_at)
-            resolved_run_root = self.paths.run_root.resolve()
-            run_dir = resolved_run_root / run_id
-            if Path(run_id).name != run_id or run_dir.resolve().parent != resolved_run_root:
-                raise ValueError("workflow run directory must be an immediate child of run_root")
-            run_dir.mkdir(parents=True, exist_ok=False)
-            manifest = {
-                "run_id": run_id,
-                "objective": str(objective),
-                "selected_option_id": str(selected_option_id),
-                "created_at": str(created_at),
-                "knowledge_root": str(self.paths.knowledge_root),
-            }
-            (run_dir / "run_manifest.json").write_text(
-                json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-            state = create_initial_state(run_id, run_dir, objective, created_at)
-            state = self._set_stage(
-                state,
-                "objective_selected",
-                "completed",
-                created_at,
-                current_stage="objective_selected",
-                last_completed_stage="objective_selected",
-            )
-            state = replace(state, next_action="workflow-continue")
-            write_run_state(run_dir / STATE_FILENAME, state)
-            append_workflow_event(run_dir, "workflow_created", manifest, created_at)
-            write_active_run(self.paths.run_root, run_id, run_dir)
-            return self._summary(state)
+        discovery = self._active_discovery()
+        if not self._start_is_allowed(discovery):
+            raise ValueError("an active workflow run already exists")
+        run_id = self._new_run_id(created_at)
+        resolved_run_root = self.paths.run_root.resolve()
+        run_dir = resolved_run_root / run_id
+        if Path(run_id).name != run_id or run_dir.resolve().parent != resolved_run_root:
+            raise ValueError("workflow run directory must be an immediate child of run_root")
+        run_dir.mkdir(parents=True, exist_ok=False)
+        manifest = {
+            "run_id": run_id,
+            "objective": str(objective),
+            "selected_option_id": str(selected_option_id),
+            "created_at": str(created_at),
+            "knowledge_root": str(self.paths.knowledge_root),
+        }
+        (run_dir / "run_manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        state = create_initial_state(run_id, run_dir, objective, created_at)
+        state = self._set_stage(
+            state,
+            "objective_selected",
+            "completed",
+            created_at,
+            current_stage="objective_selected",
+            last_completed_stage="objective_selected",
+        )
+        state = replace(state, next_action="workflow-continue")
+        write_run_state(run_dir / STATE_FILENAME, state)
+        append_workflow_event(run_dir, "workflow_created", manifest, created_at)
+        write_active_run(self.paths.run_root, run_id, run_dir)
+        return self._summary(state)
 
     def status(self) -> dict[str, object]:
         """Input: none. Output: status summary. Read active run state without chat context."""
+        with _workflow_mutation_lock(self.paths.run_root):
+            return self._status_unlocked()
+
+    def _status_unlocked(self) -> dict[str, object]:
+        """Input: none. Output: status summary. Read and repair status under mutation lock."""
         discovery = self._active_discovery()
         state = discovery.state
         if state is None:
