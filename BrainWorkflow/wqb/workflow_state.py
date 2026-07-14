@@ -400,7 +400,7 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
             pointer_issue = pointer_directory_issue
         else:
             state, issue = _load_discovery_state(root, pointer_dir)
-            if issue and issue != "run_state_missing":
+            if issue:
                 return WorkflowStateDiscovery(
                     None, pointer_dir, pointer.get("run_id", ""), [issue]
                 )
@@ -419,6 +419,8 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
                 invalid_dirs.append((run_dir, issue))
             if state is not None and state.status not in TERMINAL_RUN_STATUSES:
                 candidates.append((state, run_dir))
+    if len(candidates) > 1:
+        return WorkflowStateDiscovery(None, None, "", ["multiple_active_runs"])
     if candidates:
         state, run_dir = max(
             candidates,

@@ -1,3 +1,4 @@
+import csv
 import json
 import tempfile
 import unittest
@@ -22,6 +23,7 @@ from wqb.research_record import (
 from wqb.workflow_events import append_workflow_event, read_workflow_events
 from wqb.workflow_state import (
     WorkflowStageState,
+    create_initial_state,
     load_active_run,
     load_run_state,
     transition_run_state,
@@ -69,6 +71,36 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             updated_at="2026-07-12T00:02:00Z",
         )
         write_run_state(state_path, state)
+        self.persist_hard_pass_artifacts(run_dir)
+
+    def persist_hard_pass_artifacts(self, run_dir: Path) -> None:
+        """Input: run directory Path. Output: none. Write durable hard-pass evidence for test candidates."""
+        candidates = (
+            ("a1", "h1"),
+            ("a1", "h2"),
+            ("a2", "h2"),
+        )
+        with (run_dir / "candidates.csv").open("w", encoding="utf-8", newline="") as file:
+            writer = csv.DictWriter(file, fieldnames=("alpha_id", "expression_hash"))
+            writer.writeheader()
+            for alpha_id, expression_hash in candidates:
+                writer.writerow({"alpha_id": alpha_id, "expression_hash": expression_hash})
+        (run_dir / "all_alphas.jsonl").write_text(
+            "".join(
+                json.dumps(
+                    {
+                        "alpha_id": alpha_id,
+                        "expression_hash": expression_hash,
+                        "hard_pass": True,
+                        "failed": [],
+                        "pending": [],
+                    }
+                )
+                + "\n"
+                for alpha_id, expression_hash in candidates
+            ),
+            encoding="utf-8",
+        )
 
     def create_approved_candidate_run(
         self, root: Path
@@ -151,6 +183,49 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 orchestrator.start("Quality Pool", "option-2", "2026-07-12T00:01:00Z")
 
             self.assertEqual([path for path in (root / "runs").iterdir() if path.is_dir()], [run_dir])
+
+    def test_missing_canonical_active_state_stays_damaged_and_blocks_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runs = root / "runs"
+            run_dir = runs / "run1"
+            run_dir.mkdir(parents=True)
+            (runs / "active_run.json").write_text(
+                json.dumps({"run_id": "run1", "run_dir": str(run_dir)}), encoding="utf-8"
+            )
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+
+            status = orchestrator.status()
+            with self.assertRaisesRegex(ValueError, "active workflow"):
+                orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+
+            self.assertTrue(status["active"])
+            self.assertEqual(status["status"], "damaged")
+            self.assertIn("run_state_missing", status["diagnostics"])
+            self.assertTrue((runs / "active_run.json").exists())
+
+    def test_multiple_active_runs_remain_ambiguous_without_creating_a_pointer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runs = root / "runs"
+            for run_id in ("run1", "run2"):
+                run_dir = runs / run_id
+                run_dir.mkdir(parents=True)
+                write_run_state(
+                    run_dir / "run_state.json",
+                    create_initial_state(
+                        run_id, run_dir, "Power Pool", "2026-07-12T00:00:00Z"
+                    ),
+                )
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+
+            status = orchestrator.status()
+            with self.assertRaisesRegex(ValueError, "active workflow"):
+                orchestrator.start("Other", "option-2", "2026-07-12T00:01:00Z")
+
+            self.assertEqual(status["status"], "damaged")
+            self.assertIn("multiple_active_runs", status["diagnostics"])
+            self.assertFalse((runs / "active_run.json").exists())
 
     def test_abort_clears_canonical_pointer_to_terminal_state_idempotently(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -590,6 +665,79 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 orchestrator.request_candidate_approval(
                     [dict(base, hard_pass=True, source_run_id="other-run")], "2026-07-12T00:10:00Z"
                 )
+
+    def test_candidate_gate_rejects_caller_hard_pass_without_durable_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            self.advance_to_candidate_gate(started)
+            run_dir = Path(str(started["run_dir"]))
+            (run_dir / "candidates.csv").unlink()
+            (run_dir / "all_alphas.jsonl").unlink()
+            candidate = {
+                "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+                "expression_hash": "h1", "source_run_id": started["run_id"], "hard_pass": True,
+            }
+
+            with self.assertRaisesRegex(ValueError, "verified hard-pass"):
+                orchestrator.request_candidate_approval([candidate], "2026-07-12T00:10:00Z")
+
+            self.assertFalse((run_dir / "candidate_gate.json").exists())
+
+    def test_candidate_gate_accepts_matching_durable_hard_pass_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            self.advance_to_candidate_gate(started)
+            candidate = {
+                "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+                "expression_hash": "h1", "source_run_id": started["run_id"], "hard_pass": True,
+            }
+
+            result = orchestrator.request_candidate_approval([candidate], "2026-07-12T00:10:00Z")
+
+            self.assertEqual(result["status"], "waiting_for_user")
+
+    def test_candidate_gate_rejects_durable_hard_pass_identity_mismatches(self):
+        mismatches = (
+            {"expression_hash": "other-hash"},
+            {"platform_alpha_id": "other-alpha"},
+        )
+        for mismatch in mismatches:
+            with self.subTest(mismatch=mismatch), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                orchestrator = WorkflowOrchestrator(self.paths(root))
+                started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+                self.advance_to_candidate_gate(started)
+                run_dir = Path(str(started["run_dir"]))
+                candidate = {
+                    "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+                    "expression_hash": "h1", "source_run_id": started["run_id"], "hard_pass": True,
+                }
+                candidate.update(mismatch)
+
+                with self.assertRaisesRegex(ValueError, "verified hard-pass"):
+                    orchestrator.request_candidate_approval([candidate], "2026-07-12T00:10:00Z")
+
+                self.assertFalse((run_dir / "candidate_gate.json").exists())
+
+    def test_candidate_gate_requires_non_empty_candidate_identity_fields(self):
+        for field_name in ("candidate_id", "version"):
+            with self.subTest(field=field_name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                orchestrator = WorkflowOrchestrator(self.paths(root))
+                started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+                self.advance_to_candidate_gate(started)
+                candidate = {
+                    "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+                    "expression_hash": "h1", "source_run_id": started["run_id"], "hard_pass": True,
+                }
+                candidate[field_name] = ""
+
+                with self.assertRaisesRegex(ValueError, "candidate_id and version"):
+                    orchestrator.request_candidate_approval([candidate], "2026-07-12T00:10:00Z")
 
     def test_candidate_approval_rejects_empty_and_unknown_selection_without_leaving_wait(self):
         with tempfile.TemporaryDirectory() as tmp:

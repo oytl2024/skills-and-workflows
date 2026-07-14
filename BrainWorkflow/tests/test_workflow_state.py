@@ -191,6 +191,42 @@ class WorkflowStateTests(unittest.TestCase):
             self.assertIn("active_run_invalid", discovery.diagnostics)
             self.assertEqual(pointer_path.read_bytes(), before)
 
+    def test_discovery_reports_missing_state_for_canonical_active_pointer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            write_active_run(root, "run1", run_dir)
+            before = (root / "active_run.json").read_bytes()
+
+            discovery = discover_active_workflow(root)
+
+            self.assertIsNone(discovery.state)
+            self.assertEqual(discovery.run_dir, run_dir)
+            self.assertEqual(discovery.run_id, "run1")
+            self.assertEqual(discovery.diagnostics, ["run_state_missing"])
+            self.assertEqual((root / "active_run.json").read_bytes(), before)
+
+    def test_discovery_reports_multiple_nonterminal_runs_without_selecting_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            for run_id in ("run1", "run2"):
+                run_dir = root / run_id
+                run_dir.mkdir(parents=True)
+                write_run_state(
+                    run_dir / "run_state.json",
+                    create_initial_state(
+                        run_id, run_dir, "Power Pool", "2026-07-12T00:00:00Z"
+                    ),
+                )
+
+            discovery = discover_active_workflow(root)
+
+            self.assertIsNone(discovery.state)
+            self.assertIsNone(discovery.run_dir)
+            self.assertIn("multiple_active_runs", discovery.diagnostics)
+            self.assertFalse((root / "active_run.json").exists())
+
     def test_discovery_rejects_out_of_root_active_pointer_without_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "runs"

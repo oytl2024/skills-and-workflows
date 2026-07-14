@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+import csv
 import json
 from pathlib import Path
 from uuid import uuid4
@@ -107,11 +108,12 @@ class WorkflowOrchestrator:
         discovery = self._active_discovery()
         state = discovery.state
         if state is None:
+            damaged = self._discovery_is_damaged(discovery)
             return {
-                "active": discovery.run_dir is not None,
+                "active": discovery.run_dir is not None or damaged,
                 "run_id": discovery.run_id,
-                "status": "damaged" if discovery.run_dir is not None else "none",
-                "next_action": "workflow-start" if discovery.run_dir is None else "",
+                "status": "damaged" if damaged else "none",
+                "next_action": "" if damaged else "workflow-start",
                 "diagnostics": discovery.diagnostics,
                 "consistent": not discovery.diagnostics,
             }
@@ -274,9 +276,10 @@ class WorkflowOrchestrator:
         if not candidates:
             raise ValueError("at least one candidate is required for approval request")
         for candidate in candidates:
+            self._validate_candidate_gate_identity(candidate)
             if str(candidate.get("source_run_id", "")) != state.run_id:
                 raise ValueError("candidate source_run_id must match the active workflow run")
-            if not self._candidate_has_verified_hard_pass(candidate):
+            if not self._candidate_has_verified_hard_pass(state, candidate):
                 raise ValueError("candidate must carry verified hard-pass evidence")
         run_dir = Path(state.run_dir)
         record = self._load_or_create_research_record(state)
@@ -350,9 +353,10 @@ class WorkflowOrchestrator:
             raise ValueError(f"ambiguous candidate ID: {', '.join(ambiguous)}")
         selected = [candidates_by_id[candidate_id][0] for candidate_id in sorted(wanted)]
         for candidate in selected:
+            self._validate_candidate_gate_identity(candidate)
             if str(candidate.get("source_run_id", "")) != state.run_id:
                 raise ValueError("candidate source_run_id must match the active workflow run")
-            if not self._candidate_has_verified_hard_pass(candidate):
+            if not self._candidate_has_verified_hard_pass(state, candidate):
                 raise ValueError("candidate must carry verified hard-pass evidence")
             validate_candidate_approval(candidate, approved_at, approved_by)
         record = self._load_or_create_research_record(state)
@@ -675,15 +679,92 @@ class WorkflowOrchestrator:
             raise ValueError("workflow consistency diagnostics: " + ", ".join(diagnostics))
         return state
 
-    def _candidate_has_verified_hard_pass(self, candidate: dict[str, object]) -> bool:
-        """Input: candidate row. Output: bool. Accept explicit verified hard-pass evidence only."""
-        if candidate.get("hard_pass") is True:
-            return True
-        for field_name in ("check_result", "benchmark_result", "hard_check_result"):
-            evidence = candidate.get(field_name)
-            if isinstance(evidence, dict) and evidence.get("hard_pass") is True:
-                return True
-        return False
+    def _validate_candidate_gate_identity(self, candidate: dict[str, object]) -> None:
+        """Input: candidate row. Output: none. Require approval identity fields before candidate-gate writes."""
+        if not str(candidate.get("candidate_id", "")).strip() or not str(
+            candidate.get("version", "")
+        ).strip():
+            raise ValueError("candidate_id and version must be non-empty")
+
+    def _candidate_has_verified_hard_pass(
+        self, state: WorkflowRunState, candidate: dict[str, object]
+    ) -> bool:
+        """Input: active state and candidate row. Output: bool. Bind hard-pass eligibility to local run artifacts."""
+        if candidate.get("hard_pass") is False:
+            return False
+        alpha_id = str(
+            candidate.get("platform_alpha_id", candidate.get("alpha_id", ""))
+        ).strip()
+        expression_hash = str(candidate.get("expression_hash", "")).strip()
+        if not alpha_id or not expression_hash:
+            return False
+        run_dir = Path(state.run_dir)
+        csv_path = run_dir / "candidates.csv"
+        all_alphas_path = run_dir / "all_alphas.jsonl"
+        found_evidence = False
+        if csv_path.exists():
+            csv_rows = self._read_candidate_csv(csv_path)
+            if csv_rows is None or not any(
+                self._artifact_identity_matches(row, alpha_id, expression_hash)
+                for row in csv_rows
+            ):
+                return False
+            found_evidence = True
+        if all_alphas_path.exists():
+            alpha_rows = self._read_jsonl_rows(all_alphas_path)
+            matching_rows = [
+                row
+                for row in alpha_rows or []
+                if self._artifact_identity_matches(row, alpha_id, expression_hash)
+            ]
+            if (
+                alpha_rows is None
+                or not matching_rows
+                or any(
+                    row.get("hard_pass") is not True
+                    or bool(row.get("failed"))
+                    or bool(row.get("pending"))
+                    for row in matching_rows
+                )
+            ):
+                return False
+            found_evidence = True
+        return found_evidence
+
+    def _read_candidate_csv(self, path: Path) -> list[dict[str, str]] | None:
+        """Input: candidates CSV path. Output: rows or none. Read local candidate evidence without mutation."""
+        try:
+            with path.open("r", encoding="utf-8", newline="") as file:
+                return list(csv.DictReader(file))
+        except (OSError, csv.Error, UnicodeError):
+            return None
+
+    def _read_jsonl_rows(self, path: Path) -> list[dict[str, object]] | None:
+        """Input: JSONL artifact path. Output: object rows or none. Read durable alpha results without mutation."""
+        try:
+            rows: list[dict[str, object]] = []
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if not isinstance(row, dict):
+                    return None
+                rows.append(row)
+            return rows
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return None
+
+    def _artifact_identity_matches(
+        self, row: dict[str, object], alpha_id: str, expression_hash: str
+    ) -> bool:
+        """Input: artifact row, alpha id, expression hash. Output: bool. Compare durable alpha identity exactly."""
+        artifact_alpha_id = str(
+            row.get("alpha_id", row.get("platform_alpha_id", ""))
+        ).strip()
+        return (
+            artifact_alpha_id == alpha_id
+            and str(row.get("expression_hash", "")).strip() == expression_hash
+        )
 
     def _summary(
         self, state: WorkflowRunState, diagnostics: list[str] | None = None
@@ -704,11 +785,16 @@ class WorkflowOrchestrator:
 
     def _missing_state_summary(self, discovery: WorkflowStateDiscovery) -> dict[str, object]:
         """Input: discovery without state. Output: status summary. Expose damaged active state instead of hiding it."""
+        damaged = self._discovery_is_damaged(discovery)
         return {
-            "active": discovery.run_dir is not None,
+            "active": discovery.run_dir is not None or damaged,
             "run_id": discovery.run_id,
-            "status": "damaged" if discovery.run_dir is not None else "none",
-            "next_action": "workflow-start" if discovery.run_dir is None else "",
+            "status": "damaged" if damaged else "none",
+            "next_action": "" if damaged else "workflow-start",
             "diagnostics": discovery.diagnostics,
             "consistent": not discovery.diagnostics,
         }
+
+    def _discovery_is_damaged(self, discovery: WorkflowStateDiscovery) -> bool:
+        """Input: discovery result. Output: bool. Distinguish absent pointers from damaged or ambiguous workflows."""
+        return discovery.run_dir is not None or discovery.diagnostics not in ([], ["active_run_missing"])
