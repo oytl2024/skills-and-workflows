@@ -9,6 +9,7 @@ from wqb.workflow_contract import LEGAL_RUN_TRANSITIONS, RUN_STATUSES, STAGE_NAM
 
 
 STATE_FILENAME = "run_state.json"
+STATE_CHECKPOINT_FILENAME = "run_state_checkpoint.json"
 ACTIVE_RUN_FILENAME = "active_run.json"
 TERMINAL_RUN_STATUSES = {"completed", "completed_with_warnings", "aborted"}
 STAGES_REQUIRING_EVIDENCE = {
@@ -179,13 +180,20 @@ def _state_from_dict(row: dict[str, Any]) -> WorkflowRunState:
 
 
 def write_run_state(path: str | Path, state: WorkflowRunState) -> Path:
-    """Input: path and state. Output: written path. Atomically write official run state."""
+    """Input: path and state. Output: written path. Atomically write checkpoint then official run state."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    temp = target.with_suffix(target.suffix + ".tmp")
-    temp.write_text(json.dumps(_state_to_dict(state), ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-    temp.replace(target)
+    payload = json.dumps(_state_to_dict(state), ensure_ascii=False, indent=2, sort_keys=True)
+    _write_state_payload(target.parent / STATE_CHECKPOINT_FILENAME, payload)
+    _write_state_payload(target, payload)
     return target
+
+
+def _write_state_payload(target: Path, payload: str) -> None:
+    """Input: target Path and JSON payload. Output: none. Atomically persist one durable state artifact."""
+    temp = target.with_suffix(target.suffix + ".tmp")
+    temp.write_text(payload, encoding="utf-8")
+    temp.replace(target)
 
 
 def load_run_state(path: str | Path) -> WorkflowRunState:
@@ -392,6 +400,7 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
         pointer_issue = "active_run_missing"
 
     pointer_dir = Path(pointer.get("run_dir", "")) if pointer.get("run_dir") else None
+    pointer_state_issue = ""
     if pointer_dir is not None:
         pointer_directory_issue = _active_pointer_directory_issue(
             root, pointer.get("run_id", ""), pointer_dir
@@ -399,30 +408,34 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
         if pointer_directory_issue:
             pointer_issue = pointer_directory_issue
         else:
-            state, issue = _load_discovery_state(root, pointer_dir)
-            if issue:
-                return WorkflowStateDiscovery(
-                    None, pointer_dir, pointer.get("run_id", ""), [issue]
-                )
-            if state is not None and state.status not in TERMINAL_RUN_STATUSES:
-                return WorkflowStateDiscovery(state, pointer_dir, state.run_id, [])
-            pointer_issue = "active_run_terminal"
+            state, issue, _ = _load_discovery_state(root, pointer_dir)
+            if issue and issue != "run_state_recovered_from_checkpoint":
+                pointer_state_issue = issue
+            elif state is not None and state.status in TERMINAL_RUN_STATUSES:
+                pointer_issue = "active_run_terminal"
 
-    candidates: list[tuple[WorkflowRunState, Path]] = []
+    if pointer_state_issue:
+        return WorkflowStateDiscovery(
+            None, pointer_dir, pointer.get("run_id", ""), [pointer_state_issue]
+        )
+
+    candidates: list[tuple[WorkflowRunState, Path, str, bool]] = []
     invalid_dirs: list[tuple[Path, str]] = []
     if root.exists():
         for run_dir in root.iterdir():
             if not run_dir.is_dir():
                 continue
-            state, issue = _load_discovery_state(root, run_dir)
-            if issue and issue != "run_state_missing":
+            state, issue, recovered_from_checkpoint = _load_discovery_state(root, run_dir)
+            if issue and issue not in {
+                "run_state_missing", "run_state_recovered_from_checkpoint"
+            }:
                 invalid_dirs.append((run_dir, issue))
             if state is not None and state.status not in TERMINAL_RUN_STATUSES:
-                candidates.append((state, run_dir))
+                candidates.append((state, run_dir, issue, recovered_from_checkpoint))
     if len(candidates) > 1:
         return WorkflowStateDiscovery(None, None, "", ["multiple_active_runs"])
     if candidates:
-        state, run_dir = max(
+        state, run_dir, state_issue, recovered_from_checkpoint = max(
             candidates,
             key=lambda candidate: (
                 candidate[0].updated_at or candidate[0].created_at,
@@ -430,11 +443,30 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
                 candidate[1].name,
             ),
         )
-        return WorkflowStateDiscovery(state, run_dir, state.run_id, [pointer_issue] if pointer_issue else [], True)
+        pointer_matches_state = (
+            not pointer_issue
+            and pointer_dir is not None
+            and pointer_dir.resolve() == run_dir.resolve()
+            and pointer.get("run_id", "") == state.run_id
+        )
+        diagnostics: list[str] = []
+        if not pointer_matches_state and pointer_issue:
+            diagnostics.append(pointer_issue)
+        if state_issue:
+            diagnostics.append(state_issue)
+        return WorkflowStateDiscovery(
+            state,
+            run_dir,
+            state.run_id,
+            diagnostics,
+            recovered_from_checkpoint or not pointer_matches_state,
+        )
     if invalid_dirs and pointer_issue == "active_run_missing":
         run_dir, issue = max(invalid_dirs, key=lambda item: item[0].name)
         return WorkflowStateDiscovery(None, run_dir, run_dir.name, [issue])
-    return WorkflowStateDiscovery(None, pointer_dir, pointer.get("run_id", ""), [pointer_issue] if pointer_issue else [])
+    return WorkflowStateDiscovery(
+        None, pointer_dir, pointer.get("run_id", ""), [pointer_issue] if pointer_issue else []
+    )
 
 
 def _active_pointer_directory_issue(root: Path, run_id: str, run_dir: Path) -> str:
@@ -450,23 +482,30 @@ def _active_pointer_directory_issue(root: Path, run_id: str, run_dir: Path) -> s
     return ""
 
 
-def _load_discovery_state(root: Path, run_dir: Path) -> tuple[WorkflowRunState | None, str]:
+def _load_discovery_state(root: Path, run_dir: Path) -> tuple[WorkflowRunState | None, str, bool]:
     """Input: run directory. Output: state and issue code. Load one state for read-only discovery."""
     root_path = root.resolve()
     run_path = run_dir.resolve()
     try:
         run_path.relative_to(root_path)
     except ValueError:
-        return None, "run_directory_outside_run_root"
+        return None, "run_directory_outside_run_root", False
     path = run_dir / STATE_FILENAME
     if not path.exists():
-        return None, "run_state_missing"
+        return None, "run_state_missing", False
+    recovered_from_checkpoint = False
     try:
         state = load_run_state(path)
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-        return None, "run_state_invalid"
+        try:
+            state = load_run_state(run_dir / STATE_CHECKPOINT_FILENAME)
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            return None, "run_state_invalid", False
+        recovered_from_checkpoint = True
     if state.run_id != run_dir.name:
-        return None, "run_state_run_id_mismatch"
+        return None, "run_state_run_id_mismatch", False
     if Path(state.run_dir).resolve() != run_path:
-        return None, "run_state_run_dir_mismatch"
-    return state, ""
+        return None, "run_state_run_dir_mismatch", False
+    if recovered_from_checkpoint:
+        return state, "run_state_recovered_from_checkpoint", True
+    return state, "", False

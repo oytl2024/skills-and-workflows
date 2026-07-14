@@ -97,6 +97,9 @@ def record_candidate_gate(record: ResearchRecord, candidate: dict[str, object], 
     row = dict(candidate)
     row["decision"] = str(decision)
     row["reasons"] = [str(item) for item in reasons]
+    identity = _candidate_gate_identity(row)
+    if any(_candidate_gate_identity(existing) == identity for existing in record.candidate_gate):
+        return record
     return replace(record, candidate_gate=[*record.candidate_gate, row])
 
 
@@ -152,6 +155,11 @@ def _candidate_identity(row: dict[str, object]) -> tuple[str, str, str, str, str
         str(row.get("expression_hash", "")),
         str(row.get("source_run_id", "")),
     )
+
+
+def _candidate_gate_identity(row: dict[str, object]) -> tuple[str, str, str, str, str, str]:
+    """Input: candidate-gate row. Output: full gate identity. Include decision for idempotent gate records."""
+    return (*_candidate_identity(row), str(row.get("decision", "")))
 
 
 def write_research_record(path: str | Path, record: ResearchRecord) -> Path:

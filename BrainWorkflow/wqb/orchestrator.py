@@ -573,7 +573,7 @@ class WorkflowOrchestrator:
         return state
 
     def _active_discovery(self) -> WorkflowStateDiscovery:
-        """Input: none. Output: discovery result. Durably repair only the active pointer when recovery succeeds."""
+        """Input: none. Output: discovery result. Repair official state and pointer only after read-only recovery."""
         discovery = discover_active_workflow(self.paths.run_root)
         if (
             discovery.state is None
@@ -583,6 +583,8 @@ class WorkflowOrchestrator:
             clear_active_run(self.paths.run_root)
             return WorkflowStateDiscovery(None, None, "", [])
         if discovery.state is not None and discovery.run_dir is not None and discovery.recovered:
+            if "run_state_recovered_from_checkpoint" in discovery.diagnostics:
+                write_run_state(discovery.run_dir / STATE_FILENAME, discovery.state)
             write_active_run(self.paths.run_root, discovery.state.run_id, discovery.run_dir)
             return WorkflowStateDiscovery(
                 discovery.state,

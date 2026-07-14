@@ -227,6 +227,78 @@ class WorkflowStateTests(unittest.TestCase):
             self.assertIn("multiple_active_runs", discovery.diagnostics)
             self.assertFalse((root / "active_run.json").exists())
 
+    def test_discovery_reports_sibling_active_run_despite_valid_pointer_without_writes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dirs = {}
+            for run_id in ("run1", "run2"):
+                run_dir = root / run_id
+                run_dir.mkdir(parents=True)
+                run_dirs[run_id] = run_dir
+                write_run_state(
+                    run_dir / "run_state.json",
+                    create_initial_state(
+                        run_id, run_dir, "Power Pool", "2026-07-12T00:00:00Z"
+                    ),
+                )
+            write_active_run(root, "run1", run_dirs["run1"])
+            pointer_before = (root / "active_run.json").read_bytes()
+
+            discovery = discover_active_workflow(root)
+            pointer_unchanged = (root / "active_run.json").read_bytes() == pointer_before
+
+        self.assertIsNone(discovery.state)
+        self.assertIsNone(discovery.run_dir)
+        self.assertIn("multiple_active_runs", discovery.diagnostics)
+        self.assertTrue(pointer_unchanged)
+
+    def test_write_state_creates_checkpoint_and_discovery_recovers_damaged_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            state_path = run_dir / "run_state.json"
+            state = create_initial_state(
+                "run1", run_dir, "Power Pool", "2026-07-12T00:00:00Z"
+            )
+            write_run_state(state_path, state)
+            checkpoint_path = run_dir / "run_state_checkpoint.json"
+            checkpoint_state = load_run_state(checkpoint_path)
+            state_path.write_text("{broken", encoding="utf-8")
+            write_active_run(root, "run1", run_dir)
+
+            discovery = discover_active_workflow(root)
+
+        self.assertEqual(checkpoint_state, state)
+        self.assertEqual(discovery.state, state)
+        self.assertTrue(discovery.recovered)
+        self.assertIn("run_state_recovered_from_checkpoint", discovery.diagnostics)
+
+    def test_discovery_rejects_checkpoint_with_mismatched_run_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            state_path = run_dir / "run_state.json"
+            write_run_state(
+                state_path,
+                create_initial_state(
+                    "run1", run_dir, "Power Pool", "2026-07-12T00:00:00Z"
+                ),
+            )
+            checkpoint_path = run_dir / "run_state_checkpoint.json"
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            checkpoint["run_id"] = "other-run"
+            checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+            state_path.write_text("{broken", encoding="utf-8")
+            write_active_run(root, "run1", run_dir)
+
+            discovery = discover_active_workflow(root)
+
+        self.assertIsNone(discovery.state)
+        self.assertFalse(discovery.recovered)
+        self.assertIn("run_state_run_id_mismatch", discovery.diagnostics)
+
     def test_discovery_rejects_out_of_root_active_pointer_without_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "runs"

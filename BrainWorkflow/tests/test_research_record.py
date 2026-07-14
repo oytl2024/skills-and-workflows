@@ -88,6 +88,26 @@ class ResearchRecordTests(unittest.TestCase):
         self.assertIn("# Research Record", markdown)
         self.assertIn("ready_for_approval", markdown)
 
+    def test_candidate_gate_is_idempotent_by_full_identity_and_decision(self):
+        record = empty_research_record("run1", "Power Pool")
+        candidate = {
+            "candidate_id": "c1",
+            "platform_alpha_id": "a1",
+            "version": 1,
+            "expression_hash": "h1",
+            "source_run_id": "run1",
+        }
+
+        record = record_candidate_gate(
+            record, candidate, "ready_for_approval", ["first reason"]
+        )
+        record = record_candidate_gate(
+            record, candidate, "ready_for_approval", ["retry reason"]
+        )
+
+        self.assertEqual(len(record.candidate_gate), 1)
+        self.assertEqual(record.candidate_gate[0]["reasons"], ["first reason"])
+
     def test_write_load_and_sync_to_raw(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

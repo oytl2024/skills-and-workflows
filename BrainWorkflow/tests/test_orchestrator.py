@@ -17,6 +17,7 @@ from wqb.research_record import (
     empty_research_record,
     load_research_record,
     record_approval,
+    record_candidate_gate,
     record_queue_update,
     write_research_record,
 )
@@ -27,6 +28,7 @@ from wqb.workflow_state import (
     load_active_run,
     load_run_state,
     transition_run_state,
+    write_active_run,
     write_run_state,
 )
 
@@ -773,6 +775,58 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "active workflow"):
                 orchestrator.start("Other", "option-2", "2026-07-12T00:01:00Z")
 
+    def test_orchestrator_surfaces_pointer_sibling_ambiguity_without_rewriting_pointer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runs = root / "runs"
+            for run_id in ("run1", "run2"):
+                run_dir = runs / run_id
+                run_dir.mkdir(parents=True)
+                write_run_state(
+                    run_dir / "run_state.json",
+                    create_initial_state(
+                        run_id, run_dir, "Power Pool", "2026-07-12T00:00:00Z"
+                    ),
+                )
+            write_active_run(runs, "run1", runs / "run1")
+            pointer_before = (runs / "active_run.json").read_bytes()
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+
+            status = orchestrator.status()
+            resumed = orchestrator.resume("2026-07-12T00:01:00Z")
+            continued = orchestrator.continue_once("2026-07-12T00:02:00Z")
+            with self.assertRaisesRegex(ValueError, "active workflow"):
+                orchestrator.start("Other", "option-2", "2026-07-12T00:03:00Z")
+            pointer_unchanged = (runs / "active_run.json").read_bytes() == pointer_before
+
+        for summary in (status, resumed, continued):
+            self.assertIn("multiple_active_runs", summary["diagnostics"])
+        self.assertTrue(pointer_unchanged)
+
+    def test_candidate_gate_retry_after_research_record_write_does_not_duplicate_gate_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            candidate = {
+                "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+                "expression_hash": "h1", "source_run_id": started["run_id"], "hard_pass": True,
+            }
+            self.advance_to_candidate_gate(started)
+            run_dir = Path(started["run_dir"])
+            record = record_candidate_gate(
+                empty_research_record(str(started["run_id"]), "Power Pool"),
+                candidate,
+                "ready_for_approval",
+                ["hard checks passed"],
+            )
+            write_research_record(run_dir / "research_record.json", record)
+
+            orchestrator.request_candidate_approval([candidate], "2026-07-12T00:03:00Z")
+            recovered = load_research_record(run_dir / "research_record.json")
+
+        self.assertEqual(len(recovered.candidate_gate), 1)
+
     def test_status_exposes_and_pauses_on_consistency_diagnostics(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -824,6 +878,29 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertIn("run_state_invalid", continued["diagnostics"])
         self.assertTrue(resumed["active"])
         self.assertIn("run_state_invalid", resumed["diagnostics"])
+
+    def test_status_and_resume_recover_checkpointed_active_state_and_repair_official_state(self):
+        for method_name in ("status", "resume"):
+            with self.subTest(method=method_name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                orchestrator = WorkflowOrchestrator(self.paths(root))
+                started = orchestrator.start(
+                    "Power Pool", "option-1", "2026-07-12T00:00:00Z"
+                )
+                state_path = Path(started["run_dir"]) / "run_state.json"
+                checkpoint_state = load_run_state(
+                    Path(started["run_dir"]) / "run_state_checkpoint.json"
+                )
+                state_path.write_text("{broken", encoding="utf-8")
+
+                if method_name == "status":
+                    summary = orchestrator.status()
+                else:
+                    summary = orchestrator.resume("2026-07-12T00:01:00Z")
+                repaired = load_run_state(state_path)
+
+                self.assertEqual(summary["status"], "created")
+                self.assertEqual(repaired, checkpoint_state)
 
     def test_stage_state_tracks_schedule_and_candidate_transitions(self):
         with tempfile.TemporaryDirectory() as tmp:
