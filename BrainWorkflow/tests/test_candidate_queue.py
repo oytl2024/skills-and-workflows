@@ -24,6 +24,18 @@ class CandidateQueueTests(unittest.TestCase):
             "sharpe": 1.4,
         }
 
+    def queue_two_candidates(self, root: Path) -> None:
+        """Input: queue root Path. Output: none. Persist two distinct queued candidates for status tests."""
+        first = approve_candidate(root, self.candidate(), "2026-07-12T00:00:00Z", "user")
+        second = approve_candidate(
+            root,
+            dict(self.candidate(), candidate_id="c2", platform_alpha_id="a2", expression_hash="h2"),
+            "2026-07-12T00:00:00Z",
+            "user",
+        )
+        queue_approved_candidate(root, first)
+        queue_approved_candidate(root, second)
+
     def test_approval_and_queue_require_source_run_id(self):
         candidate = dict(self.candidate(), source_run_id="")
         with tempfile.TemporaryDirectory() as tmp:
@@ -101,6 +113,67 @@ class CandidateQueueTests(unittest.TestCase):
 
         self.assertEqual(updated["status"], "manually_submitted")
         self.assertEqual(rows[0]["status"], "manually_submitted")
+
+    def test_first_daily_api_submission_succeeds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.queue_two_candidates(root)
+            updated = update_candidate_queue_status(
+                root, "c1", 1, "h1", "api_submitted", "2026-07-12T01:00:00Z"
+            )
+
+        self.assertEqual(updated["status"], "api_submitted")
+        self.assertEqual(updated["updated_at"], "2026-07-12T01:00:00Z")
+
+    def test_second_daily_api_submission_is_rejected_without_rewriting_queue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.queue_two_candidates(root)
+            update_candidate_queue_status(
+                root, "c1", 1, "h1", "api_submitted", "2026-07-12T01:00:00Z"
+            )
+            path = root / "approved_candidates.jsonl"
+            before = path.read_bytes()
+
+            with self.assertRaisesRegex(ValueError, "daily API submission limit"):
+                update_candidate_queue_status(
+                    root, "c2", 1, "h2", "api_submitted", "2026-07-12T02:00:00Z"
+                )
+
+            after = path.read_bytes()
+
+        self.assertEqual(after, before)
+
+    def test_same_daily_api_submission_retry_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.queue_two_candidates(root)
+            first = update_candidate_queue_status(
+                root, "c1", 1, "h1", "api_submitted", "2026-07-12T01:00:00Z"
+            )
+            path = root / "approved_candidates.jsonl"
+            before = path.read_bytes()
+            retry = update_candidate_queue_status(
+                root, "c1", 1, "h1", "api_submitted", "2026-07-12T01:01:00Z"
+            )
+            after = path.read_bytes()
+
+        self.assertEqual(retry, first)
+        self.assertEqual(after, before)
+
+    def test_daily_api_submission_limit_allows_a_new_date(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.queue_two_candidates(root)
+            update_candidate_queue_status(
+                root, "c1", 1, "h1", "api_submitted", "2026-07-12T01:00:00Z"
+            )
+            updated = update_candidate_queue_status(
+                root, "c2", 1, "h2", "api_submitted", "2026-07-13T01:00:00Z"
+            )
+
+        self.assertEqual(updated["status"], "api_submitted")
+        self.assertEqual(updated["updated_at"], "2026-07-13T01:00:00Z")
 
     def test_retry_recovers_from_one_incomplete_trailing_jsonl_row(self):
         with tempfile.TemporaryDirectory() as tmp:

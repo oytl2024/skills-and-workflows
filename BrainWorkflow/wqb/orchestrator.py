@@ -562,10 +562,13 @@ class WorkflowOrchestrator:
         state_path = self.paths.run_root / selector / STATE_FILENAME
         if not state_path.exists():
             raise ValueError(f"source workflow run not found: {selector}")
+        resolved_run_root = self.paths.run_root.resolve()
+        selected_run_dir = state_path.parent.resolve()
+        if selected_run_dir != resolved_run_root / selector:
+            raise ValueError("source_run_id resolves outside run_root")
         state = load_run_state(state_path)
         if state.run_id != selector:
             raise ValueError("source_run_id does not match the selected workflow state")
-        selected_run_dir = state_path.parent.resolve()
         if Path(state.run_dir).resolve() != selected_run_dir:
             raise ValueError("selected workflow state run_dir does not match its directory")
         if state.status not in {"completed", "completed_with_warnings"}:

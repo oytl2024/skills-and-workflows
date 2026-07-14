@@ -10,6 +10,7 @@ from wqb.workflow_contract import APPROVAL_REQUIRED_FIELDS
 APPROVAL_FILENAME = "approval.jsonl"
 QUEUE_FILENAME = "approved_candidates.jsonl"
 QUEUE_STATUSES = {"queued", "manually_submitted", "api_submitted", "skipped", "invalidated"}
+DAILY_API_SUBMISSION_LIMIT = 1
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -129,6 +130,11 @@ def _status_identity(row: dict[str, object]) -> tuple[str, int, str]:
     return (str(row.get("candidate_id", "")), version, str(row.get("expression_hash", "")))
 
 
+def _timestamp_date(timestamp: object) -> str:
+    """Input: timestamp value. Output: calendar-date string. Extract the durable daily-limit bucket."""
+    return str(timestamp).strip().split("T", 1)[0]
+
+
 def queue_approved_candidate(run_dir: str | Path, approval: dict[str, object]) -> dict[str, object]:
     """Input: run dir and approval. Output: queue row. Add one approved candidate if not already queued."""
     if not str(approval.get("source_run_id", "")).strip():
@@ -173,7 +179,7 @@ def update_candidate_queue_status(
     if status not in QUEUE_STATUSES:
         raise ValueError(f"unsupported queue status: {status}")
     path = Path(run_dir) / QUEUE_FILENAME
-    rows = _read_jsonl(path, repair_trailing=True)
+    rows = _read_jsonl(path)
     target = (str(candidate_id), int(version), str(expression_hash))
     matches = [row for row in rows if _status_identity(row) == target]
     if not matches:
@@ -183,6 +189,16 @@ def update_candidate_queue_status(
     updated = matches[0]
     if updated.get("status") == status:
         return updated
+    if status == "api_submitted":
+        requested_date = _timestamp_date(updated_at)
+        submission_count = sum(
+            1
+            for row in rows
+            if row.get("status") == "api_submitted"
+            and _timestamp_date(row.get("updated_at", "")) == requested_date
+        )
+        if submission_count >= DAILY_API_SUBMISSION_LIMIT:
+            raise ValueError("daily API submission limit reached")
     updated["status"] = status
     updated["updated_at"] = str(updated_at)
     _write_jsonl(path, rows)

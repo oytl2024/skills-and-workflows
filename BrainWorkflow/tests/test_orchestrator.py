@@ -1311,6 +1311,30 @@ class WorkflowOrchestratorTests(unittest.TestCase):
 
             self.assertEqual(self.candidate_artifact_bytes(run_dir), before)
 
+    def test_source_run_selector_rejects_resolved_path_outside_run_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator, started = self.create_approved_candidate_run(root)
+            orchestrator.sync_research_record("2026-07-12T00:03:00Z")
+            selected_run_dir = Path(started["run_dir"])
+            external_run_dir = root / "external-run"
+            external_run_dir.mkdir()
+            resolve = Path.resolve
+
+            def resolve_with_external_selected_path(path, *args, **kwargs):
+                """Input: Path and resolve args. Output: resolved Path. Model an unavailable symlink/junction."""
+                if path == selected_run_dir:
+                    return external_run_dir
+                return resolve(path, *args, **kwargs)
+
+            with patch(
+                "wqb.orchestrator.Path.resolve",
+                autospec=True,
+                side_effect=resolve_with_external_selected_path,
+            ):
+                with self.assertRaisesRegex(ValueError, "outside run_root"):
+                    orchestrator._candidate_status_state(str(started["run_id"]))
+
     def test_source_run_selector_rejects_cross_run_artifact_identities_without_mutation(self):
         corruptions = (
             "research_record",
