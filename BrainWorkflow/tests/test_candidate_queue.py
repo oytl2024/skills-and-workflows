@@ -218,6 +218,37 @@ class CandidateQueueTests(unittest.TestCase):
         self.assertEqual(claim["candidate_id"], "c1")
         self.assertFalse(lock_path.exists())
 
+    def test_api_submission_claim_does_not_delete_replacement_lock_during_stale_recovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock_path = root / API_SUBMISSION_CLAIMS_LOCK_FILENAME
+            lock_path.write_text(json.dumps({"token": "stale", "created_at": 1}), encoding="utf-8")
+            os.utime(lock_path, (1, 1))
+            replaced = False
+
+            def replace_lock_during_stale_check(path: Path, now_seconds: float) -> bool:
+                """Input: lock path and epoch seconds. Output: bool. Simulate a competing fresh lock."""
+                nonlocal replaced
+                if not replaced:
+                    replaced = True
+                    path.write_text(
+                        json.dumps({"token": "fresh", "created_at": now_seconds}),
+                        encoding="utf-8",
+                    )
+                    return True
+                return False
+
+            with patch("wqb.candidate_queue._api_submission_lock_is_stale", side_effect=replace_lock_during_stale_check), patch(
+                "wqb.candidate_queue.API_SUBMISSION_LOCK_TIMEOUT_SECONDS", 0.01
+            ), patch("wqb.candidate_queue.API_SUBMISSION_LOCK_SLEEP_SECONDS", 0.001):
+                with self.assertRaisesRegex(ValueError, "API submission claim lock is busy"):
+                    claim_api_submission_slot(
+                        root, self.candidate(), "2026-07-12T01:00:00Z"
+                    )
+            payload = json.loads(lock_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["token"], "fresh")
+
     def test_retry_recovers_from_one_incomplete_trailing_jsonl_row(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

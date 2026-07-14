@@ -160,6 +160,27 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             self.assertEqual(Path(str(result["run_dir"])).resolve().parent, (root / "runs").resolve())
             self.assertFalse(any(path.is_dir() for path in root.iterdir() if path.name.startswith("escaped-")))
 
+    def test_start_respects_existing_run_root_creation_lock_without_creating_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runs = root / "runs"
+            runs.mkdir()
+            (runs / "workflow_start.lock").write_text(
+                json.dumps({"token": "other", "created_at": "9999999999"}),
+                encoding="utf-8",
+            )
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+
+            with patch("wqb.orchestrator.WORKFLOW_START_LOCK_TIMEOUT_SECONDS", 0.01, create=True), patch(
+                "wqb.orchestrator.WORKFLOW_START_LOCK_SLEEP_SECONDS", 0.001, create=True
+            ):
+                with self.assertRaisesRegex(ValueError, "workflow start lock is busy"):
+                    orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+
+            run_dirs = [path for path in runs.iterdir() if path.is_dir()]
+
+        self.assertEqual(run_dirs, [])
+
     def test_start_rejects_malformed_active_run_pointer(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
