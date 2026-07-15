@@ -205,7 +205,7 @@ class CandidateQueueTests(unittest.TestCase):
             path = root / "approved_candidates.jsonl"
             before = path.read_bytes()
 
-            with self.assertRaisesRegex(ValueError, "api_submitted.*immutable"):
+            with self.assertRaisesRegex(ValueError, "submitted.*immutable"):
                 update_candidate_queue_status(
                     root, "c1", 1, "h1", "queued", "2026-07-12T01:01:00Z"
                 )
@@ -215,6 +215,32 @@ class CandidateQueueTests(unittest.TestCase):
                 )
             after = path.read_bytes()
 
+        self.assertEqual(after, before)
+
+    def test_manually_submitted_status_cannot_be_reverted_or_promoted_to_api(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.queue_two_candidates(root)
+            first = update_candidate_queue_status(
+                root, "c1", 1, "h1", "manually_submitted", "2026-07-12T01:00:00Z"
+            )
+            path = root / "approved_candidates.jsonl"
+            before = path.read_bytes()
+            retry = update_candidate_queue_status(
+                root, "c1", 1, "h1", "manually_submitted", "2026-07-12T01:01:00Z"
+            )
+
+            with self.assertRaisesRegex(ValueError, "submitted.*immutable"):
+                update_candidate_queue_status(
+                    root, "c1", 1, "h1", "queued", "2026-07-12T01:02:00Z"
+                )
+            with self.assertRaisesRegex(ValueError, "submitted.*immutable"):
+                update_candidate_queue_status(
+                    root, "c1", 1, "h1", "api_submitted", "2026-07-12T01:03:00Z"
+                )
+            after = path.read_bytes()
+
+        self.assertEqual(retry, first)
         self.assertEqual(after, before)
 
     def test_daily_api_submission_limit_allows_a_new_date(self):

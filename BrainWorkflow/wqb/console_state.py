@@ -7,12 +7,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from wqb.candidate_queue import load_approved_queue
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest
 from wqb.research_record import load_research_record
 from wqb.workflow_events import read_workflow_events
 from wqb.workflow_paths import resolve_project_root, resolve_run_root
-from wqb.workflow_state import discover_active_workflow
+from wqb.workflow_state import diagnose_state_consistency, discover_active_workflow
 
 
 @dataclass(frozen=True)
@@ -146,6 +145,12 @@ def _active_workflow_summary(runs_root: Path) -> tuple[dict[str, Any], Path | No
             "diagnostics": discovery.diagnostics,
         }, discovery.run_dir
     state = discovery.state
+    consistency_diagnostics = (
+        diagnose_state_consistency(discovery.run_dir, state)
+        if discovery.run_dir is not None
+        else []
+    )
+    diagnostics = list(dict.fromkeys([*discovery.diagnostics, *consistency_diagnostics]))
     return (
         {
             "exists": True,
@@ -156,11 +161,37 @@ def _active_workflow_summary(runs_root: Path) -> tuple[dict[str, Any], Path | No
             "current_stage": state.current_stage,
             "next_action": state.next_action,
             "waiting_for_user": state.waiting_for_user,
-            "diagnostics": discovery.diagnostics,
+            "consistent": not diagnostics,
+            "diagnostics": diagnostics,
             "recovered_read_only": discovery.recovered,
         },
         discovery.run_dir,
     )
+
+
+def _approved_queue_with_diagnostics(runs_root: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    """Input: runs root. Output: queue rows and diagnostics. Read approved queue without crashing dashboard."""
+    direct = runs_root / "approved_candidates.jsonl"
+    paths = [direct] if direct.exists() else sorted(runs_root.glob("*/approved_candidates.jsonl"))
+    rows: list[dict[str, Any]] = []
+    diagnostics: list[str] = []
+    for path in paths:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            diagnostics.append(f"unreadable_file:{path.name}")
+            continue
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                diagnostics.append(f"malformed_json:{path.name}")
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
+    return rows, list(dict.fromkeys(diagnostics))
 
 
 def _research_record_summary(run_dir: Path | None) -> dict[str, Any]:
@@ -184,7 +215,7 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
     proposal_counts = Counter(str(row.get("status", "unclassified")) for row in proposals)
     active_workflow, active_run_dir = _active_workflow_summary(paths.runs_root)
     workflow_events = [] if active_run_dir is None else [event.__dict__ for event in read_workflow_events(active_run_dir)]
-    approved_queue = load_approved_queue(paths.runs_root)
+    approved_queue, queue_diagnostics = _approved_queue_with_diagnostics(paths.runs_root)
     return {
         "readiness": _latest_readiness(paths.runs_root),
         "freshness": _freshness_summary(paths.knowledge_root),
@@ -197,5 +228,6 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
         "active_workflow": active_workflow,
         "workflow_events": workflow_events,
         "approved_queue": approved_queue,
+        "queue_diagnostics": queue_diagnostics,
         "research_record": _research_record_summary(active_run_dir),
     }

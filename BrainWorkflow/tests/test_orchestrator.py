@@ -1517,7 +1517,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         )
         self.assertEqual(len(record.manual_submission_status), 1)
 
-    def test_candidate_status_event_dedupe_allows_a_later_real_transition(self):
+    def test_candidate_status_rejects_manual_submission_reclassification(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             orchestrator = WorkflowOrchestrator(self.paths(root))
@@ -1532,19 +1532,27 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             orchestrator.update_candidate_status(
                 "c1", 1, "h1", "manually_submitted", "2026-07-12T00:03:00Z"
             )
-            orchestrator.update_candidate_status(
-                "c1", 1, "h1", "queued", "2026-07-12T00:04:00Z"
-            )
-            orchestrator.update_candidate_status(
-                "c1", 1, "h1", "manually_submitted", "2026-07-12T00:05:00Z"
-            )
+            claims_path = root / "runs" / "api_submission_claims.jsonl"
+
+            with self.assertRaisesRegex(ValueError, "submitted.*immutable"):
+                orchestrator.update_candidate_status(
+                    "c1", 1, "h1", "queued", "2026-07-12T00:04:00Z"
+                )
+            with self.assertRaisesRegex(ValueError, "submitted.*immutable"):
+                orchestrator.update_candidate_status(
+                    "c1", 1, "h1", "api_submitted", "2026-07-12T00:05:00Z"
+                )
+            rows = load_approved_queue(Path(started["run_dir"]))
             events = [
                 event.payload["status"]
                 for event in read_workflow_events(Path(started["run_dir"]))
                 if event.event_type == "candidate_status_updated"
             ]
+            claim_exists = claims_path.exists()
 
-        self.assertEqual(events, ["manually_submitted", "queued", "manually_submitted"])
+        self.assertEqual(rows[0]["status"], "manually_submitted")
+        self.assertEqual(events, ["manually_submitted"])
+        self.assertFalse(claim_exists)
 
     def test_candidate_status_retry_restores_event_after_post_queue_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1728,7 +1736,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 "c1",
                 1,
                 "h1",
-                "api_submitted",
+                "manually_submitted",
                 "2026-07-12T00:05:00Z",
                 source_run_id=str(started["run_id"]),
             )
@@ -1745,8 +1753,8 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 / "research_record.md"
             )
 
-        self.assertEqual(updated["status"], "api_submitted")
-        self.assertEqual(rows[0]["status"], "api_submitted")
+        self.assertEqual(updated["status"], "manually_submitted")
+        self.assertEqual(rows[0]["status"], "manually_submitted")
         self.assertTrue(state.research_record_synced)
         self.assertEqual(state.stages["research_record_sync"].blocker, "")
         self.assertEqual(state.stages["research_record_sync"].evidence_paths, [str(raw_path)])

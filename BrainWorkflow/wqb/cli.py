@@ -3360,8 +3360,12 @@ def main() -> None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
     if args.command.startswith("workflow-"):
+        workflow_overrides = dict(overrides)
+        if cli_flag_present(sys.argv[1:], "--knowledge-root"):
+            workflow_overrides["knowledge_root"] = args.knowledge_root
+        config = load_config(args.config, overrides=workflow_overrides)
         orchestrator = WorkflowOrchestrator(
-            default_orchestrator_paths({"knowledge_root": args.knowledge_root})
+            default_orchestrator_paths(config)
         )
         now = args.now or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         if args.command == "workflow-start":

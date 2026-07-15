@@ -3508,14 +3508,33 @@ class WorkflowOrchestratorCliTests(unittest.TestCase):
         from wqb.cli import main
 
         output = io.StringIO()
-        with patch("sys.argv", ["wqb", "workflow-status"]), patch(
-            "wqb.cli.WorkflowOrchestrator"
-        ) as orchestrator_cls, patch("wqb.cli.load_config") as load_config, redirect_stdout(output):
-            orchestrator_cls.return_value.status.return_value = {"status": "created"}
-            main()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "workflow.yaml"
+            run_root = root / "configured_runs"
+            knowledge_root = root / "configured_knowledge"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "region: USA",
+                        "universe: TOP3000",
+                        "delay: 1",
+                        f"run_root: {run_root.as_posix()}",
+                        f"knowledge_root: {knowledge_root.as_posix()}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with patch("sys.argv", ["wqb", "workflow-status", "--config", str(config_path)]), patch(
+                "wqb.cli.WorkflowOrchestrator"
+            ) as orchestrator_cls, redirect_stdout(output):
+                orchestrator_cls.return_value.status.return_value = {"status": "created"}
+                main()
 
         self.assertEqual(json.loads(output.getvalue())["status"], "created")
-        load_config.assert_not_called()
+        paths = orchestrator_cls.call_args.args[0]
+        self.assertEqual(paths.run_root, run_root)
+        self.assertEqual(paths.knowledge_root, knowledge_root)
 
     def test_workflow_continue_dispatches_orchestrator(self):
         from wqb.cli import main

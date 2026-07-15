@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from wqb.candidate_queue import (
+    SUBMITTED_TERMINAL_STATUSES,
     approve_candidate,
     claim_api_submission_slot,
     invalidate_candidate_queue_entry,
@@ -687,7 +688,7 @@ class WorkflowOrchestrator:
         if (
             status == "api_submitted"
             and len(before_matches) == 1
-            and str(before_matches[0].get("status", "")) not in {"api_submitted", "invalidated"}
+            and str(before_matches[0].get("status", "")) not in SUBMITTED_TERMINAL_STATUSES | {"invalidated"}
         ):
             claim = claim_api_submission_slot(self.paths.run_root, before_matches[0], updated_at)
         else:

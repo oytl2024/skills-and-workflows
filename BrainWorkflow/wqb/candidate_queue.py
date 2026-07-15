@@ -19,6 +19,7 @@ API_SUBMISSION_CLAIMS_FILENAME = "api_submission_claims.jsonl"
 API_SUBMISSION_CLAIMS_LOCK_FILENAME = "api_submission_claims.lock"
 QUEUE_STATUSES = {"queued", "manually_submitted", "api_submitted", "skipped", "invalidated"}
 STATUS_UPDATE_STATUSES = QUEUE_STATUSES - {"invalidated"}
+SUBMITTED_TERMINAL_STATUSES = {"manually_submitted", "api_submitted"}
 DAILY_API_SUBMISSION_LIMIT = 1
 API_SUBMISSION_LOCK_TIMEOUT_SECONDS = 5.0
 API_SUBMISSION_LOCK_SLEEP_SECONDS = 0.05
@@ -335,8 +336,8 @@ def update_candidate_queue_status(
         return updated
     if current_status == "invalidated":
         raise ValueError("invalidated candidate queue entry cannot be updated")
-    if current_status == "api_submitted":
-        raise ValueError("api_submitted status is immutable")
+    if current_status in SUBMITTED_TERMINAL_STATUSES:
+        raise ValueError("submitted candidate queue entry is immutable")
     if status == "api_submitted":
         requested_date = _timestamp_date(updated_at)
         submission_count = sum(
@@ -374,7 +375,7 @@ def invalidate_candidate_queue_entry(
     current_status = str(updated.get("status", ""))
     if current_status == "invalidated":
         return updated
-    if current_status in {"manually_submitted", "api_submitted"}:
+    if current_status in SUBMITTED_TERMINAL_STATUSES:
         raise ValueError("submitted candidate queue entry is immutable")
     updated["status"] = "invalidated"
     updated["updated_at"] = str(invalidated_at)
