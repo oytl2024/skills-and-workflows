@@ -430,7 +430,12 @@ class WorkflowOrchestrator:
             if not self._candidate_has_verified_hard_pass(state, candidate):
                 raise ValueError("candidate must carry verified hard-pass evidence")
         seen_contract_keys: set[tuple[str, int, str]] = set()
+        seen_candidate_ids: set[str] = set()
         for candidate in candidates:
+            candidate_id = str(candidate.get("candidate_id", "")).strip()
+            if candidate_id in seen_candidate_ids:
+                raise ValueError("duplicate candidate ID")
+            seen_candidate_ids.add(candidate_id)
             contract_key = self._candidate_contract_key(candidate)
             if contract_key in seen_contract_keys:
                 raise ValueError("duplicate candidate contract key")

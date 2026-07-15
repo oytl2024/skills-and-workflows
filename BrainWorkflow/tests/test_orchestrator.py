@@ -765,7 +765,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             [event.event_type for event in events].count("candidates_approved"), 1
         )
 
-    def test_candidate_approval_rejects_ambiguous_duplicate_candidate_ids(self):
+    def test_candidate_gate_rejects_duplicate_candidate_ids_before_writing_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             orchestrator = WorkflowOrchestrator(self.paths(root))
@@ -775,15 +775,20 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 "source_run_id": started["run_id"], "hard_pass": True,
             }
             self.advance_to_candidate_gate(started)
-            orchestrator.request_candidate_approval(
-                [dict(base, version=1, expression_hash="h1"), dict(base, version=2, expression_hash="h2")],
-                "2026-07-12T00:10:00Z",
-            )
+            run_dir = Path(str(started["run_dir"]))
 
-            with self.assertRaisesRegex(ValueError, "ambiguous candidate ID"):
-                orchestrator.approve_candidates(["c1"], "2026-07-12T00:11:00Z", "user")
+            with self.assertRaisesRegex(ValueError, "duplicate candidate ID"):
+                orchestrator.request_candidate_approval(
+                    [dict(base, version=1, expression_hash="h1"), dict(base, version=2, expression_hash="h2")],
+                    "2026-07-12T00:10:00Z",
+                )
 
-            self.assertEqual(load_approvals(Path(started["run_dir"])), [])
+            gate_exists = (run_dir / "candidate_gate.json").exists()
+            record_path = run_dir / "research_record.json"
+            gate_entries = [] if not record_path.exists() else load_research_record(record_path).candidate_gate
+
+        self.assertFalse(gate_exists)
+        self.assertEqual(gate_entries, [])
 
     def test_candidate_approval_revalidates_persisted_gate_rows(self):
         mutations = (
@@ -1038,7 +1043,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
 
             self.assertEqual(result["status"], "waiting_for_user")
 
-    def test_candidate_gate_rejects_duplicate_contract_key_before_writing_artifacts(self):
+    def test_candidate_gate_rejects_duplicate_identity_before_writing_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             orchestrator = WorkflowOrchestrator(self.paths(root))
@@ -1072,7 +1077,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 },
             ]
 
-            with self.assertRaisesRegex(ValueError, "contract key"):
+            with self.assertRaisesRegex(ValueError, "duplicate candidate"):
                 orchestrator.request_candidate_approval(candidates, "2026-07-12T00:10:00Z")
 
             gate_exists = (run_dir / "candidate_gate.json").exists()
