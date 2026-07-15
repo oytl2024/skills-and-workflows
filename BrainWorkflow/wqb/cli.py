@@ -13,7 +13,7 @@ from uuid import uuid4
 import requests
 
 from wqb.benchmark import benchmark_alpha_record
-from wqb.candidate_queue import QUEUE_STATUSES
+from wqb.candidate_queue import STATUS_UPDATE_STATUSES
 from wqb.checker import fetch_check_summary
 from wqb.client import WQBClient
 from wqb.config import load_config
@@ -3304,7 +3304,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-version", type=int, default=None)
     parser.add_argument("--candidate-expression-hash", default="")
     parser.add_argument("--candidate-json", default="")
-    parser.add_argument("--candidate-status", choices=sorted(QUEUE_STATUSES), default="")
+    parser.add_argument("--candidate-status", choices=sorted(STATUS_UPDATE_STATUSES), default="")
     parser.add_argument("--source-run-id", default="")
     return parser.parse_args()
 

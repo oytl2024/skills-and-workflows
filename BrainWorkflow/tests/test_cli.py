@@ -4,7 +4,7 @@ import os
 import shutil
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from argparse import Namespace
 from pathlib import Path
 from unittest.mock import patch
@@ -3615,6 +3615,32 @@ class WorkflowOrchestratorCliTests(unittest.TestCase):
             "2026-07-12T01:00:00Z",
             source_run_id="run-completed",
         )
+
+    def test_workflow_update_candidate_status_rejects_invalidated_without_dispatch(self):
+        from wqb.cli import main
+
+        output = io.StringIO()
+        error = io.StringIO()
+        argv = [
+            "wqb",
+            "workflow-update-candidate-status",
+            "--candidate-id", "c1",
+            "--candidate-version", "1",
+            "--candidate-expression-hash", "h1",
+            "--candidate-status", "invalidated",
+        ]
+        with (
+            patch("sys.argv", argv),
+            patch("wqb.cli.WorkflowOrchestrator") as orchestrator_cls,
+            redirect_stdout(output),
+            redirect_stderr(error),
+        ):
+            orchestrator_cls.return_value.update_candidate_status.return_value = {"status": "invalidated"}
+            with self.assertRaises(SystemExit) as raised:
+                main()
+
+        self.assertEqual(raised.exception.code, 2)
+        orchestrator_cls.assert_not_called()
 
 
 if __name__ == "__main__":

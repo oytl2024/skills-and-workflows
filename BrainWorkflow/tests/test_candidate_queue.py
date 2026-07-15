@@ -132,6 +132,22 @@ class CandidateQueueTests(unittest.TestCase):
         self.assertEqual(updated["status"], "manually_submitted")
         self.assertEqual(rows[0]["status"], "manually_submitted")
 
+    def test_status_update_rejects_invalidated_and_preserves_submitted_queue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            approval = approve_candidate(root, self.candidate(), "2026-07-12T00:00:00Z", "user")
+            queue_approved_candidate(root, approval)
+            update_candidate_queue_status(root, "c1", 1, "h1", "manually_submitted", "2026-07-12T01:00:00Z")
+            path = root / "approved_candidates.jsonl"
+            before = path.read_bytes()
+
+            with self.assertRaisesRegex(ValueError, "dedicated invalidation"):
+                update_candidate_queue_status(root, "c1", 1, "h1", "invalidated", "2026-07-12T02:00:00Z")
+
+            after = path.read_bytes()
+
+        self.assertEqual(after, before)
+
     def test_first_daily_api_submission_succeeds(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

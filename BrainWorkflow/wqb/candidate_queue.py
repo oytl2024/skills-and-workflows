@@ -18,6 +18,7 @@ QUEUE_FILENAME = "approved_candidates.jsonl"
 API_SUBMISSION_CLAIMS_FILENAME = "api_submission_claims.jsonl"
 API_SUBMISSION_CLAIMS_LOCK_FILENAME = "api_submission_claims.lock"
 QUEUE_STATUSES = {"queued", "manually_submitted", "api_submitted", "skipped", "invalidated"}
+STATUS_UPDATE_STATUSES = QUEUE_STATUSES - {"invalidated"}
 DAILY_API_SUBMISSION_LIMIT = 1
 API_SUBMISSION_LOCK_TIMEOUT_SECONDS = 5.0
 API_SUBMISSION_LOCK_SLEEP_SECONDS = 0.05
@@ -316,7 +317,9 @@ def update_candidate_queue_status(
     updated_at: str,
 ) -> dict[str, object]:
     """Input: identity and status. Output: updated row. Rewrite queue with one status update."""
-    if status not in QUEUE_STATUSES:
+    if status not in STATUS_UPDATE_STATUSES:
+        if status == "invalidated":
+            raise ValueError("invalidated status requires dedicated invalidation")
         raise ValueError(f"unsupported queue status: {status}")
     path = Path(run_dir) / QUEUE_FILENAME
     rows = _read_jsonl(path)
