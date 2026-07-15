@@ -820,7 +820,7 @@ class WorkflowOrchestrator:
         """Input: WorkflowRunState, ResearchRecord-like object, timestamp str. Output: None. Sync raw record or persist warning state."""
         run_dir = Path(state.run_dir)
         try:
-            sync_research_record_to_raw(record, self.paths.knowledge_root / "raw")
+            raw_path = sync_research_record_to_raw(record, self.paths.knowledge_root / "raw")
         except Exception as exc:
             warning = f"{type(exc).__name__}: {exc}"
             warning_state = self._set_stage(
@@ -854,9 +854,25 @@ class WorkflowOrchestrator:
                 now,
             )
             return
+        synced_state = self._set_stage(
+            state,
+            "research_record_sync",
+            "completed",
+            now,
+            evidence_paths=[str(raw_path)],
+            current_stage="complete",
+            last_completed_stage="research_record_sync",
+        )
+        synced_state = replace(synced_state, research_record_synced=True, updated_at=now)
         write_run_state(
             run_dir / STATE_FILENAME,
-            replace(state, research_record_synced=True, updated_at=now),
+            synced_state,
+        )
+        append_workflow_event(
+            run_dir,
+            "research_record_synced",
+            {"raw_path": str(raw_path), "synced": True},
+            now,
         )
 
     def _append_event_once(

@@ -1734,10 +1734,23 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             )
             state = load_run_state(run_dir / "run_state.json")
             rows = load_approved_queue(run_dir)
+            events = read_workflow_events(run_dir)
+            raw_path = (
+                root
+                / "knowledge"
+                / "raw"
+                / "research"
+                / "runs"
+                / str(started["run_id"])
+                / "research_record.md"
+            )
 
         self.assertEqual(updated["status"], "api_submitted")
         self.assertEqual(rows[0]["status"], "api_submitted")
         self.assertTrue(state.research_record_synced)
+        self.assertEqual(state.stages["research_record_sync"].blocker, "")
+        self.assertEqual(state.stages["research_record_sync"].evidence_paths, [str(raw_path)])
+        self.assertIn("research_record_synced", [event.event_type for event in events])
 
     def test_completed_run_candidate_invalidation_sync_failure_persists_warning_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1792,10 +1805,23 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             )
             state = load_run_state(run_dir / "run_state.json")
             rows = load_approved_queue(run_dir)
+            events = read_workflow_events(run_dir)
+            raw_path = (
+                root
+                / "knowledge"
+                / "raw"
+                / "research"
+                / "runs"
+                / str(started["run_id"])
+                / "research_record.md"
+            )
 
         self.assertEqual(invalidated["status"], "invalidated")
         self.assertEqual(rows[0]["status"], "invalidated")
         self.assertTrue(state.research_record_synced)
+        self.assertEqual(state.stages["research_record_sync"].blocker, "")
+        self.assertEqual(state.stages["research_record_sync"].evidence_paths, [str(raw_path)])
+        self.assertIn("research_record_synced", [event.event_type for event in events])
 
     def test_api_submission_limit_applies_across_completed_workflow_runs(self):
         with tempfile.TemporaryDirectory() as tmp:
