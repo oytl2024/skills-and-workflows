@@ -20,6 +20,25 @@ from wqb.workflow_events import append_workflow_event
 
 
 class WorkflowStateTests(unittest.TestCase):
+    def write_inconsistent_terminal_checkpoint(self, root: Path, run_id: str = "run1") -> Path:
+        """Input: run root and id. Output: run dir Path. Persist checkpoint-only contradictory terminal state."""
+        run_dir = root / run_id
+        run_dir.mkdir(parents=True)
+        state = create_initial_state(run_id, run_dir, "Power Pool", "2026-07-12T00:00:00Z")
+        terminal_state = replace(
+            state,
+            status="completed",
+            current_stage="complete",
+            last_completed_stage="research_record_sync",
+            research_record_synced=True,
+        )
+        (run_dir / "research_record.json").write_text(
+            json.dumps({"run_id": run_id}), encoding="utf-8"
+        )
+        write_run_state(run_dir / "run_state.json", terminal_state)
+        (run_dir / "run_state.json").unlink()
+        return run_dir
+
     def test_initial_state_contains_all_stages_and_next_action(self):
         state = create_initial_state("run1", "runs/run1", "Power Pool", "2026-07-12T00:00:00Z")
 
@@ -308,6 +327,36 @@ class WorkflowStateTests(unittest.TestCase):
         self.assertEqual(discovery.state, state)
         self.assertTrue(discovery.recovered)
         self.assertIn("run_state_recovered_from_checkpoint", discovery.diagnostics)
+
+    def test_pointer_terminal_checkpoint_without_official_state_is_damaged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = self.write_inconsistent_terminal_checkpoint(root)
+            write_active_run(root, "run1", run_dir)
+            pointer_before = (root / "active_run.json").read_bytes()
+
+            discovery = discover_active_workflow(root)
+            pointer_unchanged = (root / "active_run.json").read_bytes() == pointer_before
+
+        self.assertIsNone(discovery.state)
+        self.assertEqual(discovery.run_dir, run_dir)
+        self.assertIn("terminal_state_inconsistent", discovery.diagnostics)
+        self.assertIn("terminal_state_incomplete_stages", discovery.diagnostics)
+        self.assertTrue(pointer_unchanged)
+
+    def test_scanned_terminal_checkpoint_without_official_state_is_damaged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = self.write_inconsistent_terminal_checkpoint(root)
+
+            discovery = discover_active_workflow(root)
+            active_exists = (root / "active_run.json").exists()
+
+        self.assertIsNone(discovery.state)
+        self.assertEqual(discovery.run_dir, run_dir)
+        self.assertIn("terminal_state_inconsistent", discovery.diagnostics)
+        self.assertIn("terminal_state_incomplete_stages", discovery.diagnostics)
+        self.assertFalse(active_exists)
 
     def test_discovery_recovers_minimal_state_from_creation_event_when_state_and_checkpoint_are_damaged(self):
         with tempfile.TemporaryDirectory() as tmp:

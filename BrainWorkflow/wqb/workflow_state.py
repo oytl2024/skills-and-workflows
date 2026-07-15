@@ -232,8 +232,10 @@ def clear_active_run(run_root: str | Path) -> None:
         path.unlink()
 
 
-def diagnose_state_consistency(run_dir: str | Path) -> list[str]:
-    """Input: run dir. Output: issue codes. Detect contradictions between state and artifacts."""
+def diagnose_state_consistency(
+    run_dir: str | Path, state_override: WorkflowRunState | None = None
+) -> list[str]:
+    """Input: run dir and optional recovered state. Output: issue codes. Detect contradictions between state and artifacts."""
     root = Path(run_dir)
     issues: list[str] = []
     approval_path = root / "approval.jsonl"
@@ -280,9 +282,9 @@ def diagnose_state_consistency(run_dir: str | Path) -> list[str]:
     if research_record_path.exists():
         research_record = _read_json_object(research_record_path, issues)
 
-    state = None
+    state = state_override
     state_path = root / STATE_FILENAME
-    if state_path.exists():
+    if state is None and state_path.exists():
         try:
             state = load_run_state(state_path)
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
@@ -431,7 +433,7 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
             }:
                 pointer_state_issue = issue
             elif state is not None and state.status in TERMINAL_RUN_STATUSES:
-                terminal_issues = diagnose_state_consistency(pointer_dir)
+                terminal_issues = diagnose_state_consistency(pointer_dir, state)
                 if terminal_issues:
                     return WorkflowStateDiscovery(
                         None,
@@ -457,7 +459,7 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
             if state is None:
                 continue
             if state.status in TERMINAL_RUN_STATUSES:
-                terminal_issues = diagnose_state_consistency(run_dir)
+                terminal_issues = diagnose_state_consistency(run_dir, state)
                 if terminal_issues:
                     invalid_dirs.append(
                         (run_dir, ["terminal_state_inconsistent", *terminal_issues])
