@@ -442,7 +442,7 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
                 pointer_issue = "active_run_terminal"
 
     candidates: list[tuple[WorkflowRunState, Path, str, bool]] = []
-    invalid_dirs: list[tuple[Path, str]] = []
+    invalid_dirs: list[tuple[Path, list[str]]] = []
     if root.exists():
         for run_dir in root.iterdir():
             if not run_dir.is_dir():
@@ -453,9 +453,17 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
                 "run_state_recovered_from_checkpoint",
                 "run_state_recovered_from_events",
             }:
-                invalid_dirs.append((run_dir, issue))
-            if state is not None and state.status not in TERMINAL_RUN_STATUSES:
-                candidates.append((state, run_dir, issue, recovered_from_checkpoint))
+                invalid_dirs.append((run_dir, [issue]))
+            if state is None:
+                continue
+            if state.status in TERMINAL_RUN_STATUSES:
+                terminal_issues = diagnose_state_consistency(run_dir)
+                if terminal_issues:
+                    invalid_dirs.append(
+                        (run_dir, ["terminal_state_inconsistent", *terminal_issues])
+                    )
+                continue
+            candidates.append((state, run_dir, issue, recovered_from_checkpoint))
     if len(candidates) > 1:
         diagnostics = ["multiple_active_runs"]
         if pointer_state_issue:
@@ -503,8 +511,8 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
             recovered_from_checkpoint or not pointer_matches_state,
         )
     if invalid_dirs and pointer_issue == "active_run_missing":
-        run_dir, issue = max(invalid_dirs, key=lambda item: item[0].name)
-        return WorkflowStateDiscovery(None, run_dir, run_dir.name, [issue])
+        run_dir, issues = max(invalid_dirs, key=lambda item: item[0].name)
+        return WorkflowStateDiscovery(None, run_dir, run_dir.name, issues)
     if pointer_state_issue:
         return WorkflowStateDiscovery(
             None, pointer_dir, pointer.get("run_id", ""), [pointer_state_issue]

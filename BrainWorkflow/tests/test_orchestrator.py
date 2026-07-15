@@ -393,6 +393,38 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertIn("terminal_state_incomplete_stages", status["diagnostics"])
         self.assertEqual(active["run_id"], started["run_id"])
 
+    def test_missing_pointer_contradictory_terminal_run_stays_damaged_and_blocks_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            run_dir = Path(str(started["run_dir"]))
+            state_path = run_dir / "run_state.json"
+            state = load_run_state(state_path)
+            write_research_record(
+                run_dir / "research_record.json",
+                empty_research_record(str(started["run_id"]), "Power Pool"),
+            )
+            write_run_state(
+                state_path,
+                replace(
+                    state,
+                    status="completed",
+                    current_stage="complete",
+                    last_completed_stage="research_record_sync",
+                    research_record_synced=True,
+                ),
+            )
+            (root / "runs" / "active_run.json").unlink()
+
+            status = orchestrator.status()
+            with self.assertRaisesRegex(ValueError, "active workflow"):
+                orchestrator.start("Quality Pool", "option-2", "2026-07-12T00:01:00Z")
+
+        self.assertEqual(status["status"], "damaged")
+        self.assertIn("terminal_state_inconsistent", status["diagnostics"])
+        self.assertIn("terminal_state_incomplete_stages", status["diagnostics"])
+
     def test_multiple_active_runs_remain_ambiguous_without_creating_a_pointer(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1006,6 +1038,50 @@ class WorkflowOrchestratorTests(unittest.TestCase):
 
             self.assertEqual(result["status"], "waiting_for_user")
 
+    def test_candidate_gate_rejects_duplicate_contract_key_before_writing_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            self.advance_to_candidate_gate(started)
+            run_dir = Path(str(started["run_dir"]))
+            with (run_dir / "candidates.csv").open("a", encoding="utf-8", newline="") as file:
+                writer = csv.DictWriter(file, fieldnames=("alpha_id", "expression_hash"))
+                writer.writerow({"alpha_id": "a2", "expression_hash": "h1"})
+            with (run_dir / "all_alphas.jsonl").open("a", encoding="utf-8") as file:
+                file.write(
+                    json.dumps(
+                        {
+                            "alpha_id": "a2",
+                            "expression_hash": "h1",
+                            "hard_pass": True,
+                            "failed": [],
+                            "pending": [],
+                        }
+                    )
+                    + "\n"
+                )
+            candidates = [
+                {
+                    "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+                    "expression_hash": "h1", "source_run_id": started["run_id"], "hard_pass": True,
+                },
+                {
+                    "candidate_id": "c1", "platform_alpha_id": "a2", "version": 1,
+                    "expression_hash": "h1", "source_run_id": started["run_id"], "hard_pass": True,
+                },
+            ]
+
+            with self.assertRaisesRegex(ValueError, "contract key"):
+                orchestrator.request_candidate_approval(candidates, "2026-07-12T00:10:00Z")
+
+            gate_exists = (run_dir / "candidate_gate.json").exists()
+            record_path = run_dir / "research_record.json"
+            gate_entries = [] if not record_path.exists() else load_research_record(record_path).candidate_gate
+
+        self.assertFalse(gate_exists)
+        self.assertEqual(gate_entries, [])
+
     def test_candidate_gate_rejects_durable_hard_pass_identity_mismatches(self):
         mismatches = (
             {"expression_hash": "other-hash"},
@@ -1599,6 +1675,33 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             after = self.candidate_artifact_bytes(second_dir)
 
         self.assertEqual(after, before)
+
+    def test_api_submission_claim_rolls_back_when_queue_update_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator, started = self.create_approved_candidate_run(root)
+            orchestrator.sync_research_record("2026-07-12T00:03:00Z")
+            claims_path = root / "runs" / "api_submission_claims.jsonl"
+
+            with patch(
+                "wqb.orchestrator.update_candidate_queue_status",
+                side_effect=ValueError("queue write failed"),
+            ):
+                with self.assertRaisesRegex(ValueError, "queue write failed"):
+                    orchestrator.update_candidate_status(
+                        "c1",
+                        1,
+                        "h1",
+                        "api_submitted",
+                        "2026-07-12T01:00:00Z",
+                        source_run_id=str(started["run_id"]),
+                    )
+
+            claim_rows = [] if not claims_path.exists() else [
+                line for line in claims_path.read_text(encoding="utf-8").splitlines() if line.strip()
+            ]
+
+        self.assertEqual(claim_rows, [])
 
     def test_invalidated_api_submission_rejection_does_not_consume_daily_claim(self):
         with tempfile.TemporaryDirectory() as tmp:

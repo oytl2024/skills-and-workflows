@@ -108,6 +108,20 @@ class CandidateQueueTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["status"], "queued")
 
+    def test_queue_rejects_conflicting_full_identity_for_contract_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            approval = approve_candidate(tmp, self.candidate(), "2026-07-12T00:00:00Z", "user")
+            queue_approved_candidate(tmp, approval)
+            conflicting = dict(approval, platform_alpha_id="a2")
+
+            with self.assertRaisesRegex(ValueError, "contract key"):
+                queue_approved_candidate(tmp, conflicting)
+
+            rows = load_approved_queue(tmp)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["platform_alpha_id"], "a1")
+
     def test_queue_status_update_requires_matching_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             approval = approve_candidate(tmp, self.candidate(), "2026-07-12T00:00:00Z", "user")
@@ -200,6 +214,26 @@ class CandidateQueueTests(unittest.TestCase):
 
         self.assertEqual(updated["status"], "api_submitted")
         self.assertEqual(updated["updated_at"], "2026-07-13T01:00:00Z")
+
+    def test_api_submission_claim_counts_existing_queue_submission_without_claim_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.queue_two_candidates(root)
+            update_candidate_queue_status(
+                root, "c1", 1, "h1", "api_submitted", "2026-07-12T01:00:00Z"
+            )
+            claims_path = root / "api_submission_claims.jsonl"
+
+            with self.assertRaisesRegex(ValueError, "daily API submission limit"):
+                claim_api_submission_slot(
+                    root,
+                    dict(self.candidate(), candidate_id="c2", platform_alpha_id="a2", expression_hash="h2"),
+                    "2026-07-12T02:00:00Z",
+                )
+
+            claim_exists = claims_path.exists()
+
+        self.assertFalse(claim_exists)
 
     def test_api_submission_claim_recovers_stale_lock(self):
         with tempfile.TemporaryDirectory() as tmp:

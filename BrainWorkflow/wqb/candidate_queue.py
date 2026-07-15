@@ -173,18 +173,34 @@ def claim_api_submission_slot(
     identity = _approval_identity(candidate)
     with _api_submission_claim_lock(root):
         rows = _read_submission_claims(root, repair_trailing=True)
+        queue_identities = {
+            _approval_identity(row)
+            for row in load_approved_queue(root)
+            if row.get("status") == "api_submitted"
+            and _timestamp_date(row.get("updated_at", "")) == requested_date
+        }
+        if identity in queue_identities:
+            return {
+                "candidate_id": str(candidate.get("candidate_id", "")).strip(),
+                "platform_alpha_id": str(candidate.get("platform_alpha_id", "")).strip(),
+                "version": int(candidate.get("version", -1)),
+                "expression_hash": str(candidate.get("expression_hash", "")).strip(),
+                "source_run_id": str(candidate.get("source_run_id", "")).strip(),
+                "updated_at": str(updated_at),
+                "_created": False,
+            }
         for row in rows:
             if (
                 _timestamp_date(row.get("updated_at", "")) == requested_date
                 and _approval_identity(row) == identity
             ):
-                return row
-        submission_count = sum(
-            1
+                return dict(row, _created=False)
+        claim_identities = {
+            _approval_identity(row)
             for row in rows
             if _timestamp_date(row.get("updated_at", "")) == requested_date
-        )
-        if submission_count >= DAILY_API_SUBMISSION_LIMIT:
+        }
+        if len(queue_identities | claim_identities) >= DAILY_API_SUBMISSION_LIMIT:
             raise ValueError("daily API submission limit reached")
         claim = {
             "candidate_id": str(candidate.get("candidate_id", "")).strip(),
@@ -195,7 +211,34 @@ def claim_api_submission_slot(
             "updated_at": str(updated_at),
         }
         _write_jsonl(root / API_SUBMISSION_CLAIMS_FILENAME, [*rows, claim])
-        return claim
+        return dict(claim, _created=True)
+
+
+def release_api_submission_claim_slot(
+    run_root: str | Path, candidate: dict[str, object], updated_at: str
+) -> bool:
+    """Input: run root, candidate row, timestamp. Output: bool. Remove a newly created API claim after failed queue mutation."""
+    root = Path(run_root)
+    requested_date = _timestamp_date(updated_at)
+    identity = _approval_identity(candidate)
+    with _api_submission_claim_lock(root):
+        path = root / API_SUBMISSION_CLAIMS_FILENAME
+        rows = _read_submission_claims(root, repair_trailing=True)
+        kept = [
+            row
+            for row in rows
+            if not (
+                _timestamp_date(row.get("updated_at", "")) == requested_date
+                and _approval_identity(row) == identity
+            )
+        ]
+        if len(kept) == len(rows):
+            return False
+        if kept:
+            _write_jsonl(path, kept)
+        elif path.exists():
+            path.unlink()
+        return True
 
 
 def _read_submission_claims(root: Path, repair_trailing: bool = False) -> list[dict[str, Any]]:
@@ -239,9 +282,13 @@ def queue_approved_candidate(run_dir: str | Path, approval: dict[str, object]) -
     path = Path(run_dir) / QUEUE_FILENAME
     rows = _read_jsonl(path, repair_trailing=True)
     identity = _approval_identity(approval)
+    status_identity = _status_identity(approval)
     for row in rows:
-        if _approval_identity(row) == identity:
-            return row
+        if _status_identity(row) != status_identity:
+            continue
+        if _approval_identity(row) != identity:
+            raise ValueError("candidate queue contract key conflict")
+        return row
     queued = dict(approval)
     queued["status"] = "queued"
     _write_jsonl(path, [*rows, queued])

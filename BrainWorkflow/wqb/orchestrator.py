@@ -14,6 +14,7 @@ from wqb.candidate_queue import (
     invalidate_candidate_queue_entry,
     load_approved_queue,
     queue_approved_candidate,
+    release_api_submission_claim_slot,
     update_candidate_queue_status,
     validate_candidate_approval,
 )
@@ -428,6 +429,12 @@ class WorkflowOrchestrator:
                 raise ValueError("candidate source_run_id must match the active workflow run")
             if not self._candidate_has_verified_hard_pass(state, candidate):
                 raise ValueError("candidate must carry verified hard-pass evidence")
+        seen_contract_keys: set[tuple[str, int, str]] = set()
+        for candidate in candidates:
+            contract_key = self._candidate_contract_key(candidate)
+            if contract_key in seen_contract_keys:
+                raise ValueError("duplicate candidate contract key")
+            seen_contract_keys.add(contract_key)
         run_dir = Path(state.run_dir)
         record = self._load_or_create_research_record(state)
         for candidate in candidates:
@@ -661,10 +668,17 @@ class WorkflowOrchestrator:
             and len(before_matches) == 1
             and str(before_matches[0].get("status", "")) not in {"api_submitted", "invalidated"}
         ):
-            claim_api_submission_slot(self.paths.run_root, before_matches[0], updated_at)
-        updated = update_candidate_queue_status(
-            run_dir, candidate_id, version, expression_hash, status, updated_at
-        )
+            claim = claim_api_submission_slot(self.paths.run_root, before_matches[0], updated_at)
+        else:
+            claim = None
+        try:
+            updated = update_candidate_queue_status(
+                run_dir, candidate_id, version, expression_hash, status, updated_at
+            )
+        except Exception:
+            if claim is not None and bool(claim.get("_created", False)):
+                release_api_submission_claim_slot(self.paths.run_root, claim, updated_at)
+            raise
         queue_changed = len(before_matches) == 1 and str(before_matches[0].get("status", "")) != status
         original_record = self._load_or_create_research_record(state)
         record = original_record
@@ -997,6 +1011,14 @@ class WorkflowOrchestrator:
             int(version_value)
         except (TypeError, ValueError) as exc:
             raise ValueError("version must be an integer for candidate gate") from exc
+
+    def _candidate_contract_key(self, candidate: dict[str, object]) -> tuple[str, int, str]:
+        """Input: candidate row. Output: contract key tuple. Match queue status identity semantics."""
+        return (
+            str(candidate.get("candidate_id", "")).strip(),
+            int(candidate.get("version", -1)),
+            str(candidate.get("expression_hash", "")).strip(),
+        )
 
     def _candidate_has_verified_hard_pass(
         self, state: WorkflowRunState, candidate: dict[str, object]
