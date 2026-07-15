@@ -293,6 +293,8 @@ def diagnose_state_consistency(
         if state.status in {"completed", "completed_with_warnings"} and research_record is None:
             issues.append("completed_without_research_record")
         if state.status in {"completed", "completed_with_warnings"}:
+            if not state.research_record_synced:
+                issues.append("terminal_research_record_not_synced")
             incomplete_terminal_stages = [
                 stage_name
                 for stage_name in STAGES_REQUIRING_EVIDENCE
@@ -434,12 +436,13 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
                 pointer_state_issue = issue
             elif state is not None and state.status in TERMINAL_RUN_STATUSES:
                 terminal_issues = diagnose_state_consistency(pointer_dir, state)
-                if terminal_issues:
+                blocking_issues = _blocking_terminal_issues(state, terminal_issues)
+                if blocking_issues:
                     return WorkflowStateDiscovery(
                         None,
                         pointer_dir,
                         pointer.get("run_id", ""),
-                        ["terminal_state_inconsistent", *terminal_issues],
+                        ["terminal_state_inconsistent", *blocking_issues],
                     )
                 pointer_issue = "active_run_terminal"
 
@@ -460,9 +463,10 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
                 continue
             if state.status in TERMINAL_RUN_STATUSES:
                 terminal_issues = diagnose_state_consistency(run_dir, state)
-                if terminal_issues:
+                blocking_issues = _blocking_terminal_issues(state, terminal_issues)
+                if blocking_issues:
                     invalid_dirs.append(
-                        (run_dir, ["terminal_state_inconsistent", *terminal_issues])
+                        (run_dir, ["terminal_state_inconsistent", *blocking_issues])
                     )
                 continue
             candidates.append((state, run_dir, issue, recovered_from_checkpoint))
@@ -522,6 +526,13 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
     return WorkflowStateDiscovery(
         None, pointer_dir, pointer.get("run_id", ""), [pointer_issue] if pointer_issue else []
     )
+
+
+def _blocking_terminal_issues(state: WorkflowRunState, issues: list[str]) -> list[str]:
+    """Input: WorkflowRunState and issue strings. Output: blocking issue strings. Keep warning terminals non-blocking."""
+    if state.status == "completed_with_warnings":
+        return [issue for issue in issues if issue != "terminal_research_record_not_synced"]
+    return issues
 
 
 def _active_pointer_directory_issue(root: Path, run_id: str, run_dir: Path) -> str:

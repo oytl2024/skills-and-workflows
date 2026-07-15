@@ -314,7 +314,24 @@ class WorkflowOrchestrator:
             return self._summary(state)
         if state.status == "running" and state.current_stage in POST_SCHEDULE_STAGES:
             stage_name = state.current_stage
-            result = advance_post_schedule_stage(run_dir, stage_name)
+            try:
+                result = advance_post_schedule_stage(run_dir, stage_name)
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+                blocker = f"{type(exc).__name__}: {exc}"
+                state = transition_run_state(state, "failed", blocker)
+                state = self._set_stage(state, stage_name, "failed", now, blocker=blocker)
+                write_run_state(run_dir / STATE_FILENAME, state)
+                append_workflow_event(
+                    run_dir,
+                    "stage_failed",
+                    {
+                        "stage": stage_name,
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                    now,
+                )
+                return self._summary(state, [f"{stage_name}_stage_failed:{blocker}"])
             if result["status"] == "paused":
                 blocker = str(result["blocker"])
                 state = transition_run_state(state, "paused", blocker)
@@ -634,10 +651,8 @@ class WorkflowOrchestrator:
         )
         if state.status in {"completed", "completed_with_warnings"}:
             if record_changed or not state.research_record_synced:
-                sync_research_record_to_raw(record, self.paths.knowledge_root / "raw")
-                write_run_state(
-                    run_dir / STATE_FILENAME,
-                    replace(pending_state, research_record_synced=True),
+                self._sync_terminal_research_record_or_warn(
+                    pending_state, record, invalidated_at
                 )
         return invalidated
 
@@ -713,11 +728,7 @@ class WorkflowOrchestrator:
         )
         if state.status in {"completed", "completed_with_warnings"}:
             if mutation_recorded or not state.research_record_synced:
-                sync_research_record_to_raw(record, self.paths.knowledge_root / "raw")
-                write_run_state(
-                    run_dir / STATE_FILENAME,
-                    replace(pending_state, research_record_synced=True),
-                )
+                self._sync_terminal_research_record_or_warn(pending_state, record, updated_at)
         return updated
 
     def sync_research_record(self, now: str) -> dict[str, object]:
@@ -801,6 +812,51 @@ class WorkflowOrchestrator:
         summary = self._summary(state)
         summary.update({"synced": True, "raw_path": str(raw_path), "warnings": []})
         return summary
+
+    def _sync_terminal_research_record_or_warn(
+        self, state: WorkflowRunState, record, now: str
+    ) -> None:
+        """Input: WorkflowRunState, ResearchRecord-like object, timestamp str. Output: None. Sync raw record or persist warning state."""
+        run_dir = Path(state.run_dir)
+        try:
+            sync_research_record_to_raw(record, self.paths.knowledge_root / "raw")
+        except Exception as exc:
+            warning = f"{type(exc).__name__}: {exc}"
+            warning_state = self._set_stage(
+                state,
+                "research_record_sync",
+                "completed",
+                now,
+                evidence_paths=[str(run_dir / "research_record.json")],
+                blocker=warning,
+                current_stage="complete",
+                last_completed_stage="research_record_sync",
+            )
+            warning_state = replace(
+                warning_state,
+                status="completed_with_warnings",
+                research_record_synced=False,
+                waiting_for_user=False,
+                next_action="",
+                updated_at=now,
+            )
+            write_run_state(run_dir / STATE_FILENAME, warning_state)
+            append_workflow_event(
+                run_dir,
+                "research_record_sync_warning",
+                {
+                    "synced": False,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                    "local_record_path": str(run_dir / "research_record.json"),
+                },
+                now,
+            )
+            return
+        write_run_state(
+            run_dir / STATE_FILENAME,
+            replace(state, research_record_synced=True, updated_at=now),
+        )
 
     def _append_event_once(
         self,
