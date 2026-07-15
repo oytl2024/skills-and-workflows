@@ -36,6 +36,7 @@ from wqb.workflow_state import (
     WorkflowRunState,
     WorkflowStageState,
     WorkflowStateDiscovery,
+    blocking_terminal_issues,
     clear_active_run,
     create_initial_state,
     diagnose_state_consistency,
@@ -1048,9 +1049,10 @@ class WorkflowOrchestrator:
     ) -> WorkflowRunState:
         """Input: state and timestamp. Output: consistent state. Pause or reject before candidate writes."""
         diagnostics = diagnose_state_consistency(state.run_dir)
-        state = self._pause_for_diagnostics(state, diagnostics, now)
-        if diagnostics:
-            raise ValueError("workflow consistency diagnostics: " + ", ".join(diagnostics))
+        blocking_diagnostics = blocking_terminal_issues(state, diagnostics)
+        state = self._pause_for_diagnostics(state, blocking_diagnostics, now)
+        if blocking_diagnostics:
+            raise ValueError("workflow consistency diagnostics: " + ", ".join(blocking_diagnostics))
         return state
 
     def _validate_candidate_gate_identity(self, candidate: dict[str, object]) -> None:

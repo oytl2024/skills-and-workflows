@@ -436,7 +436,7 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
                 pointer_state_issue = issue
             elif state is not None and state.status in TERMINAL_RUN_STATUSES:
                 terminal_issues = diagnose_state_consistency(pointer_dir, state)
-                blocking_issues = _blocking_terminal_issues(state, terminal_issues)
+                blocking_issues = blocking_terminal_issues(state, terminal_issues)
                 if blocking_issues:
                     return WorkflowStateDiscovery(
                         None,
@@ -463,7 +463,7 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
                 continue
             if state.status in TERMINAL_RUN_STATUSES:
                 terminal_issues = diagnose_state_consistency(run_dir, state)
-                blocking_issues = _blocking_terminal_issues(state, terminal_issues)
+                blocking_issues = blocking_terminal_issues(state, terminal_issues)
                 if blocking_issues:
                     invalid_dirs.append(
                         (run_dir, ["terminal_state_inconsistent", *blocking_issues])
@@ -528,9 +528,20 @@ def discover_active_workflow(run_root: str | Path) -> WorkflowStateDiscovery:
     )
 
 
-def _blocking_terminal_issues(state: WorkflowRunState, issues: list[str]) -> list[str]:
+def blocking_terminal_issues(state: WorkflowRunState, issues: list[str]) -> list[str]:
     """Input: WorkflowRunState and issue strings. Output: blocking issue strings. Keep warning terminals non-blocking."""
-    if state.status == "completed_with_warnings":
+    sync_stage = state.stages.get("research_record_sync")
+    intentional_warning = (
+        state.status == "completed_with_warnings"
+        and not state.research_record_synced
+        and state.current_stage == "complete"
+        and state.last_completed_stage == "research_record_sync"
+        and sync_stage is not None
+        and sync_stage.status == "completed"
+        and bool(sync_stage.blocker)
+        and bool(sync_stage.evidence_paths)
+    )
+    if intentional_warning:
         return [issue for issue in issues if issue != "terminal_research_record_not_synced"]
     return issues
 

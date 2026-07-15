@@ -1704,6 +1704,41 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertIn("research_record_sync_warning", [event.event_type for event in events])
         self.assertFalse(active_exists)
 
+    def test_warning_terminal_allows_later_candidate_status_sync_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator, started = self.create_approved_candidate_run(root)
+            orchestrator.sync_research_record("2026-07-12T00:03:00Z")
+            run_dir = Path(str(started["run_dir"]))
+
+            with patch(
+                "wqb.orchestrator.sync_research_record_to_raw",
+                side_effect=OSError("raw vault unavailable"),
+            ):
+                orchestrator.update_candidate_status(
+                    "c1",
+                    1,
+                    "h1",
+                    "manually_submitted",
+                    "2026-07-12T00:04:00Z",
+                    source_run_id=str(started["run_id"]),
+                )
+
+            updated = orchestrator.update_candidate_status(
+                "c1",
+                1,
+                "h1",
+                "api_submitted",
+                "2026-07-12T00:05:00Z",
+                source_run_id=str(started["run_id"]),
+            )
+            state = load_run_state(run_dir / "run_state.json")
+            rows = load_approved_queue(run_dir)
+
+        self.assertEqual(updated["status"], "api_submitted")
+        self.assertEqual(rows[0]["status"], "api_submitted")
+        self.assertTrue(state.research_record_synced)
+
     def test_completed_run_candidate_invalidation_sync_failure_persists_warning_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1734,6 +1769,33 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertFalse(state.research_record_synced)
         self.assertIn("raw vault unavailable", state.stages["research_record_sync"].blocker)
         self.assertIn("research_record_sync_warning", [event.event_type for event in events])
+
+    def test_warning_terminal_allows_later_candidate_invalidation_sync_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator, started = self.create_approved_candidate_run(root)
+            run_dir = Path(str(started["run_dir"]))
+
+            with patch(
+                "wqb.orchestrator.sync_research_record_to_raw",
+                side_effect=OSError("raw vault unavailable"),
+            ):
+                orchestrator.sync_research_record("2026-07-12T00:03:00Z")
+
+            invalidated = orchestrator.invalidate_candidate_approval(
+                "c1",
+                1,
+                "h1",
+                "candidate expression revised",
+                "2026-07-12T00:04:00Z",
+                source_run_id=str(started["run_id"]),
+            )
+            state = load_run_state(run_dir / "run_state.json")
+            rows = load_approved_queue(run_dir)
+
+        self.assertEqual(invalidated["status"], "invalidated")
+        self.assertEqual(rows[0]["status"], "invalidated")
+        self.assertTrue(state.research_record_synced)
 
     def test_api_submission_limit_applies_across_completed_workflow_runs(self):
         with tempfile.TemporaryDirectory() as tmp:

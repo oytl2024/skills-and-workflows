@@ -7,6 +7,7 @@ from pathlib import Path
 from wqb.workflow_state import (
     WorkflowStateError,
     WorkflowStageState,
+    blocking_terminal_issues,
     create_initial_state,
     diagnose_state_consistency,
     discover_active_workflow,
@@ -649,3 +650,35 @@ class WorkflowStateTests(unittest.TestCase):
             issues = diagnose_state_consistency(root)
 
         self.assertIn("completed_without_research_record", issues)
+
+    def test_blocking_terminal_issues_requires_warning_evidence_to_ignore_unsynced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = create_initial_state(
+                "run1", root, "Power Pool", "2026-07-12T00:00:00Z"
+            )
+            incomplete_warning = replace(
+                state,
+                status="completed_with_warnings",
+                current_stage="complete",
+                last_completed_stage="research_record_sync",
+                research_record_synced=False,
+            )
+            stages = dict(incomplete_warning.stages)
+            stages["research_record_sync"] = WorkflowStageState(
+                name="research_record_sync",
+                status="completed",
+                blocker="OSError: raw vault unavailable",
+                evidence_paths=[str(root / "research_record.json")],
+            )
+            intentional_warning = replace(incomplete_warning, stages=stages)
+
+            without_evidence = blocking_terminal_issues(
+                incomplete_warning, ["terminal_research_record_not_synced"]
+            )
+            with_evidence = blocking_terminal_issues(
+                intentional_warning, ["terminal_research_record_not_synced"]
+            )
+
+        self.assertEqual(without_evidence, ["terminal_research_record_not_synced"])
+        self.assertEqual(with_evidence, [])
