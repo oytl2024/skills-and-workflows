@@ -15,6 +15,11 @@ from wqb.console_proposals import create_proposal_from_form
 from wqb.console_state import ConsolePaths, default_console_paths, load_console_state
 
 
+def _fallback_option_id(index: int) -> str:
+    """Input: valid option order. Output: fallback option ID. Normalize cards without durable IDs."""
+    return f"option-{index}"
+
+
 def _html_page(title: str, body: str) -> str:
     """Input: title and body HTML. Output: full HTML page. Render the local console shell."""
     return (
@@ -51,7 +56,7 @@ def _render_option_controls(cards: list[dict[str, Any]]) -> str:
         return "<div class='empty'>No research options. Refresh option cards with live API authorization.</div>"
     rows = []
     for index, card in enumerate(cards, start=1):
-        option_id = str(card.get("option_id") or f"option-{index}")
+        option_id = str(card.get("option_id") or _fallback_option_id(index))
         title = str(card.get("title", "Research option"))
         incentive = str(card.get("primary_incentive", ""))
         scope = str(card.get("candidate_scope", ""))
@@ -177,7 +182,8 @@ def _option_rows(paths: ConsolePaths) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if not path.exists():
         return rows
-    for index, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    valid_index = 0
+    for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         try:
@@ -185,8 +191,9 @@ def _option_rows(paths: ConsolePaths) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
         if isinstance(row, dict):
+            valid_index += 1
             normalized = dict(row)
-            normalized.setdefault("option_id", f"option-{index}")
+            normalized.setdefault("option_id", _fallback_option_id(valid_index))
             rows.append(normalized)
     return rows
 

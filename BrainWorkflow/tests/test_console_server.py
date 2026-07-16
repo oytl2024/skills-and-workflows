@@ -59,6 +59,36 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertNotIn('<input name="objective"', html)
         self.assertNotIn('type="text" name="selected_option_id"', html)
 
+    def test_second_fallback_option_survives_invalid_jsonl_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            artifact = paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text("{}\n", encoding="utf-8")
+            maintenance = paths.knowledge_root / "wiki" / "80_maintenance"
+            maintenance.mkdir(parents=True)
+            (maintenance / "freshness_manifest.json").write_text(
+                json.dumps(
+                    [
+                        {"name": name, "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7}
+                        for name in ("data_ledger", "template_library", "benchmark_rules", "activity_snapshot", "operator_catalog", "research_option_cards")
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            decisions = paths.knowledge_root / "wiki" / "70_decisions"
+            decisions.mkdir(parents=True)
+            (decisions / "research_option_cards.jsonl").write_text(
+                json.dumps({"title": "First objective"}) + "\n\nnot-json\n" + json.dumps({"title": "Second objective"}) + "\n",
+                encoding="utf-8",
+            )
+            html = render_dashboard({"option_cards": [{"title": "First objective"}, {"title": "Second objective"}]})
+            command = build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-2"})
+
+        self.assertIn('value="option-2"', html)
+        self.assertIn("Second objective", command)
+
     def test_render_proposals_includes_input_form(self):
         html = render_proposals([{"proposal_id": "p1", "title": "Improve template", "status": "proposed"}])
 
