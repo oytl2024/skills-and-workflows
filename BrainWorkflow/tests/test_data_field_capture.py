@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from wqb.data_field_capture import build_capture_scopes, capture_platform_data_fields
+from wqb.data_ledger_compile import compile_data_ledger_from_raw
 
 
 class FakeCaptureClient:
@@ -47,6 +48,19 @@ class FailingFieldCaptureClient(FakeCaptureClient):
         if path.startswith("/data-fields?") and "dataset.id=fundamental3" in path:
             self.paths.append(path)
             raise RuntimeError("field endpoint failed")
+        return super().get_json(path)
+
+
+class MissingDatasetIdCaptureClient(FakeCaptureClient):
+    def get_json(self, path):
+        if path.startswith("/data-sets?"):
+            self.paths.append(path)
+            return {
+                "results": [
+                    {"id": "fundamental3", "name": "Fundamentals", "category": "fundamental"},
+                    {"name": "Malformed dataset", "category": "news"},
+                ]
+            }
         return super().get_json(path)
 
 
@@ -178,6 +192,60 @@ class DataFieldCaptureTests(unittest.TestCase):
         self.assertIn("field endpoint failed", errors[-1]["message"])
         self.assertTrue(any(path.startswith("/data-sets?") for path in resumed_client.paths))
         self.assertTrue(any(path.startswith("/data-fields?") for path in resumed_client.paths))
+
+    def test_successful_resume_clears_resolved_error_status_and_compiles_measured_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            first_summary = capture_platform_data_fields(
+                FailingFieldCaptureClient(),
+                root,
+                generated_at="2026-07-16T08:30:00+00:00",
+                instrument_types=["EQUITY"],
+                regions=["USA"],
+                delays=[1],
+                universes=["TOP3000"],
+            )
+
+            resumed_summary = capture_platform_data_fields(
+                FakeCaptureClient(),
+                root,
+                generated_at="2026-07-16T08:30:00+00:00",
+                instrument_types=["EQUITY"],
+                regions=["USA"],
+                delays=[1],
+                universes=["TOP3000"],
+                resume_capture=True,
+            )
+            capture = Path(resumed_summary["capture_dir"])
+            compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            historical_error_count = len((capture / "errors.jsonl").read_text(encoding="utf-8").splitlines())
+
+        self.assertEqual(first_summary["status"], "completed_with_warnings")
+        self.assertEqual(resumed_summary["status"], "completed")
+        self.assertEqual(resumed_summary["error_count"], 0)
+        self.assertEqual(historical_error_count, 1)
+        self.assertEqual(row["coverage_status"], "measured_raw")
+
+    def test_dataset_without_id_marks_scope_partial_and_records_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            summary = capture_platform_data_fields(
+                MissingDatasetIdCaptureClient(),
+                root,
+                generated_at="2026-07-16T08:30:00+00:00",
+                instrument_types=["EQUITY"],
+                regions=["USA"],
+                delays=[1],
+                universes=["TOP3000"],
+            )
+            capture = Path(summary["capture_dir"])
+            scope_rows = [json.loads(line) for line in (capture / "scopes.jsonl").read_text(encoding="utf-8").splitlines()]
+            errors = [json.loads(line) for line in (capture / "errors.jsonl").read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(summary["status"], "completed_with_warnings")
+        self.assertEqual(scope_rows[-1]["status"], "partial")
+        self.assertTrue(any("missing dataset id" in row["message"] for row in errors))
 
 
 if __name__ == "__main__":

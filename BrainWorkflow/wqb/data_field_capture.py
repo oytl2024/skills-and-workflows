@@ -82,22 +82,43 @@ def _clear_outputs(capture_dir: Path) -> None:
 
 def _completed_scope_keys(capture_dir: Path) -> set[tuple[str, str, int, str]]:
     """Input: capture directory. Output: completed scope keys. Read resumable completed scopes from persisted JSONL."""
+    return {key for key, row in _latest_scope_rows(capture_dir).items() if row.get("status") == "completed"}
+
+
+def _scope_key(scope: CaptureScope | dict[str, Any]) -> tuple[str, str, int, str]:
+    """Input: CaptureScope or scope dict. Output: stable scope key tuple. Normalize a persisted capture scope key."""
+    if isinstance(scope, CaptureScope):
+        return scope.instrument_type, scope.region, int(scope.delay), scope.universe
+    return str(scope["instrument_type"]), str(scope["region"]), int(scope["delay"]), str(scope["universe"])
+
+
+def _latest_scope_rows(capture_dir: Path) -> dict[tuple[str, str, int, str], dict[str, Any]]:
+    """Input: capture directory. Output: latest row per scope. Resolve resumable scope state from append-only JSONL."""
     path = capture_dir / "scopes.jsonl"
-    completed: set[tuple[str, str, int, str]] = set()
+    latest: dict[tuple[str, str, int, str], dict[str, Any]] = {}
     if not path.exists():
-        return completed
+        return latest
     for line in path.read_text(encoding="utf-8").splitlines():
         try:
             row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        scope = row.get("scope", {}) if isinstance(row, dict) else {}
-        if row.get("status") == "completed" and isinstance(scope, dict):
-            try:
-                completed.add((str(scope["instrument_type"]), str(scope["region"]), int(scope["delay"]), str(scope["universe"])))
-            except (KeyError, TypeError, ValueError):
+            scope = row.get("scope", {}) if isinstance(row, dict) else {}
+            if not isinstance(scope, dict):
                 continue
-    return completed
+            latest[_scope_key(scope)] = row
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            continue
+    return latest
+
+
+def _unresolved_scope_error_count(scope_rows: list[dict[str, Any]]) -> int:
+    """Input: latest non-completed scope rows. Output: unresolved error count. Count only current scope failures."""
+    count = 0
+    for row in scope_rows:
+        try:
+            count += max(1, int(row.get("error_count", 1)))
+        except (TypeError, ValueError):
+            count += 1
+    return count
 
 
 def _jsonl_row_count(path: Path) -> int:
@@ -168,16 +189,18 @@ def capture_platform_data_fields(
     completed_scopes = _completed_scope_keys(capture_dir) if resume_capture else set()
 
     operators: list[dict[str, Any]] = []
+    operator_fetch_succeeded = True
     try:
         operators = fetch_operators(client)
         _write_json(capture_dir / "operators.json", {"generated_at": generated, "operators": operators})
     except Exception as error:
+        operator_fetch_succeeded = False
         _append_jsonl(capture_dir / "errors.jsonl", _error_row(None, "/operators", error, generated))
         _write_json(capture_dir / "operators.json", {"generated_at": generated, "operators": []})
 
     scopes = build_capture_scopes(instrument_types, regions, delays, universes, max_scopes=max_scopes)
     for scope in scopes:
-        if (scope.instrument_type, scope.region, int(scope.delay), scope.universe) in completed_scopes:
+        if _scope_key(scope) in completed_scopes:
             continue
         scope_row = {"generated_at": generated, "scope": _scope_dict(scope), "status": "started"}
         _append_jsonl(capture_dir / "scopes.jsonl", scope_row)
@@ -206,6 +229,9 @@ def capture_platform_data_fields(
                 {"generated_at": generated, "scope": _scope_dict(scope), "data_set": data_set},
             )
             if not dataset_id:
+                error = ValueError("missing dataset id")
+                _append_jsonl(capture_dir / "errors.jsonl", _error_row(scope, "/data-sets", error, generated))
+                field_errors.append(str(error))
                 continue
             try:
                 fields = fetch_data_fields(
@@ -239,6 +265,13 @@ def capture_platform_data_fields(
             scope_row.update({"status": "completed", "data_set_count": len(data_sets)})
         _append_jsonl(capture_dir / "scopes.jsonl", scope_row)
 
+    latest_scope_rows = _latest_scope_rows(capture_dir)
+    unresolved_scope_rows = [
+        latest_scope_rows.get(_scope_key(scope), {})
+        for scope in scopes
+        if latest_scope_rows.get(_scope_key(scope), {}).get("status") != "completed"
+    ]
+    error_count = _unresolved_scope_error_count(unresolved_scope_rows) + (0 if operator_fetch_succeeded else 1)
     summary = {
         "generated_at": generated,
         "capture_dir": str(capture_dir),
@@ -246,8 +279,8 @@ def capture_platform_data_fields(
         "operator_count": len(operators),
         "data_set_count": _jsonl_row_count(capture_dir / "data_sets.jsonl"),
         "field_count": _jsonl_row_count(capture_dir / "data_fields.jsonl"),
-        "error_count": _jsonl_row_count(capture_dir / "errors.jsonl"),
-        "status": "completed" if _jsonl_row_count(capture_dir / "errors.jsonl") == 0 else "completed_with_warnings",
+        "error_count": error_count,
+        "status": "completed" if error_count == 0 else "completed_with_warnings",
     }
     _write_json(capture_dir / "manifest.json", summary)
     errors_path = capture_dir / "errors.jsonl"
