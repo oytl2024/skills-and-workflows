@@ -31,6 +31,7 @@ from wqb.expression import expression_hash, is_power_pool_complexity_ok, replace
 from wqb.generator import build_settings, generate_seed_candidates, simulation_payload
 from wqb.knowledge import fetch_knowledge_snapshot
 from wqb.knowledge_bootstrap import bootstrap_knowledge, bootstrap_summary_to_dict
+from wqb.knowledge_compile import compile_research_records
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest, write_freshness_report
 from wqb.novelty import score_expression_novelty
 from wqb.optimizer import actions_for_check_summary
@@ -47,6 +48,7 @@ from wqb.subagent_handoff import build_handoff_packets, write_handoff_packets
 from wqb.template_library import load_template_library
 from wqb.workflow_launcher import create_run_manifest, load_workflow_launch_config, write_run_manifest
 from wqb.workflow_paths import resolve_project_root, resolve_run_root
+from wqb.console_server import run_console
 
 
 FIELD_BATCH_MULTI_CHUNK_SIZE = 5
@@ -166,6 +168,11 @@ def bootstrap_knowledge_command(knowledge_root: str | Path, seed_root: str | Pat
     """Input: knowledge root and seed root. Output: summary dict. Materialize formal knowledge artifacts."""
     summary = bootstrap_knowledge(knowledge_root, seed_root)
     return bootstrap_summary_to_dict(summary)
+
+
+def compile_research_records_command(knowledge_root: str | Path) -> dict[str, Any]:
+    """Input: knowledge root. Output: summary dict. Compile raw research records into wiki notes."""
+    return compile_research_records(knowledge_root)
 
 
 def readiness_check(
@@ -3224,7 +3231,9 @@ def parse_args() -> argparse.Namespace:
             "knowledge-health-check",
             "readiness-check",
             "launch-workflow",
+            "launch-console",
             "bootstrap-knowledge",
+            "compile-research-records",
             "schedule-research",
             "workflow-start",
             "workflow-continue",
@@ -3306,6 +3315,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-json", default="")
     parser.add_argument("--candidate-status", choices=sorted(STATUS_UPDATE_STATUSES), default="")
     parser.add_argument("--source-run-id", default="")
+    parser.add_argument("--console-host", default="127.0.0.1")
+    parser.add_argument("--console-port", type=int, default=8765)
+    parser.add_argument("--no-open-browser", action="store_true", default=False)
     return parser.parse_args()
 
 
@@ -3359,10 +3371,22 @@ def main() -> None:
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
+    if args.command == "launch-console":
+        result = run_console(
+            host=args.console_host,
+            port=args.console_port,
+            knowledge_root=args.knowledge_root,
+            runs_root=args.run_dir,
+            open_browser=not args.no_open_browser,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
     if args.command.startswith("workflow-"):
         workflow_overrides = dict(overrides)
         if cli_flag_present(sys.argv[1:], "--knowledge-root"):
             workflow_overrides["knowledge_root"] = args.knowledge_root
+        if args.run_dir:
+            workflow_overrides["run_root"] = args.run_dir
         config = load_config(args.config, overrides=workflow_overrides)
         orchestrator = WorkflowOrchestrator(
             default_orchestrator_paths(config)
@@ -3545,11 +3569,13 @@ def main() -> None:
     elif args.command == "plan-stage":
         plan_stage(args.workflow_stage, args.dataset_id)
     elif args.command == "plan-research-options":
+        if not args.enable_live_api:
+            raise SystemExit("--enable-live-api is required for plan-research-options")
         result = plan_research_options(config, args.max_options, args.option_output_dir)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "knowledge-health-check":
         result = knowledge_health_check(
-            default_knowledge_root(),
+            args.knowledge_root,
             args.freshness_manifest,
             args.freshness_report,
             today_value=args.today or None,
@@ -3572,6 +3598,9 @@ def main() -> None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "bootstrap-knowledge":
         result = bootstrap_knowledge_command(args.knowledge_root, args.knowledge_seed_root)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "compile-research-records":
+        result = compile_research_records_command(args.knowledge_root)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "schedule-research":
         if not args.option_json:

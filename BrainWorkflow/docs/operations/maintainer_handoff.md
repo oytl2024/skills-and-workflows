@@ -58,10 +58,10 @@ For project continuity, update local `milestone.md` before interruption or hando
 
 - New workflow state behavior: `wqb/workflow_state.py`, `wqb/orchestrator.py`, `tests/test_workflow_state.py`, `tests/test_orchestrator.py`.
 - Candidate approval/queue behavior: `wqb/candidate_queue.py`, `wqb/research_record.py`, `tests/test_candidate_queue.py`, `tests/test_research_record.py`.
-- Knowledge readiness and maintenance: `wqb/run_readiness.py`, `wqb/knowledge_bootstrap.py`, `wqb/knowledge_freshness.py`.
+- Knowledge readiness and maintenance: `wqb/run_readiness.py`, `wqb/knowledge_bootstrap.py`, `wqb/knowledge_compile.py`, `wqb/knowledge_freshness.py`.
 - Research planning: `wqb/research_planner.py`, `wqb/research_scheduler.py`, `wqb/principle_model.py`.
 - Console read model: `wqb/console_state.py`, `tests/test_console_state.py`.
-- Future console UI/server: implement from the existing console spec and plan, starting with read-only pages before write actions.
+- Console UI/server and action layer: `wqb/console_server.py`, `wqb/console_jobs.py`, `wqb/console_context.py`, `wqb/console_proposals.py`.
 
 ## Durable Knowledge Base Contract
 
@@ -80,6 +80,11 @@ The Obsidian vault follows a raw-to-wiki pattern:
 - `knowledge/wiki/90_index/`: glossary, open questions, health check index.
 
 Research commands should read compiled wiki artifacts. Full source refresh and wiki compilation should be a separate maintenance loop.
+
+Knowledge maintenance has two official entry points:
+
+- Research-record compile: raw research records accumulated from completed runs are compiled into `wiki/40_experiments/research_record_compile.md` by `python -m wqb.cli compile-research-records`.
+- Platform-material maintenance: after platform raw materials are refreshed, run `bootstrap-knowledge`, `knowledge-health-check`, and readiness maintenance before starting a research workflow. The console enforces this by refusing `workflow-start` when compiled knowledge freshness is stale or missing.
 
 ## Current Known Minor Follow-Ups
 

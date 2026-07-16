@@ -42,8 +42,24 @@ class ConsoleStateTests(unittest.TestCase):
                 json.dumps({"mode": "plan-only", "passed": True, "blocked": False, "issues": []}),
                 encoding="utf-8",
             )
+            for relative in [
+                "wiki/20_semantics/data_ledger.jsonl",
+                "wiki/30_templates/template_library.jsonl",
+                "wiki/50_benchmarks/correlation_and_novelty.md",
+                "wiki/10_foundations/activity_snapshot.md",
+            ]:
+                artifact = knowledge / relative
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                artifact.write_text("{}", encoding="utf-8")
             (maintenance / "freshness_manifest.json").write_text(
-                json.dumps([{"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-12", "max_age_days": 7}]),
+                json.dumps(
+                    [
+                        {"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-12", "max_age_days": 7},
+                        {"name": "template_library", "path": "wiki/30_templates/template_library.jsonl", "updated_at": "2026-07-12", "max_age_days": 7},
+                        {"name": "benchmark_rules", "path": "wiki/50_benchmarks/correlation_and_novelty.md", "updated_at": "2026-07-12", "max_age_days": 7},
+                        {"name": "activity_snapshot", "path": "wiki/10_foundations/activity_snapshot.md", "updated_at": "2026-07-12", "max_age_days": 7},
+                    ]
+                ),
                 encoding="utf-8",
             )
             (decisions / "research_option_cards.jsonl").write_text(
@@ -77,7 +93,7 @@ class ConsoleStateTests(unittest.TestCase):
             )
 
         self.assertTrue(state["readiness"]["passed"])
-        self.assertEqual(state["freshness"]["record_count"], 1)
+        self.assertEqual(state["freshness"]["record_count"], 4)
         self.assertEqual(state["option_cards"][0]["title"], "Explore current Power Pool boards")
         self.assertIn("Research Schedule", state["schedule"]["preview"])
         self.assertEqual(state["jobs"][0]["job_id"], "job-1")

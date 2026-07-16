@@ -158,16 +158,26 @@ checker modules.
 
 Knowledge Control handles maintenance workflows separately from research.
 
+Supported first-version actions are split into two maintenance modes:
+
+1. Research-record compile after research sessions.
+2. Platform-material maintenance after Learn/docs/operators/activities/forum raw source refreshes and before starting new research.
+
 Supported first-version actions:
 
 1. Run `bootstrap-knowledge`.
 2. Run `knowledge-health-check`.
 3. Run `readiness-check` in maintenance or plan-only mode.
-4. Show raw source index and compiled wiki artifact status.
+4. Run `compile-research-records`.
+5. Show raw source index and compiled wiki artifact status.
 
 The UI must clearly label these as maintenance actions. Research startup should
 consume compiled artifacts; it should not trigger full raw-source recapture by
 default.
+
+If platform raw materials have been refreshed, the user must run knowledge
+maintenance before starting research. The console should refuse research start
+when compiled knowledge is stale or missing.
 
 ## Component 5: Workflow Proposal Inbox
 

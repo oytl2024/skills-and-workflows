@@ -435,6 +435,22 @@ class CliTests(unittest.TestCase):
             self.assertTrue(Path(result["jsonl_path"]).exists())
             self.assertTrue(Path(result["markdown_path"]).exists())
 
+    def test_plan_research_options_main_requires_live_api_flag(self):
+        with patch("sys.argv", ["wqb", "plan-research-options"]):
+            with self.assertRaisesRegex(SystemExit, "--enable-live-api is required"):
+                main()
+
+    def test_plan_research_options_main_dispatches_when_live_api_enabled(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "plan-research-options", "--enable-live-api"]), patch(
+            "wqb.cli.plan_research_options",
+            return_value={"option_count": 1, "jsonl_path": "cards.jsonl", "markdown_path": "cards.md"},
+        ) as planner, redirect_stdout(output):
+            main()
+
+        planner.assert_called_once()
+        self.assertEqual(json.loads(output.getvalue())["option_count"], 1)
+
     def test_knowledge_health_check_writes_report_without_simulation(self):
         from wqb.cli import knowledge_health_check
 
@@ -678,6 +694,40 @@ class CliTests(unittest.TestCase):
 
         health_check.assert_called_once()
         self.assertEqual(json.loads(output.getvalue())["report_path"], "report.md")
+
+    def test_knowledge_health_check_main_uses_explicit_knowledge_root(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "knowledge-health-check", "--knowledge-root", "custom_knowledge"]), patch(
+            "wqb.cli.knowledge_health_check", return_value={"record_count": 1, "stale_count": 0, "missing_count": 0, "report_path": "report.md"}
+        ) as health_check, redirect_stdout(output):
+            main()
+
+        self.assertEqual(health_check.call_args.args[0], "custom_knowledge")
+        self.assertEqual(json.loads(output.getvalue())["report_path"], "report.md")
+
+    def test_compile_research_records_main_dispatches_without_network(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "compile-research-records", "--knowledge-root", "custom_knowledge"]), patch(
+            "wqb.cli.compile_research_records_command",
+            return_value={"record_count": 1, "markdown_path": "compile.md", "json_path": "compile.json"},
+        ) as compiler, redirect_stdout(output):
+            main()
+
+        compiler.assert_called_once_with("custom_knowledge")
+        self.assertEqual(json.loads(output.getvalue())["markdown_path"], "compile.md")
+
+    def test_launch_console_parse_and_dispatch(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "launch-console", "--console-host", "127.0.0.1", "--console-port", "0", "--no-open-browser"]), patch(
+            "wqb.cli.run_console",
+            return_value={"url": "http://127.0.0.1:0", "host": "127.0.0.1", "port": 0},
+        ) as launcher, redirect_stdout(output):
+            args = parse_args()
+            self.assertEqual(args.command, "launch-console")
+            main()
+
+        launcher.assert_called_once()
+        self.assertEqual(json.loads(output.getvalue())["url"], "http://127.0.0.1:0")
 
     def test_dry_run_prints_payloads_without_network(self):
         config = load_config(
@@ -3535,6 +3585,35 @@ class WorkflowOrchestratorCliTests(unittest.TestCase):
         paths = orchestrator_cls.call_args.args[0]
         self.assertEqual(paths.run_root, run_root)
         self.assertEqual(paths.knowledge_root, knowledge_root)
+
+    def test_workflow_status_run_dir_overrides_configured_run_root(self):
+        from wqb.cli import main
+
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "workflow.yaml"
+            configured_run_root = root / "configured_runs"
+            override_run_root = root / "console_runs"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "region: USA",
+                        "universe: TOP3000",
+                        "delay: 1",
+                        f"run_root: {configured_run_root.as_posix()}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with patch("sys.argv", ["wqb", "workflow-status", "--config", str(config_path), "--run-dir", str(override_run_root)]), patch(
+                "wqb.cli.WorkflowOrchestrator"
+            ) as orchestrator_cls, redirect_stdout(output):
+                orchestrator_cls.return_value.status.return_value = {"status": "created"}
+                main()
+
+        paths = orchestrator_cls.call_args.args[0]
+        self.assertEqual(paths.run_root, override_run_root)
 
     def test_workflow_continue_dispatches_orchestrator(self):
         from wqb.cli import main

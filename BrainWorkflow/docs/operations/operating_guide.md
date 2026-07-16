@@ -6,7 +6,7 @@ This guide is the operator-facing entry point for using BrainWorkflow without re
 
 - The durable Orchestrator workflow is implemented.
 - The read-only console state aggregator is implemented in `wqb/console_state.py`.
-- A full browser/UI console server and action runner are designed but not implemented yet.
+- A first local browser console, action runner, proposal inbox, and context guard are implemented.
 - Live WorldQuant BRAIN API work still requires credentials, platform availability, and readiness gates.
 
 ## Important Local Paths
@@ -60,6 +60,16 @@ python -m wqb.cli workflow-resume --knowledge-root 'C:\Users\oytl\Desktop\pyproj
 
 The research workflow consumes compiled knowledge. It should not recapture all platform documents at every startup.
 
+There are two distinct maintenance situations:
+
+1. **Research-record compile after a research session.** Historical workflow runs write raw research records under `knowledge/raw/research/...`. After enough new research accumulates, manually compile those records into wiki experiment memory:
+
+```powershell
+python -m wqb.cli compile-research-records --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
+```
+
+2. **Platform-material refresh before new research.** When the user asks to update platform Learn/docs/operators/activities/forum raw material, update the raw source layer first, then run knowledge maintenance before starting research. Research startup consumes the newly compiled wiki, ledger, template, and manifest artifacts rather than raw captures directly.
+
 Manual maintenance loop:
 
 ```powershell
@@ -94,20 +104,23 @@ Implemented:
 - `wqb.console_state.load_console_state()`
 - active workflow summary;
 - readiness, freshness, option cards, schedule preview;
-- workflow events and approved queue diagnostics.
-
-Not implemented yet:
-
-- local web server;
-- browser dashboard;
-- console action buttons;
-- job runner UI;
+- workflow events and approved queue diagnostics;
+- local web server and browser dashboard;
+- action buttons for readiness, option refresh, workflow start/continue, platform compile, research-record compile, and knowledge health checks;
+- durable job records under `runs/console_jobs/`;
 - workflow-change proposal form UI.
 
-The next console implementation should use the existing read-only state layer and the design in:
+Launch:
 
-- `docs/superpowers/specs/2026-07-12-workflow-console-design.md`
-- `docs/superpowers/plans/2026-07-12-workflow-console-implementation.md`
+```powershell
+python -m wqb.cli launch-console --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --run-dir 'C:\Users\oytl\Desktop\pyproject\brain\runs' --console-port 8765
+```
+
+Safety rules:
+
+- Platform option refresh requires the `enable_live_api` checkbox.
+- Workflow start refuses to run from the console when required compiled knowledge is stale or missing; run knowledge maintenance first.
+- Submit actions are not auto-triggered by the first console version.
 
 ## Minimum Verification
 

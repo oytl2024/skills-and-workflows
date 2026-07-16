@@ -103,6 +103,7 @@ Example foundation files live under `docs/knowledge/`:
 The startup layer separates maintenance from research execution:
 
 - `bootstrap-knowledge` materializes Data Ledger, Template Library, Freshness Manifest, and bootstrap reports into the shared Obsidian vault.
+- `compile-research-records` compiles raw research records from completed runs into `wiki/40_experiments/research_record_compile.md`.
 - `readiness-check` validates required artifacts, parseability, freshness, batch size, live API permission, and submit confirmation.
 - `launch-workflow` writes a run manifest, readiness report, and subagent handoff packets before research execution. In strict research or submit-candidate modes, blocked readiness writes only a blocked readiness report and does not create a run manifest or handoffs.
 - `schedule-research` and live simulation/repair commands run the same readiness gate before writing schedules or contacting the API.
@@ -111,6 +112,22 @@ Example:
 
 ```powershell
 python -m wqb.cli bootstrap-knowledge --knowledge-root C:\Users\oytl\Desktop\pyproject\brain\knowledge
+python -m wqb.cli compile-research-records --knowledge-root C:\Users\oytl\Desktop\pyproject\brain\knowledge
 python -m wqb.cli readiness-check --knowledge-root C:\Users\oytl\Desktop\pyproject\brain\knowledge --readiness-mode plan-only
 python -m wqb.cli launch-workflow --workflow-objective current-incentives --workflow-mode plan-only
 ```
+
+## Workflow Console
+
+The local console is a small standard-library browser UI for operating the existing CLI and Orchestrator without relying on a long chat context.
+
+```powershell
+python -m wqb.cli launch-console --knowledge-root C:\Users\oytl\Desktop\pyproject\brain\knowledge --run-dir C:\Users\oytl\Desktop\pyproject\brain\runs --console-port 8765
+```
+
+It shows readiness, freshness, research options, current workflow state, job history, and the workflow proposal inbox. Console actions write durable job records under `runs/console_jobs/` and update recovery context files.
+
+Knowledge maintenance is deliberately split:
+
+- Compile research records after research sessions with `compile-research-records`.
+- Compile refreshed platform material with `bootstrap-knowledge` and verify with `knowledge-health-check` before starting research.

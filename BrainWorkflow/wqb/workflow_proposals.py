@@ -169,3 +169,51 @@ def write_workflow_proposals(output_dir: Path, proposals: list[WorkflowChangePro
         markdown.append(_proposal_markdown(_proposal_from_dict(row)))
     markdown_path.write_text("\n\n".join(markdown), encoding="utf-8")
     return jsonl_path, markdown_path
+
+
+def load_workflow_proposals(output_dir: str | Path) -> list[dict[str, Any]]:
+    """Input: proposal output dir. Output: proposal rows. Load persisted workflow proposal JSONL."""
+    jsonl_path = Path(output_dir) / PROPOSAL_JSONL
+    if not jsonl_path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in jsonl_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def update_workflow_proposal_decision(
+    output_dir: str | Path,
+    proposal_id: str,
+    status: str,
+    user_decision: str,
+) -> tuple[Path, Path]:
+    """Input: output dir, proposal id, status, decision. Output: artifact paths. Persist user decision."""
+    allowed = {"proposed", "accepted", "rejected", "revise", "deferred", "applied"}
+    if status not in allowed:
+        raise ValueError(f"unsupported proposal status: {status}")
+    rows = load_workflow_proposals(output_dir)
+    matched = False
+    for row in rows:
+        if str(row.get("proposal_id", "")) == str(proposal_id):
+            row["status"] = status
+            row["user_decision"] = str(user_decision)
+            matched = True
+            break
+    if not matched:
+        raise ValueError(f"proposal not found: {proposal_id}")
+    proposals = [_proposal_from_dict(row) for row in rows]
+    jsonl_path = Path(output_dir) / PROPOSAL_JSONL
+    markdown_path = Path(output_dir) / PROPOSAL_MARKDOWN
+    with jsonl_path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    markdown = ["# Workflow Change Proposals", ""]
+    for proposal in proposals:
+        markdown.append(_proposal_markdown(proposal))
+    markdown_path.write_text("\n\n".join(markdown), encoding="utf-8")
+    return jsonl_path, markdown_path

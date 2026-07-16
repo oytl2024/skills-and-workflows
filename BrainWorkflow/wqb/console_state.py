@@ -88,14 +88,15 @@ def _freshness_summary(knowledge_root: Path) -> dict[str, Any]:
     """Input: knowledge root. Output: freshness counts. Evaluate the manifest when present."""
     manifest = knowledge_root / "wiki" / "80_maintenance" / "freshness_manifest.json"
     if not manifest.exists():
-        return {"exists": False, "record_count": 0, "stale_count": 0, "missing_count": 0, "records": []}
+        return {"exists": False, "valid": False, "record_count": 0, "stale_count": 0, "missing_count": 0, "records": []}
     try:
-        records = load_freshness_manifest(manifest, strict=False)
+        records = load_freshness_manifest(manifest, strict=True)
         statuses = evaluate_freshness(records, date.today(), artifact_root=knowledge_root)
     except (OSError, ValueError, json.JSONDecodeError):
-        return {"exists": True, "record_count": 0, "stale_count": 0, "missing_count": 0, "records": []}
+        return {"exists": True, "valid": False, "record_count": 0, "stale_count": 0, "missing_count": 0, "records": []}
     return {
         "exists": True,
+        "valid": True,
         "record_count": len(statuses),
         "stale_count": len([status for status in statuses if status.stale]),
         "missing_count": len([status for status in statuses if not status.artifact_exists]),
