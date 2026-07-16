@@ -106,7 +106,25 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
 
 
-def _record_from_group(root: Path, capture_path: Path, rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _publish_staged_outputs(staged: list[tuple[Path, Path]]) -> None:
+    """Input: staged and destination path pairs. Output: none. Publish all outputs or restore every prior destination."""
+    previous = {destination: destination.read_bytes() if destination.exists() else None for _, destination in staged}
+    try:
+        for temporary, destination in staged:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary.replace(destination)
+    except Exception:
+        for _, destination in staged:
+            content = previous[destination]
+            if content is None:
+                destination.unlink(missing_ok=True)
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(content)
+        raise
+
+
+def _record_from_group(root: Path, capture_path: Path, rows: list[dict[str, Any]], prior: DataLedgerRecord | None = None) -> dict[str, Any]:
     """Input: root, raw source path, grouped rows. Output: data ledger JSON row."""
     first = rows[0]
     field = first.get("field", {}) if isinstance(first.get("field"), dict) else {}
@@ -138,25 +156,26 @@ def _record_from_group(root: Path, capture_path: Path, rows: list[dict[str, Any]
             coverage=coverage,
             alpha_count=alpha_count,
             user_count=user_count,
-            simulation_usage_count=0,
-            submitted_usage_count=0,
-            last_used_at="",
-            best_result_label="unexplored_raw_candidate",
+            simulation_usage_count=prior.simulation_usage_count if prior else 0,
+            submitted_usage_count=prior.submitted_usage_count if prior else 0,
+            last_used_at=prior.last_used_at if prior else "",
+            best_result_label=prior.best_result_label if prior else "unexplored_raw_candidate",
             correlation_risk=correlation_risk,
             source_paths=[_relative_source(root, capture_path)],
             available_regions=regions,
             available_delays=delays,
             available_universes=universes,
-            activity_tags=[],
+            activity_tags=prior.activity_tags if prior else [],
             compatible_template_ids=_template_ids(field_type, tags),
             gate_requirements=["verify_platform_availability_before_live_run"],
-            experiment_paths=[],
+            experiment_paths=prior.experiment_paths if prior else [],
             instrument_type=str(primary_scope.get("instrument_type", "")),
             date_coverage=str(field.get("dateCoverage", field.get("date_coverage", ""))),
             data_category=str(data_set.get("category", "")),
             crowding_risk=correlation_risk,
             known_operators=["rank", "ts_delta", "ts_zscore"],
-            repair_usage_count=0,
+            repair_usage_count=prior.repair_usage_count if prior else 0,
+            field_description=str(field.get("description", "")),
         )
     ) | {"source_quality": "platform_raw_capture", "coverage_status": "measured_raw"}
 
@@ -182,7 +201,6 @@ def compile_data_ledger_from_raw(
         if field_id:
             grouped[(dataset_id, field_id)].append(row)
 
-    output_rows = [_record_from_group(root, fields_path, grouped[key]) for key in sorted(grouped)]
     ledger_path = root / DATA_LEDGER_JSONL
     markdown_path = root / DATA_LEDGER_MD
     manifest_path = root / FRESHNESS_MANIFEST
@@ -191,15 +209,14 @@ def compile_data_ledger_from_raw(
     manifest_tmp_path = manifest_path.with_suffix(".json.tmp")
     tmp_paths = [ledger_tmp_path, markdown_tmp_path, manifest_tmp_path]
     try:
+        prior_records = {(record.dataset_id, record.field_id): record for record in load_data_ledger(ledger_path)}
+        output_rows = [_record_from_group(root, fields_path, grouped[key], prior_records.get(key)) for key in sorted(grouped)]
         _write_jsonl(ledger_tmp_path, output_rows)
         records = load_data_ledger(ledger_tmp_path)
         write_data_ledger_markdown(markdown_tmp_path, records, generated)
         _update_manifest(root, generated, manifest_tmp_path)
 
-        ledger_path.parent.mkdir(parents=True, exist_ok=True)
-        markdown_tmp_path.replace(markdown_path)
-        manifest_tmp_path.replace(manifest_path)
-        ledger_tmp_path.replace(ledger_path)
+        _publish_staged_outputs([(ledger_tmp_path, ledger_path), (markdown_tmp_path, markdown_path), (manifest_tmp_path, manifest_path)])
     finally:
         for path in tmp_paths:
             path.unlink(missing_ok=True)

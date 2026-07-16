@@ -60,6 +60,52 @@ class DataLedgerCompileTests(unittest.TestCase):
         self.assertEqual(raw_row["source_quality"], "platform_raw_capture")
         self.assertEqual(raw_row["coverage_status"], "measured_raw")
 
+    def test_compile_preserves_field_description_and_existing_usage_memory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            write_jsonl(capture / "data_fields.jsonl", [{"scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}, "data_set": {"id": "fundamental3", "name": "Fundamentals", "category": "fundamental"}, "field": {"id": "cash_field", "type": "MATRIX", "description": "Quarterly cash"}}])
+            write_jsonl(ledger, [{"dataset_id": "fundamental3", "field_id": "cash_field", "simulation_usage_count": 4, "submitted_usage_count": 2, "repair_usage_count": 1, "last_used_at": "2026-07-15", "best_result_label": "repairable_signal", "experiment_paths": ["wiki/40_experiments/run.md"], "activity_tags": ["power_pool"]}])
+
+            compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            record = load_data_ledger(ledger)[0]
+
+        self.assertEqual(record.field_description, "Quarterly cash")
+        self.assertEqual(record.simulation_usage_count, 4)
+        self.assertEqual(record.submitted_usage_count, 2)
+        self.assertEqual(record.repair_usage_count, 1)
+        self.assertEqual(record.last_used_at, "2026-07-15")
+        self.assertEqual(record.best_result_label, "repairable_signal")
+        self.assertEqual(record.experiment_paths, ["wiki/40_experiments/run.md"])
+        self.assertEqual(record.activity_tags, ["power_pool"])
+
+    def test_publish_failure_restores_all_existing_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            write_jsonl(capture / "data_fields.jsonl", [{"scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}, "data_set": {"id": "fundamental3"}, "field": {"id": "cash_field", "type": "MATRIX"}}])
+            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            markdown = root / "wiki" / "20_semantics" / "data_ledger.md"
+            manifest = root / "wiki" / "80_maintenance" / "freshness_manifest.json"
+            for path, content in ((ledger, '{"dataset_id": "old", "field_id": "old"}\n'), (markdown, "old markdown\n"), (manifest, "[{\"name\": \"old\"}]")):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+            original_replace = Path.replace
+
+            def fail_ledger_replace(source, destination):
+                if Path(destination) == ledger:
+                    raise OSError("ledger publish failed")
+                return original_replace(source, destination)
+
+            with patch.object(Path, "replace", new=fail_ledger_replace):
+                with self.assertRaisesRegex(OSError, "ledger publish failed"):
+                    compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+
+            self.assertEqual(ledger.read_text(encoding="utf-8"), '{"dataset_id": "old", "field_id": "old"}\n')
+            self.assertEqual(markdown.read_text(encoding="utf-8"), "old markdown\n")
+            self.assertEqual(manifest.read_text(encoding="utf-8"), "[{\"name\": \"old\"}]")
+
     def test_compile_failure_keeps_existing_ledger(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"

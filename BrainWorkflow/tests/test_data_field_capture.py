@@ -89,6 +89,54 @@ class DataFieldCaptureTests(unittest.TestCase):
         self.assertEqual(fields[0]["scope"]["region"], "USA")
         self.assertIn("scope rejected", errors[0]["message"])
 
+    def test_resume_capture_skips_completed_scope_without_duplicate_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+            capture.mkdir(parents=True)
+            (capture / "scopes.jsonl").write_text(json.dumps({"scope": scope, "status": "completed"}) + "\n", encoding="utf-8")
+            (capture / "data_fields.jsonl").write_text(json.dumps({"scope": scope, "field": {"id": "cash_field"}}) + "\n", encoding="utf-8")
+            client = FakeCaptureClient()
+
+            summary = capture_platform_data_fields(
+                client,
+                root,
+                generated_at="2026-07-16T08:30:00+00:00",
+                instrument_types=["EQUITY"],
+                regions=["USA"],
+                delays=[1],
+                universes=["TOP3000"],
+                resume_capture=True,
+            )
+
+            self.assertFalse(any(path.startswith("/data-sets?") or path.startswith("/data-fields?") for path in client.paths))
+            self.assertEqual(summary["scope_count"], 1)
+            self.assertEqual(summary["field_count"], 1)
+            self.assertEqual(len((capture / "data_fields.jsonl").read_text(encoding="utf-8").splitlines()), 1)
+
+    def test_resume_capture_retries_failed_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+            capture.mkdir(parents=True)
+            (capture / "scopes.jsonl").write_text(json.dumps({"scope": scope, "status": "failed"}) + "\n", encoding="utf-8")
+            client = FakeCaptureClient()
+
+            capture_platform_data_fields(
+                client,
+                root,
+                generated_at="2026-07-16T08:30:00+00:00",
+                instrument_types=["EQUITY"],
+                regions=["USA"],
+                delays=[1],
+                universes=["TOP3000"],
+                resume_capture=True,
+            )
+
+            self.assertTrue(any(path.startswith("/data-sets?") for path in client.paths))
+
 
 if __name__ == "__main__":
     unittest.main()

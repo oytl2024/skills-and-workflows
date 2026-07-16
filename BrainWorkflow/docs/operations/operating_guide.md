@@ -92,6 +92,8 @@ Capture raw platform data fields:
 python -m wqb.cli capture-platform-data-fields --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --enable-live-api
 ```
 
+If a capture is interrupted, rerun the same command with `--resume-capture`. Completed scopes are retained; failed or started-only scopes are retried.
+
 Compile the data ledger from raw local snapshots. This command is local-only and does not call the platform API:
 
 ```powershell

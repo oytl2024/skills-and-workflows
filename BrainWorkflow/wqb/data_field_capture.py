@@ -80,6 +80,33 @@ def _clear_outputs(capture_dir: Path) -> None:
             path.unlink()
 
 
+def _completed_scope_keys(capture_dir: Path) -> set[tuple[str, str, int, str]]:
+    """Input: capture directory. Output: completed scope keys. Read resumable completed scopes from persisted JSONL."""
+    path = capture_dir / "scopes.jsonl"
+    completed: set[tuple[str, str, int, str]] = set()
+    if not path.exists():
+        return completed
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        scope = row.get("scope", {}) if isinstance(row, dict) else {}
+        if row.get("status") == "completed" and isinstance(scope, dict):
+            try:
+                completed.add((str(scope["instrument_type"]), str(scope["region"]), int(scope["delay"]), str(scope["universe"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+    return completed
+
+
+def _jsonl_row_count(path: Path) -> int:
+    """Input: JSONL path. Output: row count. Count persisted non-empty capture rows for resume summaries."""
+    if not path.exists():
+        return 0
+    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+
+
 def _scope_dict(scope: CaptureScope) -> dict[str, Any]:
     """Input: CaptureScope. Output: dict. Convert scope to a JSON-safe row."""
     return asdict(scope)
@@ -138,22 +165,20 @@ def capture_platform_data_fields(
     capture_dir.mkdir(parents=True, exist_ok=True)
     if not resume_capture:
         _clear_outputs(capture_dir)
+    completed_scopes = _completed_scope_keys(capture_dir) if resume_capture else set()
 
     operators: list[dict[str, Any]] = []
-    error_count = 0
     try:
         operators = fetch_operators(client)
         _write_json(capture_dir / "operators.json", {"generated_at": generated, "operators": operators})
     except Exception as error:
-        error_count += 1
         _append_jsonl(capture_dir / "errors.jsonl", _error_row(None, "/operators", error, generated))
         _write_json(capture_dir / "operators.json", {"generated_at": generated, "operators": []})
 
     scopes = build_capture_scopes(instrument_types, regions, delays, universes, max_scopes=max_scopes)
-    data_set_count = 0
-    field_count = 0
-
     for scope in scopes:
+        if (scope.instrument_type, scope.region, int(scope.delay), scope.universe) in completed_scopes:
+            continue
         scope_row = {"generated_at": generated, "scope": _scope_dict(scope), "status": "started"}
         try:
             data_sets = fetch_data_sets(
@@ -169,14 +194,12 @@ def capture_platform_data_fields(
             scope_row.update({"status": "completed", "data_set_count": len(data_sets)})
             _append_jsonl(capture_dir / "scopes.jsonl", scope_row)
         except Exception as error:
-            error_count += 1
             scope_row.update({"status": "failed", "data_set_count": 0, "message": str(error)})
             _append_jsonl(capture_dir / "scopes.jsonl", scope_row)
             _append_jsonl(capture_dir / "errors.jsonl", _error_row(scope, "/data-sets", error, generated))
             continue
 
         for data_set in data_sets:
-            data_set_count += 1
             dataset_id = str(data_set.get("id", ""))
             _append_jsonl(
                 capture_dir / "data_sets.jsonl",
@@ -196,11 +219,9 @@ def capture_platform_data_fields(
                     max_records=max_fields_per_dataset if max_fields_per_dataset > 0 else 1000000,
                 )
             except Exception as error:
-                error_count += 1
                 _append_jsonl(capture_dir / "errors.jsonl", _error_row(scope, f"/data-fields?dataset.id={dataset_id}", error, generated))
                 continue
             for field in fields:
-                field_count += 1
                 _append_jsonl(
                     capture_dir / "data_fields.jsonl",
                     {
@@ -215,12 +236,12 @@ def capture_platform_data_fields(
     summary = {
         "generated_at": generated,
         "capture_dir": str(capture_dir),
-        "scope_count": len(scopes),
+        "scope_count": _jsonl_row_count(capture_dir / "scopes.jsonl"),
         "operator_count": len(operators),
-        "data_set_count": data_set_count,
-        "field_count": field_count,
-        "error_count": error_count,
-        "status": "completed" if error_count == 0 else "completed_with_warnings",
+        "data_set_count": _jsonl_row_count(capture_dir / "data_sets.jsonl"),
+        "field_count": _jsonl_row_count(capture_dir / "data_fields.jsonl"),
+        "error_count": _jsonl_row_count(capture_dir / "errors.jsonl"),
+        "status": "completed" if _jsonl_row_count(capture_dir / "errors.jsonl") == 0 else "completed_with_warnings",
     }
     _write_json(capture_dir / "manifest.json", summary)
     errors_path = capture_dir / "errors.jsonl"

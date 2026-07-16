@@ -97,7 +97,7 @@ python -m wqb.cli compile-data-ledger --knowledge-root 'C:\Users\oytl\Desktop\py
 Knowledge maintenance has two official entry points:
 
 - Research-record compile: raw research records accumulated from completed runs are compiled into `wiki/40_experiments/research_record_compile.md` by `python -m wqb.cli compile-research-records`.
-- Platform-material maintenance: after platform raw materials are refreshed, run `bootstrap-knowledge`, `knowledge-health-check`, and readiness maintenance before starting a research workflow. The console enforces this by refusing `workflow-start` when compiled knowledge freshness is stale or missing.
+- Platform-material maintenance: after platform data-field raw materials are refreshed, run `compile-data-ledger`, then `knowledge-health-check` and readiness maintenance before starting a research workflow. Do not run `bootstrap-knowledge` after a data-field refresh because it can replace the compiled ledger with schema-seeded partial rows. Use `bootstrap-knowledge` only for initial knowledge-structure recovery.
 
 ## Current Known Minor Follow-Ups
 

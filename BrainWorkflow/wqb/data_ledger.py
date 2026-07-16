@@ -48,6 +48,7 @@ class DataLedgerRecord:
     crowding_risk: str = "unknown"
     known_operators: list[str] = field(default_factory=list)
     repair_usage_count: int = 0
+    field_description: str = ""
 
 
 def data_ledger_record_to_dict(record: DataLedgerRecord) -> dict[str, Any]:
@@ -88,6 +89,7 @@ def _record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
         crowding_risk=str(row.get("crowding_risk", "unknown")),
         known_operators=[str(item) for item in row.get("known_operators", []) if str(item)],
         repair_usage_count=int(row.get("repair_usage_count", 0)),
+        field_description=str(row.get("field_description", "")),
     )
 
 
