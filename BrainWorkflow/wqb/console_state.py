@@ -104,6 +104,26 @@ def _freshness_summary(knowledge_root: Path) -> dict[str, Any]:
     }
 
 
+def _data_coverage_summary(knowledge_root: Path) -> dict[str, Any]:
+    """Input: knowledge root. Output: data coverage summary. Read latest raw data-field capture manifest."""
+    root = knowledge_root / "raw" / "platform" / "data_fields"
+    captures = sorted([path for path in root.glob("*") if path.is_dir()])
+    if not captures:
+        return {"exists": False, "latest_capture_dir": "", "field_count": 0, "scope_count": 0, "data_set_count": 0, "error_count": 0, "status": ""}
+    latest = captures[-1]
+    manifest = _read_json(latest / "manifest.json")
+    return {
+        "exists": bool(manifest),
+        "latest_capture_dir": str(latest),
+        "generated_at": str(manifest.get("generated_at", "")),
+        "field_count": int(manifest.get("field_count", 0)),
+        "scope_count": int(manifest.get("scope_count", 0)),
+        "data_set_count": int(manifest.get("data_set_count", 0)),
+        "error_count": int(manifest.get("error_count", 0)),
+        "status": str(manifest.get("status", "")),
+    }
+
+
 def _schedule_summary(knowledge_root: Path) -> dict[str, Any]:
     """Input: knowledge root. Output: schedule preview. Read current schedule Markdown."""
     path = knowledge_root / "wiki" / "70_decisions" / "research_schedule.md"
@@ -220,6 +240,7 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
     return {
         "readiness": _latest_readiness(paths.runs_root),
         "freshness": _freshness_summary(paths.knowledge_root),
+        "data_coverage": _data_coverage_summary(paths.knowledge_root),
         "option_cards": _read_jsonl(decisions / "research_option_cards.jsonl"),
         "schedule": _schedule_summary(paths.knowledge_root),
         "jobs": _job_rows(paths.job_root),

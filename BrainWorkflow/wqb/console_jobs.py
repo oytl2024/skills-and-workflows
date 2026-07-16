@@ -187,6 +187,26 @@ def build_cli_command(action: str, paths: ConsolePaths, form: dict[str, Any] | N
         return [*base, "bootstrap-knowledge", "--knowledge-root", knowledge_root, "--knowledge-seed-root", str(paths.workflow_root / "docs" / "knowledge")]
     if action == "compile-research-records":
         return [*base, "compile-research-records", "--knowledge-root", knowledge_root]
+    if action == "capture-platform-data-fields":
+        command = [
+            *base,
+            "capture-platform-data-fields",
+            "--knowledge-root",
+            knowledge_root,
+        ]
+        if data.get("enable_live_api"):
+            command.append("--enable-live-api")
+        if data.get("max_scopes"):
+            command.extend(["--max-scopes", str(data.get("max_scopes"))])
+        if data.get("max_datasets_per_scope"):
+            command.extend(["--max-datasets-per-scope", str(data.get("max_datasets_per_scope"))])
+        if data.get("max_fields_per_dataset"):
+            command.extend(["--max-fields-per-dataset", str(data.get("max_fields_per_dataset"))])
+        if data.get("resume_capture"):
+            command.append("--resume-capture")
+        return command
+    if action == "compile-data-ledger":
+        return [*base, "compile-data-ledger", "--knowledge-root", knowledge_root]
     if action == "plan-research-options":
         command = [
             *base,

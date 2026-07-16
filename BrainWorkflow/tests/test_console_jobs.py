@@ -53,6 +53,20 @@ class ConsoleJobsTests(unittest.TestCase):
         self.assertIn("--enable-live-api", option_refresh)
         self.assertNotEqual(platform_compile, research_compile)
 
+    def test_build_cli_command_maps_data_capture_and_compile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+
+            capture = build_cli_command("capture-platform-data-fields", paths, {"enable_live_api": True, "max_scopes": "4"})
+            compile_cmd = build_cli_command("compile-data-ledger", paths, {})
+
+        self.assertIn("capture-platform-data-fields", capture)
+        self.assertIn("--enable-live-api", capture)
+        self.assertIn("--max-scopes", capture)
+        self.assertIn("4", capture)
+        self.assertIn("compile-data-ledger", compile_cmd)
+        self.assertNotIn("--enable-live-api", compile_cmd)
+
     def test_workflow_commands_carry_console_run_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = make_paths(Path(tmp))

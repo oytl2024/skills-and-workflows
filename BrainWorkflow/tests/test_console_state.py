@@ -128,6 +128,41 @@ class ConsoleStateTests(unittest.TestCase):
         self.assertEqual(state["approved_queue"], [])
         self.assertEqual(state["research_record"], {"exists": False})
 
+    def test_console_state_reports_latest_data_coverage_capture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = ConsolePaths(
+                root,
+                root / "BrainWorkflow",
+                root / "knowledge",
+                root / "runs",
+                root / "milestone.md",
+                root / "todo.md",
+                root / "runs" / "console_jobs",
+            )
+            capture = paths.knowledge_root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            capture.mkdir(parents=True)
+            (capture / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "generated_at": "2026-07-16T08:00:00+00:00",
+                        "capture_dir": str(capture),
+                        "scope_count": 4,
+                        "data_set_count": 8,
+                        "field_count": 120,
+                        "error_count": 1,
+                        "status": "completed_with_warnings",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            state = load_console_state(paths)
+
+        self.assertTrue(state["data_coverage"]["exists"])
+        self.assertEqual(state["data_coverage"]["field_count"], 120)
+        self.assertEqual(state["data_coverage"]["error_count"], 1)
+
     def test_load_console_state_includes_active_workflow_state_events_and_queue(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
