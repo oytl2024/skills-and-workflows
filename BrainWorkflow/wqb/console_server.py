@@ -21,46 +21,113 @@ def _html_page(title: str, body: str) -> str:
         "<!doctype html><html><head><meta charset='utf-8'>"
         f"<title>{escape(title)}</title>"
         "<style>"
-        "body{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#f7f8fa;color:#20242a}"
-        "header{background:#243447;color:white;padding:16px 24px}"
-        "main{padding:20px;display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}"
-        "section{background:white;border:1px solid #d8dde5;border-radius:8px;padding:16px}"
-        "button,input,select,textarea{font:inherit;margin:4px 0;padding:8px} textarea{width:100%;min-height:90px}"
-        "code{background:#edf1f5;padding:2px 4px;border-radius:4px} .wide{grid-column:1/-1}"
+        "body{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#F6F7F9;color:#18202A}"
+        "header{background:#18202A;color:white;padding:14px 24px;display:flex;justify-content:space-between;align-items:center}"
+        "main{display:grid;grid-template-columns:220px minmax(0,1fr);gap:0;min-height:calc(100vh - 56px)}"
+        "nav{border-right:1px solid #D9E0E8;background:#fff;padding:16px}nav a{display:block;color:#18202A;margin-top:10px;text-decoration:none}"
+        ".workspace{padding:18px 22px;display:grid;gap:14px}"
+        "section{background:white;border:1px solid #D9E0E8;border-radius:8px;padding:14px}"
+        ".ledger-strip{display:flex;gap:8px;flex-wrap:wrap}"
+        ".badge{border:1px solid #D9E0E8;border-radius:999px;padding:4px 8px;font-size:12px;background:#fff}"
+        ".badge-ready{border-color:#167C80;color:#167C80}.badge-warn{border-color:#B7791F;color:#B7791F}.badge-blocked{border-color:#B42318;color:#B42318}"
+        ".option-card{display:block;border:1px solid #D9E0E8;border-radius:8px;padding:10px;margin:8px 0;cursor:pointer}"
+        ".option-card:has(input:checked){border-color:#167C80;box-shadow:inset 3px 0 0 #167C80}"
+        ".option-title{display:block;font-weight:600}.option-meta{display:block;font-size:12px;color:#4B5563;margin-top:3px}"
+        "button,input,select,textarea{font:inherit;margin:4px 0;padding:7px 9px}button{cursor:pointer}textarea{width:100%;min-height:90px}"
+        "code,pre{font-family:Consolas,monospace}.wide{grid-column:1/-1}.empty{color:#6B7280}"
         "</style></head><body>"
         f"<header><h1>{escape(title)}</h1></header><main>{body}</main></body></html>"
     )
+
+
+def _badge(label: str, value: Any, state: str = "neutral") -> str:
+    """Input: label, value, state. Output: HTML badge. Render one compact status marker."""
+    return f"<span class='badge badge-{escape(state)}'><strong>{escape(label)}</strong> {escape(str(value))}</span>"
+
+
+def _render_option_controls(cards: list[dict[str, Any]]) -> str:
+    """Input: option card rows. Output: HTML. Render selectable research option cards."""
+    if not cards:
+        return "<div class='empty'>No research options. Refresh option cards with live API authorization.</div>"
+    rows = []
+    for index, card in enumerate(cards, start=1):
+        option_id = str(card.get("option_id") or f"option-{index}")
+        title = str(card.get("title", "Research option"))
+        incentive = str(card.get("primary_incentive", ""))
+        scope = str(card.get("candidate_scope", ""))
+        score = card.get("score", {})
+        total = score.get("total", "") if isinstance(score, dict) else ""
+        rows.append(
+            "<label class='option-card'>"
+            f"<input type=\"radio\" name=\"selected_option_id\" value=\"{escape(option_id)}\" {'checked' if index == 1 else ''}>"
+            f"<span class='option-title'>{escape(title)}</span>"
+            f"<span class='option-meta'>{escape(incentive)} | {escape(scope)} | score {escape(str(total))}</span>"
+            "</label>"
+        )
+    return "".join(rows)
 
 
 def render_dashboard(state: dict[str, Any]) -> str:
     """Input: console state dict. Output: HTML. Render dashboard, controls, and progress summary."""
     readiness = state.get("readiness", {})
     freshness = state.get("freshness", {})
-    cards = state.get("option_cards", [])
+    data_coverage = state.get("data_coverage", {})
+    cards = [card for card in state.get("option_cards", []) if isinstance(card, dict)]
     jobs = state.get("jobs", [])
     active = state.get("active_workflow", {})
-    card_items = "".join(f"<li>{escape(str(card.get('title', 'untitled')))}</li>" for card in cards[:5]) or "<li>No option cards.</li>"
     job_items = "".join(
         f"<li><code>{escape(str(job.get('job_id', '')))}</code> {escape(str(job.get('action', '')))} {escape(str(job.get('status', '')))}</li>"
-        for job in jobs[:8]
+        for job in jobs[:8] if isinstance(job, dict)
     ) or "<li>No console jobs.</li>"
+    readiness_state = "ready" if readiness.get("passed", readiness.get("exists", False)) else "blocked"
+    freshness_state = "ready" if freshness.get("valid") and not freshness.get("stale_count") and not freshness.get("missing_count") else "warn"
+    coverage_state = "ready" if data_coverage.get("status") == "completed" and not data_coverage.get("error_count") else "warn"
+    ledger_strip = "".join(
+        [
+            _badge("Readiness", readiness.get("passed", readiness.get("exists", False)), readiness_state),
+            _badge("Freshness", f"stale {freshness.get('stale_count', 0)} / missing {freshness.get('missing_count', 0)}", freshness_state),
+            _badge("Data fields", data_coverage.get("field_count", 0), coverage_state),
+        ]
+    )
+    research_start_form = f"""
+<form method="post" action="/actions/run">
+<input type="hidden" name="action" value="workflow-start-from-option">
+{_render_option_controls(cards)}
+<button>Start selected workflow</button>
+</form>
+"""
+    workflow_progress = f"""
+<p>Active run: <code>{escape(str(active.get('run_id', 'none')))}</code></p>
+<form method="post" action="/actions/run"><input type="hidden" name="action" value="workflow-continue"><button>Continue workflow</button></form>
+"""
+    knowledge_forms = """
+<form method="post" action="/actions/run"><input type="hidden" name="action" value="readiness-check"><button>Run readiness check</button></form>
+<form method="post" action="/actions/run"><input type="hidden" name="action" value="compile-research-records"><button>Compile research records</button></form>
+<form method="post" action="/actions/run"><input type="hidden" name="action" value="compile-data-ledger"><button>Compile data ledger</button></form>
+<form method="post" action="/actions/run"><input type="hidden" name="action" value="capture-platform-data-fields"><label><input type="checkbox" name="enable_live_api"> Enable live API</label><button>Capture platform data fields</button></form>
+<form method="post" action="/actions/run"><input type="hidden" name="action" value="plan-research-options"><label><input type="checkbox" name="enable_live_api"> Enable live API</label><button>Refresh research options</button></form>
+<form method="post" action="/actions/run"><input type="hidden" name="action" value="knowledge-health-check"><button>Check knowledge health</button></form>
+"""
+    data_coverage_panel = (
+        f"<p>Fields: <code>{escape(str(data_coverage.get('field_count', 0)))}</code></p>"
+        f"<p>Scopes: <code>{escape(str(data_coverage.get('scope_count', 0)))}</code></p>"
+        f"<p>Data sets: <code>{escape(str(data_coverage.get('data_set_count', 0)))}</code></p>"
+        f"<p>Errors: <code>{escape(str(data_coverage.get('error_count', 0)))}</code></p>"
+    )
     body = f"""
-<section><h2>Readiness</h2><p>Passed: <code>{escape(str(readiness.get('passed', readiness.get('exists', False))))}</code></p><p>Blocked: <code>{escape(str(readiness.get('blocked', False)))}</code></p></section>
-<section><h2>Knowledge Freshness</h2><p>Stale: <code>{escape(str(freshness.get('stale_count', 0)))}</code></p><p>Missing: <code>{escape(str(freshness.get('missing_count', 0)))}</code></p></section>
-<section><h2>Research Control</h2>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="readiness-check"><button>Run Readiness</button></form>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="plan-research-options"><label><input type="checkbox" name="enable_live_api"> enable_live_api</label><button>Refresh Option Cards</button></form>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="workflow-start"><input name="objective" placeholder="Objective"><input name="selected_option_id" placeholder="option-1"><button>Start Workflow</button></form>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="workflow-continue"><button>Continue Workflow</button></form>
-</section>
-<section><h2>Knowledge Maintenance</h2>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="compile-research-records"><button>Compile Research Records</button></form>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="bootstrap-knowledge"><button>Compile Platform Materials</button></form>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="knowledge-health-check"><button>Knowledge Health Check</button></form>
-</section>
-<section><h2>Research Options</h2><ul>{card_items}</ul></section>
-<section><h2>Research Progress</h2><p>Active run: <code>{escape(str(active.get('run_id', 'none')))}</code></p><ul>{job_items}</ul></section>
-<section class="wide"><h2>Schedule Preview</h2><pre>{escape(str(state.get('schedule', {}).get('preview', ''))[:2000])}</pre></section>
+<nav>
+<strong>Operations</strong>
+<a href="/">Research start</a>
+<a href="/proposals">Proposals</a>
+</nav>
+<div class="workspace">
+<section class="wide"><h2>Ledger Strip</h2><div class="ledger-strip">{ledger_strip}</div></section>
+<section><h2>Research Start</h2>{research_start_form}</section>
+<section><h2>Workflow Progress</h2>{workflow_progress}</section>
+<section><h2>Knowledge Maintenance</h2>{knowledge_forms}</section>
+<section><h2>Data Coverage</h2>{data_coverage_panel}</section>
+<section class="wide"><h2>Recent Jobs</h2><ul>{job_items}</ul></section>
+</div>
 """
     return _html_page("Workflow Console", body)
 
@@ -104,11 +171,58 @@ def _freshness_clean(paths: ConsolePaths) -> bool:
     )
 
 
+def _option_rows(paths: ConsolePaths) -> list[dict[str, Any]]:
+    """Input: console paths. Output: normalized option rows. Load durable research options."""
+    path = paths.knowledge_root / "wiki" / "70_decisions" / "research_option_cards.jsonl"
+    rows: list[dict[str, Any]] = []
+    if not path.exists():
+        return rows
+    for index, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            normalized = dict(row)
+            normalized.setdefault("option_id", f"option-{index}")
+            rows.append(normalized)
+    return rows
+
+
+def _selected_option(paths: ConsolePaths, selected_option_id: str) -> dict[str, Any]:
+    """Input: paths and selected option id. Output: option row. Validate console research selection."""
+    selected = str(selected_option_id).strip()
+    if not selected:
+        raise ValueError("select a research option card before starting workflow")
+    for row in _option_rows(paths):
+        if str(row.get("option_id", "")) == selected:
+            return row
+    raise ValueError(f"selected research option is not available: {selected}")
+
+
+def _option_objective(row: dict[str, Any]) -> str:
+    """Input: option row. Output: objective string. Derive workflow objective from the selected card."""
+    return str(row.get("title") or row.get("primary_incentive") or "Research option").strip()
+
+
 def build_action_command(action: str, paths: ConsolePaths, form: dict[str, Any] | None = None) -> list[str]:
     """Input: console action, paths, form. Output: CLI command. Enforce UI safety gates."""
     data = dict(form or {})
     if action == "plan-research-options" and not _truthy(data.get("enable_live_api")):
         raise ValueError("enable_live_api is required before refreshing platform option cards")
+    if action == "capture-platform-data-fields" and not _truthy(data.get("enable_live_api")):
+        raise ValueError("enable_live_api is required before capturing platform data fields")
+    if action == "workflow-start-from-option":
+        if not _freshness_clean(paths):
+            raise ValueError("knowledge maintenance is required before starting research workflow")
+        option = _selected_option(paths, str(data.get("selected_option_id", "")))
+        normalized = {
+            "objective": _option_objective(option),
+            "selected_option_id": str(option.get("option_id")),
+        }
+        return build_raw_cli_command("workflow-start", paths, normalized)
     if action == "workflow-start" and not _freshness_clean(paths):
         raise ValueError("knowledge maintenance is required before starting research workflow")
     normalized = {key: (_truthy(value) if key in {"enable_live_api", "confirm_submit"} else value) for key, value in data.items()}

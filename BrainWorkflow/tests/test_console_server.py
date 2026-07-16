@@ -30,10 +30,34 @@ class ConsoleServerTests(unittest.TestCase):
         html = render_dashboard(state)
 
         self.assertIn("Workflow Console", html)
-        self.assertIn("Research Control", html)
+        self.assertIn("Research Start", html)
         self.assertIn("Knowledge Maintenance", html)
-        self.assertIn("Research Progress", html)
+        self.assertIn("Workflow Progress", html)
         self.assertIn("Power Pool", html)
+
+    def test_render_dashboard_uses_selectable_option_cards_without_manual_option_id_input(self):
+        state = {
+            "readiness": {"exists": True, "passed": True, "blocked": False},
+            "freshness": {"exists": True, "valid": True, "record_count": 6, "stale_count": 0, "missing_count": 0},
+            "data_coverage": {"exists": True, "field_count": 120, "scope_count": 4, "data_set_count": 8, "error_count": 0, "status": "completed"},
+            "option_cards": [{"title": "Power Pool", "primary_incentive": "power_pool", "candidate_scope": "USA D1 TOP3000", "score": {"total": 9.0}}],
+            "schedule": {"preview": "# Schedule"},
+            "jobs": [],
+            "proposal_counts": {},
+            "active_workflow": {"exists": False},
+            "approved_queue": [],
+            "queue_diagnostics": [],
+            "workflow_events": [],
+        }
+
+        html = render_dashboard(state)
+
+        self.assertIn('type="radio"', html)
+        self.assertIn('name="selected_option_id"', html)
+        self.assertIn('value="option-1"', html)
+        self.assertIn('value="workflow-start-from-option"', html)
+        self.assertNotIn('<input name="objective"', html)
+        self.assertNotIn('type="text" name="selected_option_id"', html)
 
     def test_render_proposals_includes_input_form(self):
         html = render_proposals([{"proposal_id": "p1", "title": "Improve template", "status": "proposed"}])
@@ -99,6 +123,50 @@ class ConsoleServerTests(unittest.TestCase):
 
         self.assertIn("plan-research-options", command)
         self.assertIn("--enable-live-api", command)
+
+    def test_build_action_command_starts_workflow_from_selected_card(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            artifact = paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text("{}\n", encoding="utf-8")
+            maintenance = paths.knowledge_root / "wiki" / "80_maintenance"
+            maintenance.mkdir(parents=True)
+            (maintenance / "freshness_manifest.json").write_text(
+                json.dumps(
+                    [
+                        {"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7},
+                        {"name": "template_library", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7},
+                        {"name": "benchmark_rules", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7},
+                        {"name": "activity_snapshot", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7},
+                        {"name": "operator_catalog", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7},
+                        {"name": "research_option_cards", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            decisions = paths.knowledge_root / "wiki" / "70_decisions"
+            decisions.mkdir(parents=True)
+            (decisions / "research_option_cards.jsonl").write_text(
+                json.dumps({"title": "Power Pool", "primary_incentive": "power_pool"}) + "\n",
+                encoding="utf-8",
+            )
+
+            command = build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1"})
+
+        self.assertIn("workflow-start", command)
+        self.assertIn("--selected-option-id", command)
+        self.assertIn("option-1", command)
+        self.assertIn("--objective", command)
+        self.assertIn("Power Pool", command)
+
+    def test_build_action_command_refuses_data_capture_without_live_api(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+
+            with self.assertRaisesRegex(ValueError, "enable_live_api"):
+                build_action_command("capture-platform-data-fields", paths, {})
 
     def test_refused_action_writes_durable_job_and_context(self):
         with tempfile.TemporaryDirectory() as tmp:
