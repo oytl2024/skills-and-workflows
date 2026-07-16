@@ -57,13 +57,28 @@ class ConsoleJobsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = make_paths(Path(tmp))
 
-            capture = build_cli_command("capture-platform-data-fields", paths, {"enable_live_api": True, "max_scopes": "4"})
+            capture = build_cli_command(
+                "capture-platform-data-fields",
+                paths,
+                {
+                    "enable_live_api": True,
+                    "max_scopes": "4",
+                    "max_datasets_per_scope": "5",
+                    "max_fields_per_dataset": "6",
+                    "resume_capture": True,
+                },
+            )
             compile_cmd = build_cli_command("compile-data-ledger", paths, {})
 
         self.assertIn("capture-platform-data-fields", capture)
         self.assertIn("--enable-live-api", capture)
         self.assertIn("--max-scopes", capture)
         self.assertIn("4", capture)
+        self.assertIn("--max-datasets-per-scope", capture)
+        self.assertIn("5", capture)
+        self.assertIn("--max-fields-per-dataset", capture)
+        self.assertIn("6", capture)
+        self.assertIn("--resume-capture", capture)
         self.assertIn("compile-data-ledger", compile_cmd)
         self.assertNotIn("--enable-live-api", compile_cmd)
 

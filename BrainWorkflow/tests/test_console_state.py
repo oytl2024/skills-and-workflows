@@ -202,6 +202,40 @@ class ConsoleStateTests(unittest.TestCase):
         self.assertEqual(state["data_coverage"]["data_set_count"], 3)
         self.assertEqual(state["data_coverage"]["status"], "completed")
 
+    def test_console_state_ignores_newer_partial_and_malformed_manifests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = ConsolePaths(
+                root,
+                root / "BrainWorkflow",
+                root / "knowledge",
+                root / "runs",
+                root / "milestone.md",
+                root / "todo.md",
+                root / "runs" / "console_jobs",
+            )
+            older_capture = paths.knowledge_root / "raw" / "platform" / "data_fields" / "2026-07-15"
+            older_capture.mkdir(parents=True)
+            (older_capture / "manifest.json").write_text(
+                json.dumps({"scope_count": 2, "data_set_count": 3, "field_count": 40, "error_count": 0, "status": "completed"}),
+                encoding="utf-8",
+            )
+            partial_capture = paths.knowledge_root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            partial_capture.mkdir(parents=True)
+            (partial_capture / "manifest.json").write_text(json.dumps({"status": "in_progress"}), encoding="utf-8")
+            malformed_capture = paths.knowledge_root / "raw" / "platform" / "data_fields" / "2026-07-17"
+            malformed_capture.mkdir(parents=True)
+            (malformed_capture / "manifest.json").write_text(
+                json.dumps({"scope_count": 2, "data_set_count": 3, "field_count": "unknown", "error_count": 0}),
+                encoding="utf-8",
+            )
+
+            state = load_console_state(paths)
+
+        self.assertEqual(state["data_coverage"]["latest_capture_dir"], str(older_capture))
+        self.assertEqual(state["data_coverage"]["field_count"], 40)
+        self.assertEqual(state["data_coverage"]["status"], "completed")
+
     def test_load_console_state_includes_active_workflow_state_events_and_queue(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -104,12 +104,24 @@ def _freshness_summary(knowledge_root: Path) -> dict[str, Any]:
     }
 
 
+def _valid_coverage_manifest(manifest: dict[str, Any]) -> bool:
+    """Input: manifest dict. Output: bool. Check required numeric coverage counts."""
+    required_counts = ("field_count", "scope_count", "data_set_count", "error_count")
+    try:
+        return all(
+            key in manifest and not isinstance(manifest[key], bool)
+            for key in required_counts
+        ) and all(int(manifest[key]) >= 0 for key in required_counts)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def _data_coverage_summary(knowledge_root: Path) -> dict[str, Any]:
     """Input: knowledge root. Output: data coverage summary. Read latest raw data-field capture manifest."""
     root = knowledge_root / "raw" / "platform" / "data_fields"
     captures = sorted([path for path in root.glob("*") if path.is_dir()])
     valid_captures = [(capture, _read_json(capture / "manifest.json")) for capture in captures]
-    valid_captures = [(capture, manifest) for capture, manifest in valid_captures if manifest]
+    valid_captures = [(capture, manifest) for capture, manifest in valid_captures if _valid_coverage_manifest(manifest)]
     if not valid_captures:
         return {"exists": False, "latest_capture_dir": "", "field_count": 0, "scope_count": 0, "data_set_count": 0, "error_count": 0, "status": ""}
     latest, manifest = valid_captures[-1]
