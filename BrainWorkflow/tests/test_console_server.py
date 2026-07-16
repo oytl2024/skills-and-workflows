@@ -41,6 +41,7 @@ class ConsoleServerTests(unittest.TestCase):
             "readiness": {"exists": True, "passed": True, "blocked": False},
             "freshness": {"exists": True, "valid": True, "record_count": 6, "stale_count": 0, "missing_count": 0},
             "data_coverage": {"exists": True, "field_count": 120, "scope_count": 4, "data_set_count": 8, "error_count": 0, "status": "completed"},
+            "startable_scopes": [{"region": "USA", "delay": 1, "universe": "TOP3000"}],
             "option_cards": [{"title": "Power Pool", "primary_incentive": "power_pool", "candidate_scope": "USA D1 TOP3000", "score": {"total": 9.0}}],
             "schedule": {"preview": "# Schedule"},
             "jobs": [],
@@ -55,6 +56,9 @@ class ConsoleServerTests(unittest.TestCase):
 
         self.assertIn('type="radio"', html)
         self.assertIn('name="selected_option_id"', html)
+        self.assertIn('name="selected_region"', html)
+        self.assertIn('name="selected_delay"', html)
+        self.assertIn('name="selected_universe"', html)
         self.assertIn('value="option-1"', html)
         self.assertIn('value="workflow-start-from-option"', html)
         self.assertNotIn('name="selected_option_id" value="option-1" checked', html)
@@ -98,7 +102,7 @@ class ConsoleServerTests(unittest.TestCase):
             artifact = paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
             artifact.parent.mkdir(parents=True)
             artifact.write_text(
-                json.dumps({"dataset_id": "fundamental3", "field_id": "cash_field", "region": "USA", "delay": 1, "universe": "TOP3000", "source_quality": "platform_raw_capture", "coverage_status": "measured_raw", "compatible_template_ids": ["matrix_ts_zscore_rank"]}) + "\n",
+                json.dumps({"dataset_id": "fundamental3", "field_id": "cash_field", "field_type": "MATRIX", "region": "USA", "delay": 1, "universe": "TOP3000", "source_quality": "platform_raw_capture", "coverage_status": "measured_raw", "compatible_template_ids": ["matrix_ts_zscore_rank"]}) + "\n",
                 encoding="utf-8",
             )
             maintenance = paths.knowledge_root / "wiki" / "80_maintenance"
@@ -118,11 +122,14 @@ class ConsoleServerTests(unittest.TestCase):
                 json.dumps({"title": "First objective", "candidate_scope": "USA D1 TOP3000"}) + "\n\nnot-json\n" + json.dumps({"title": "Second objective", "candidate_scope": "USA D1 TOP3000"}) + "\n",
                 encoding="utf-8",
             )
+            template = paths.knowledge_root / "wiki" / "30_templates" / "template_library.jsonl"
+            template.parent.mkdir(parents=True)
+            template.write_text(json.dumps({"template_id": "matrix_ts_zscore_rank", "status": "discovery_ready", "required_field_types": ["MATRIX"]}) + "\n", encoding="utf-8")
             html = render_dashboard({"option_cards": [{"title": "First objective"}, {"title": "Second objective"}]})
-            command = build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-2"})
+            command = build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-2", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
         self.assertIn('value="option-2"', html)
-        self.assertIn("Second objective", command)
+        self.assertIn("Second objective", " ".join(command))
 
     def test_render_proposals_includes_input_form(self):
         html = render_proposals([{"proposal_id": "p1", "title": "Improve template", "status": "proposed"}])
@@ -142,7 +149,7 @@ class ConsoleServerTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(ValueError, "knowledge maintenance"):
+            with self.assertRaisesRegex(ValueError, "direct console workflow-start"):
                 build_action_command("workflow-start", paths, {"objective": "Power Pool", "selected_option_id": "option-1"})
 
     def test_build_action_command_refuses_research_start_when_freshness_manifest_invalid(self):
@@ -153,11 +160,11 @@ class ConsoleServerTests(unittest.TestCase):
             maintenance.mkdir(parents=True)
             (maintenance / "freshness_manifest.json").write_text("{not-json}", encoding="utf-8")
 
-            with self.assertRaisesRegex(ValueError, "knowledge maintenance"):
+            with self.assertRaisesRegex(ValueError, "direct console workflow-start"):
                 build_action_command("workflow-start", paths, {"objective": "Power Pool", "selected_option_id": "option-1"})
 
             (maintenance / "freshness_manifest.json").write_text("[]", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "knowledge maintenance"):
+            with self.assertRaisesRegex(ValueError, "direct console workflow-start"):
                 build_action_command("workflow-start", paths, {"objective": "Power Pool", "selected_option_id": "option-1"})
 
     def test_build_action_command_refuses_research_start_when_manifest_missing_required_entries(self):
@@ -174,7 +181,7 @@ class ConsoleServerTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(ValueError, "knowledge maintenance"):
+            with self.assertRaisesRegex(ValueError, "direct console workflow-start"):
                 build_action_command("workflow-start", paths, {"objective": "Power Pool", "selected_option_id": "option-1"})
 
     def test_build_action_command_requires_live_checkbox_for_platform_option_refresh(self):
@@ -189,65 +196,32 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn("plan-research-options", command)
         self.assertIn("--enable-live-api", command)
 
-    def test_build_action_command_starts_workflow_from_selected_card(self):
+    def test_build_action_command_starts_generic_planner_card_from_ledger_backed_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             paths = make_paths(root)
-            artifact = paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
-            artifact.parent.mkdir(parents=True)
-            artifact.write_text(
-                json.dumps(
-                    {
-                        "dataset_id": "fundamental3",
-                        "field_id": "cash_field",
-                        "region": "USA",
-                        "delay": 1,
-                        "universe": "TOP3000",
-                        "source_quality": "platform_raw_capture",
-                        "coverage_status": "measured_raw",
-                        "compatible_template_ids": ["matrix_ts_zscore_rank"],
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            maintenance = paths.knowledge_root / "wiki" / "80_maintenance"
-            maintenance.mkdir(parents=True)
-            (maintenance / "freshness_manifest.json").write_text(
-                json.dumps(
-                    [
-                        {"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7},
-                        {"name": "template_library", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7},
-                        {"name": "benchmark_rules", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7},
-                        {"name": "activity_snapshot", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7},
-                        {"name": "operator_catalog", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7},
-                        {"name": "research_option_cards", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7},
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            decisions = paths.knowledge_root / "wiki" / "70_decisions"
-            decisions.mkdir(parents=True)
-            (decisions / "research_option_cards.jsonl").write_text(
-                json.dumps({"title": "Power Pool", "primary_incentive": "power_pool", "candidate_scope": "USA D1 TOP3000"}) + "\n",
-                encoding="utf-8",
+            self._write_start_fixture(
+                paths,
+                {"title": "Build Genius and Osmosis alpha pool", "primary_incentive": "genius_osmosis", "candidate_scope": "Generate a later concrete plan across multiple region-delay scopes after user selection."},
+                [{"dataset_id": "fundamental3", "field_id": "cash_field", "region": "USA", "delay": 1, "universe": "TOP3000", "source_quality": "platform_raw_capture", "coverage_status": "measured_raw", "compatible_template_ids": ["matrix_ts_zscore_rank"]}],
             )
 
-            command = build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1"})
+            command = build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
         self.assertIn("workflow-start", command)
         self.assertIn("--selected-option-id", command)
         self.assertIn("option-1", command)
         self.assertIn("--objective", command)
-        self.assertIn("Power Pool", command)
+        self.assertIn("Build Genius and Osmosis alpha pool", " ".join(command))
+        self.assertIn("USA D1 TOP3000", " ".join(command))
 
-    def test_build_action_command_refuses_selected_option_without_parsable_scope(self):
+    def test_build_action_command_requires_selected_ledger_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             paths = make_paths(root)
             self._write_start_fixture(paths, {"title": "Power Pool"}, [])
 
-            with self.assertRaisesRegex(ValueError, "data coverage"):
+            with self.assertRaisesRegex(ValueError, "select a concrete"):
                 build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1"})
 
     def test_build_action_command_requires_selected_option_id(self):
@@ -267,7 +241,7 @@ class ConsoleServerTests(unittest.TestCase):
             for invalid in ({**base, "source_quality": "schema_seed", "coverage_status": "measured_raw"}, {**base, "source_quality": "platform_raw_capture", "coverage_status": "partial"}):
                 self._write_start_fixture(paths, option, [invalid])
                 with self.assertRaisesRegex(ValueError, "data coverage"):
-                    build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1"})
+                    build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
     def test_build_action_command_refuses_warning_capture_compiled_ledger(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -303,7 +277,7 @@ class ConsoleServerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "data coverage"):
-                build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1"})
+                build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
         self.assertEqual(compiled_row["coverage_status"], "partial")
 
@@ -318,7 +292,7 @@ class ConsoleServerTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "ledger"):
-                build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1"})
+                build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
     def test_build_action_command_refuses_matching_scope_without_templates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -331,13 +305,18 @@ class ConsoleServerTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "templates"):
-                build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1"})
+                build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
-    def _write_start_fixture(self, paths, option, ledger_rows):
+    def _write_start_fixture(self, paths, option, ledger_rows, template=None):
         """Input: console paths, option, ledger rows. Output: none. Write valid freshness and start artifacts."""
         ledger = paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
         ledger.parent.mkdir(parents=True, exist_ok=True)
-        ledger.write_text("".join(json.dumps(row) + "\n" for row in ledger_rows), encoding="utf-8")
+        rows = [{"field_type": "MATRIX", "semantic_tags": ["cash"], **row} for row in ledger_rows]
+        ledger.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        template_path = paths.knowledge_root / "wiki" / "30_templates" / "template_library.jsonl"
+        template_path.parent.mkdir(parents=True, exist_ok=True)
+        template_row = template if template is not None else {"template_id": "matrix_ts_zscore_rank", "status": "discovery_ready", "required_field_types": ["MATRIX"], "compatible_regions": ["USA"], "compatible_delays": [1], "compatible_universes": ["TOP3000"]}
+        template_path.write_text(json.dumps(template_row) + "\n", encoding="utf-8")
         maintenance = paths.knowledge_root / "wiki" / "80_maintenance"
         maintenance.mkdir(parents=True, exist_ok=True)
         (maintenance / "freshness_manifest.json").write_text(
@@ -350,6 +329,33 @@ class ConsoleServerTests(unittest.TestCase):
         decisions = paths.knowledge_root / "wiki" / "70_decisions"
         decisions.mkdir(parents=True, exist_ok=True)
         (decisions / "research_option_cards.jsonl").write_text(json.dumps(option) + "\n", encoding="utf-8")
+
+    def test_build_action_command_rejects_direct_start_even_when_freshness_is_clean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            self._write_start_fixture(paths, {"title": "Power Pool"}, [])
+
+            with self.assertRaisesRegex(ValueError, "direct console workflow-start"):
+                build_action_command("workflow-start", paths, {"objective": "Power Pool", "selected_option_id": "option-1"})
+
+    def test_build_action_command_requires_exact_coverage_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            base = {"dataset_id": "fundamental3", "field_id": "cash_field", "region": "USA", "delay": 1, "universe": "TOP3000", "compatible_template_ids": ["matrix_ts_zscore_rank"]}
+            for invalid in ({**base, "coverage_status": "measured_raw"}, {**base, "source_quality": "unknown", "coverage_status": "measured_raw"}, {**base, "source_quality": "platform_raw_capture", "coverage_status": "unknown"}):
+                self._write_start_fixture(paths, {"title": "Power Pool"}, [invalid])
+                with self.assertRaisesRegex(ValueError, "data coverage"):
+                    build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
+
+    def test_build_action_command_requires_existing_compatible_template(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            base = {"dataset_id": "fundamental3", "field_id": "cash_field", "field_type": "MATRIX", "region": "USA", "delay": 1, "universe": "TOP3000", "source_quality": "platform_raw_capture", "coverage_status": "measured_raw"}
+            cases = ((["missing-template"], None), (["matrix_ts_zscore_rank"], {"template_id": "matrix_ts_zscore_rank", "status": "deprecated"}), (["matrix_ts_zscore_rank"], {"template_id": "matrix_ts_zscore_rank", "status": "discovery_ready", "required_field_types": ["VECTOR"]}))
+            for template_ids, template in cases:
+                self._write_start_fixture(paths, {"title": "Power Pool"}, [{**base, "compatible_template_ids": template_ids}], template=template)
+                with self.assertRaisesRegex(ValueError, "templates"):
+                    build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
     def test_build_action_command_refuses_data_capture_without_live_api(self):
         with tempfile.TemporaryDirectory() as tmp:

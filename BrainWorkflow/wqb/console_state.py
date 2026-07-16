@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date
+from itertools import product
 import json
 from pathlib import Path
 from typing import Any
@@ -139,6 +140,29 @@ def _data_coverage_summary(knowledge_root: Path) -> dict[str, Any]:
     }
 
 
+def _startable_scopes(knowledge_root: Path) -> list[dict[str, Any]]:
+    """Input: knowledge root. Output: concrete scope rows. Read measured ledger scopes suitable for console selection."""
+    rows = _read_jsonl(knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl")
+    scopes: set[tuple[str, int, str]] = set()
+    for row in rows:
+        if row.get("source_quality") != "platform_raw_capture" or row.get("coverage_status") != "measured_raw":
+            continue
+        regions = row.get("available_regions") if isinstance(row.get("available_regions"), list) else [row.get("region")]
+        delays = row.get("available_delays") if isinstance(row.get("available_delays"), list) else [row.get("delay")]
+        universes = row.get("available_universes") if isinstance(row.get("available_universes"), list) else [row.get("universe")]
+        for region, delay, universe in product(regions, delays, universes):
+            try:
+                normalized = (str(region).strip().upper(), int(delay), str(universe).strip().upper())
+            except (TypeError, ValueError):
+                continue
+            if normalized[0] and normalized[2] and normalized[1] >= 0:
+                scopes.add(normalized)
+    return [
+        {"region": region, "delay": delay, "universe": universe}
+        for region, delay, universe in sorted(scopes)
+    ]
+
+
 def _schedule_summary(knowledge_root: Path) -> dict[str, Any]:
     """Input: knowledge root. Output: schedule preview. Read current schedule Markdown."""
     path = knowledge_root / "wiki" / "70_decisions" / "research_schedule.md"
@@ -256,6 +280,7 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
         "readiness": _latest_readiness(paths.runs_root),
         "freshness": _freshness_summary(paths.knowledge_root),
         "data_coverage": _data_coverage_summary(paths.knowledge_root),
+        "startable_scopes": _startable_scopes(paths.knowledge_root),
         "option_cards": _read_jsonl(decisions / "research_option_cards.jsonl"),
         "schedule": _schedule_summary(paths.knowledge_root),
         "jobs": _job_rows(paths.job_root),

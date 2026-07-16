@@ -80,6 +80,18 @@ class DataLedgerCompileTests(unittest.TestCase):
         self.assertEqual(summary["source_status"], "partial")
         self.assertEqual(row["coverage_status"], "partial")
 
+    def test_compile_marks_limited_capture_rows_partial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            write_jsonl(capture / "data_fields.jsonl", [{"scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}, "data_set": {"id": "fundamental3"}, "field": {"id": "cash_field", "type": "MATRIX"}}])
+            (capture / "manifest.json").write_text(json.dumps({"status": "completed", "active_limits": {"max_scopes": 0, "max_datasets_per_scope": 1, "max_fields_per_dataset": 0}, "certification_status": "partial"}), encoding="utf-8")
+
+            compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertEqual(row["coverage_status"], "partial")
+
     def test_compile_preserves_field_description_and_existing_usage_memory(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
@@ -196,6 +208,73 @@ class DataLedgerCompileTests(unittest.TestCase):
                     compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
 
             self.assertEqual(ledger.read_text(encoding="utf-8"), '{"field_id": "last_good"}\n')
+
+    def test_compile_keeps_completed_scope_measured_when_another_scope_failed_without_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            write_jsonl(capture / "data_fields.jsonl", [{"scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}, "data_set": {"id": "fundamental3"}, "field": {"id": "cash_field", "type": "MATRIX"}}])
+            write_jsonl(capture / "scopes.jsonl", [
+                {"scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}, "status": "completed"},
+                {"scope": {"instrument_type": "EQUITY", "region": "EUR", "delay": 1, "universe": "TOP3000"}, "status": "failed"},
+            ])
+            (capture / "manifest.json").write_text(json.dumps({"status": "completed_with_warnings", "generated_at": "2026-07-16T08:00:00+00:00", "certification_status": "complete"}), encoding="utf-8")
+
+            compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertEqual(row["coverage_status"], "measured_raw")
+
+    def test_compile_uses_capture_source_day_for_freshness_not_compile_day(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2025-01-02"
+            write_jsonl(capture / "data_fields.jsonl", [{"scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}, "data_set": {"id": "fundamental3"}, "field": {"id": "cash_field", "type": "MATRIX"}}])
+            (capture / "manifest.json").write_text(json.dumps({"status": "completed", "generated_at": "2025-01-02T08:00:00+00:00"}), encoding="utf-8")
+
+            compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            freshness = json.loads((root / "wiki" / "80_maintenance" / "freshness_manifest.json").read_text(encoding="utf-8"))
+
+        entry = next(row for row in freshness if row["name"] == "data_ledger")
+        self.assertEqual(entry["updated_at"], "2025-01-02")
+        self.assertEqual(entry["compiled_at"], "2026-07-16T09:00:00+00:00")
+
+    def test_compile_rejects_malformed_or_empty_raw_data_without_replacing_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            markdown = root / "wiki" / "20_semantics" / "data_ledger.md"
+            manifest = root / "wiki" / "80_maintenance" / "freshness_manifest.json"
+            for path, content in ((ledger, '{"field_id": "last_good"}\n'), (markdown, "last good markdown\n"), (manifest, "[{\"name\": \"last_good\"}]")):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+            cases = [
+                {"scope": {}, "data_set": {"id": "fundamental3"}, "field": {"type": "MATRIX"}},
+                {"scope": {}, "data_set": {}, "field": {"id": "cash_field", "type": "MATRIX"}},
+                None,
+            ]
+            for raw_row in cases:
+                if raw_row is None:
+                    write_jsonl(capture / "data_fields.jsonl", [])
+                else:
+                    write_jsonl(capture / "data_fields.jsonl", [raw_row])
+                with self.assertRaisesRegex(ValueError, "raw data fields"):
+                    compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+                self.assertEqual(ledger.read_text(encoding="utf-8"), '{"field_id": "last_good"}\n')
+                self.assertEqual(markdown.read_text(encoding="utf-8"), "last good markdown\n")
+                self.assertEqual(manifest.read_text(encoding="utf-8"), "[{\"name\": \"last_good\"}]")
+
+    def test_compile_refuses_busy_knowledge_root_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            write_jsonl(capture / "data_fields.jsonl", [{"scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}, "data_set": {"id": "fundamental3"}, "field": {"id": "cash_field", "type": "MATRIX"}}])
+            with patch("wqb.data_ledger_compile.exclusive_json_lock", side_effect=ValueError("compile lock is busy")) as lock:
+                with self.assertRaisesRegex(ValueError, "compile lock is busy"):
+                    compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+
+        lock.assert_called_once()
 
 
 if __name__ == "__main__":

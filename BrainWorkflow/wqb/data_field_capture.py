@@ -198,7 +198,8 @@ def capture_platform_data_fields(
         _append_jsonl(capture_dir / "errors.jsonl", _error_row(None, "/operators", error, generated))
         _write_json(capture_dir / "operators.json", {"generated_at": generated, "operators": []})
 
-    scopes = build_capture_scopes(instrument_types, regions, delays, universes, max_scopes=max_scopes)
+    requested_scopes = build_capture_scopes(instrument_types, regions, delays, universes)
+    scopes = requested_scopes[: int(max_scopes)] if max_scopes > 0 else requested_scopes
     for scope in scopes:
         if _scope_key(scope) in completed_scopes:
             continue
@@ -281,6 +282,14 @@ def capture_platform_data_fields(
         "field_count": _jsonl_row_count(capture_dir / "data_fields.jsonl"),
         "error_count": error_count,
         "status": "completed" if error_count == 0 else "completed_with_warnings",
+        "requested_matrix": [_scope_dict(scope) for scope in requested_scopes],
+        "active_limits": {
+            "max_scopes": int(max_scopes),
+            "max_datasets_per_scope": int(max_datasets_per_scope),
+            "max_fields_per_dataset": int(max_fields_per_dataset),
+        },
+        "latest_scope_outcomes": [latest_scope_rows[key] for key in sorted(latest_scope_rows)],
+        "certification_status": "partial" if any(limit > 0 for limit in (max_scopes, max_datasets_per_scope, max_fields_per_dataset)) else "complete",
     }
     _write_json(capture_dir / "manifest.json", summary)
     errors_path = capture_dir / "errors.jsonl"

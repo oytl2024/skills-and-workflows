@@ -111,6 +111,28 @@ class DataFieldCaptureTests(unittest.TestCase):
         self.assertEqual(fields[0]["scope"]["region"], "USA")
         self.assertIn("scope rejected", errors[0]["message"])
 
+    def test_limited_capture_records_requested_matrix_and_is_not_certification_complete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            summary = capture_platform_data_fields(
+                FakeCaptureClient(),
+                root,
+                generated_at="2026-07-16T08:30:00+00:00",
+                instrument_types=["EQUITY"],
+                regions=["USA", "EUR"],
+                delays=[1],
+                universes=["TOP3000"],
+                max_scopes=1,
+                max_datasets_per_scope=1,
+                max_fields_per_dataset=1,
+            )
+            manifest = json.loads((Path(summary["capture_dir"]) / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(manifest["certification_status"], "partial")
+        self.assertEqual(manifest["active_limits"], {"max_scopes": 1, "max_datasets_per_scope": 1, "max_fields_per_dataset": 1})
+        self.assertEqual(len(manifest["requested_matrix"]), 2)
+        self.assertEqual(manifest["latest_scope_outcomes"][0]["status"], "completed")
+
     def test_resume_capture_skips_completed_scope_without_duplicate_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"

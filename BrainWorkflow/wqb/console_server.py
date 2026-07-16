@@ -4,7 +4,6 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
-import re
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 import webbrowser
@@ -14,6 +13,8 @@ from wqb.console_jobs import build_cli_command as build_raw_cli_command
 from wqb.console_jobs import create_job, finish_job, run_job
 from wqb.console_proposals import create_proposal_from_form
 from wqb.console_state import ConsolePaths, default_console_paths, load_console_state
+from wqb.data_ledger import DataLedgerRecord
+from wqb.template_library import load_template_library, select_templates_for_data
 
 
 def _fallback_option_id(index: int) -> str:
@@ -73,12 +74,29 @@ def _render_option_controls(cards: list[dict[str, Any]]) -> str:
     return "".join(rows)
 
 
+def _render_scope_controls(scopes: list[dict[str, Any]]) -> str:
+    """Input: ledger-backed scope rows. Output: HTML. Render required concrete scope selectors."""
+    if not scopes:
+        return "<div class='empty'>No measured ledger scopes are available for workflow start.</div>"
+    regions = sorted({str(scope["region"]) for scope in scopes})
+    delays = sorted({int(scope["delay"]) for scope in scopes})
+    universes = sorted({str(scope["universe"]) for scope in scopes})
+    def options(values: list[Any]) -> str:
+        return "".join(f'<option value="{escape(str(value))}">{escape(str(value))}</option>' for value in values)
+    return (
+        f'<label>Region <select name="selected_region">{options(regions)}</select></label>'
+        f'<label>Delay <select name="selected_delay">{options(delays)}</select></label>'
+        f'<label>Universe <select name="selected_universe">{options(universes)}</select></label>'
+    )
+
+
 def render_dashboard(state: dict[str, Any]) -> str:
     """Input: console state dict. Output: HTML. Render dashboard, controls, and progress summary."""
     readiness = state.get("readiness", {})
     freshness = state.get("freshness", {})
     data_coverage = state.get("data_coverage", {})
     cards = [card for card in state.get("option_cards", []) if isinstance(card, dict)]
+    scopes = [scope for scope in state.get("startable_scopes", []) if isinstance(scope, dict)]
     jobs = state.get("jobs", [])
     active = state.get("active_workflow", {})
     job_items = "".join(
@@ -99,6 +117,7 @@ def render_dashboard(state: dict[str, Any]) -> str:
 <form method="post" action="/actions/run">
 <input type="hidden" name="action" value="workflow-start-from-option">
 {_render_option_controls(cards)}
+{_render_scope_controls(scopes)}
 <button>Start selected workflow</button>
 </form>
 """
@@ -236,18 +255,17 @@ def _option_objective(row: dict[str, Any]) -> str:
     return str(row.get("title") or row.get("primary_incentive") or "Research option").strip()
 
 
-def _option_scope(row: dict[str, Any]) -> dict[str, Any] | None:
-    """Input: option card row. Output: concrete scope dict or None. Extract a start-safe research scope."""
-    structured = {key: row.get(key) for key in ("region", "delay", "universe")}
-    if all(value not in (None, "") for value in structured.values()):
-        try:
-            return {"region": str(structured["region"]).upper(), "delay": int(structured["delay"]), "universe": str(structured["universe"]).upper()}
-        except (TypeError, ValueError):
-            return None
-    match = re.search(r"\b(?P<region>[A-Z]{2,4})\s+D(?P<delay>\d+)\s+(?P<universe>[A-Z]+\d+)\b", str(row.get("candidate_scope", "")), re.IGNORECASE)
-    if not match:
-        return None
-    return {"region": match.group("region").upper(), "delay": int(match.group("delay")), "universe": match.group("universe").upper()}
+def _selected_scope(form: dict[str, Any]) -> dict[str, Any]:
+    """Input: action form. Output: concrete scope dict. Validate the user-selected ledger scope fields."""
+    try:
+        region = str(form.get("selected_region", "")).strip().upper()
+        delay = int(form.get("selected_delay", ""))
+        universe = str(form.get("selected_universe", "")).strip().upper()
+    except (TypeError, ValueError):
+        raise ValueError("select a concrete region, delay, and universe scope before starting workflow") from None
+    if not region or delay < 0 or not universe:
+        raise ValueError("select a concrete region, delay, and universe scope before starting workflow")
+    return {"region": region, "delay": delay, "universe": universe}
 
 
 def _matches_scope(record: dict[str, Any], scope: dict[str, Any]) -> bool:
@@ -265,11 +283,20 @@ def _matches_scope(record: dict[str, Any], scope: dict[str, Any]) -> bool:
     )
 
 
-def _validate_option_data_coverage(paths: ConsolePaths, option: dict[str, Any]) -> None:
-    """Input: console paths and selected option. Output: none. Require usable ledger coverage before a workflow starts."""
-    scope = _option_scope(option)
-    if scope is None:
-        raise ValueError("data coverage requires a concrete region, delay, and universe scope on the selected option")
+def _ledger_record(row: dict[str, Any], scope: dict[str, Any]) -> DataLedgerRecord:
+    """Input: ledger JSON row and selected scope. Output: data record. Adapt raw ledger metadata for template selection."""
+    return DataLedgerRecord(
+        dataset_id=str(row.get("dataset_id", "")), dataset_name=str(row.get("dataset_name", "")),
+        field_id=str(row.get("field_id", "")), field_type=str(row.get("field_type", "")),
+        region=scope["region"], delay=scope["delay"], universe=scope["universe"],
+        semantic_tags=[str(tag) for tag in row.get("semantic_tags", []) if str(tag)] if isinstance(row.get("semantic_tags"), list) else [],
+        coverage=0.0, alpha_count=0, user_count=0, simulation_usage_count=0, submitted_usage_count=0,
+        last_used_at="", best_result_label="", correlation_risk="unknown", source_paths=[],
+    )
+
+
+def _validate_option_data_coverage(paths: ConsolePaths, option: dict[str, Any], scope: dict[str, Any]) -> None:
+    """Input: console paths, selected option, selected scope. Output: none. Require certified data and real templates."""
     ledger_path = paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
     matching_rows: list[dict[str, Any]] = []
     if ledger_path.exists():
@@ -282,31 +309,40 @@ def _validate_option_data_coverage(paths: ConsolePaths, option: dict[str, Any]) 
                 matching_rows.append(row)
     if not matching_rows:
         raise ValueError("data coverage ledger has no records matching the selected option scope")
-    if any(str(row.get("source_quality", "")) == "schema_seed" or str(row.get("coverage_status", "")) == "partial" for row in matching_rows):
-        raise ValueError("data coverage ledger for the selected scope is schema-seeded or partial")
-    if any(not row.get("compatible_template_ids") for row in matching_rows):
-        raise ValueError("data coverage ledger for the selected scope has no compatible templates")
+    if any(row.get("source_quality") != "platform_raw_capture" or row.get("coverage_status") != "measured_raw" for row in matching_rows):
+        raise ValueError("data coverage ledger for the selected scope is not certified measured platform coverage")
+    template_path = paths.knowledge_root / "wiki" / "30_templates" / "template_library.jsonl"
+    templates = load_template_library(template_path)
+    incentive = str(option.get("primary_incentive", ""))
+    for row in matching_rows:
+        compatible_ids = row.get("compatible_template_ids")
+        if not isinstance(compatible_ids, list) or not compatible_ids:
+            raise ValueError("data coverage ledger for the selected scope has no compatible templates")
+        selected = select_templates_for_data(templates, _ledger_record(row, scope), incentive, len(templates), **scope)
+        if not set(str(item) for item in compatible_ids) & {template.template_id for template in selected}:
+            raise ValueError("data coverage ledger for the selected scope has no compatible templates in the template library")
 
 
 def build_action_command(action: str, paths: ConsolePaths, form: dict[str, Any] | None = None) -> list[str]:
     """Input: console action, paths, form. Output: CLI command. Enforce UI safety gates."""
     data = dict(form or {})
+    if action == "workflow-start":
+        raise ValueError("direct console workflow-start is disabled; select an option card and measured scope")
     if action == "plan-research-options" and not _truthy(data.get("enable_live_api")):
         raise ValueError("enable_live_api is required before refreshing platform option cards")
     if action == "capture-platform-data-fields" and not _truthy(data.get("enable_live_api")):
         raise ValueError("enable_live_api is required before capturing platform data fields")
     if action == "workflow-start-from-option":
         option = _selected_option(paths, str(data.get("selected_option_id", "")))
+        scope = _selected_scope(data)
         if not _freshness_clean(paths):
             raise ValueError("knowledge maintenance is required before starting research workflow")
-        _validate_option_data_coverage(paths, option)
+        _validate_option_data_coverage(paths, option, scope)
         normalized = {
-            "objective": _option_objective(option),
+            "objective": f"{_option_objective(option)} | scope: {scope['region']} D{scope['delay']} {scope['universe']}",
             "selected_option_id": str(option.get("option_id")),
         }
         return build_raw_cli_command("workflow-start", paths, normalized)
-    if action == "workflow-start" and not _freshness_clean(paths):
-        raise ValueError("knowledge maintenance is required before starting research workflow")
     normalized = {key: (_truthy(value) if key in {"enable_live_api", "confirm_submit"} else value) for key, value in data.items()}
     return build_raw_cli_command(action, paths, normalized)
 

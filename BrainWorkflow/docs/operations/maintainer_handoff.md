@@ -103,7 +103,6 @@ Knowledge maintenance has two official entry points:
 
 The final review of `2711667..974158a` found no Critical or Important issues. Minor polish:
 
-- successful raw sync retry after `completed_with_warnings` could promote status to `completed`, or the console should explain historical warning status;
 - no-active `workflow-status` can present `consistent=false` because `active_run_missing` remains in diagnostics.
 
 ## Verification Baseline
