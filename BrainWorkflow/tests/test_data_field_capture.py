@@ -2,8 +2,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from wqb.data_field_capture import build_capture_scopes, capture_platform_data_fields
+from wqb.data_field_capture import DATA_CAPTURE_LOCK_NAME, build_capture_scopes, capture_platform_data_fields
 from wqb.data_ledger_compile import compile_data_ledger_from_raw
 
 
@@ -302,6 +303,104 @@ class DataFieldCaptureTests(unittest.TestCase):
         self.assertEqual(summary["status"], "completed_with_warnings")
         self.assertEqual(scope_rows[-1]["status"], "partial")
         self.assertTrue(any("missing dataset id" in row["message"] for row in errors))
+
+    def test_capture_refuses_busy_shared_lock_without_modifying_existing_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            capture.mkdir(parents=True)
+            existing = capture / "scopes.jsonl"
+            existing.write_text('{"preserve": true}\n', encoding="utf-8")
+
+            with patch("wqb.data_field_capture.exclusive_json_lock", side_effect=ValueError("data capture lock is busy")) as lock:
+                with self.assertRaisesRegex(ValueError, "data capture lock is busy"):
+                    capture_platform_data_fields(
+                        FakeCaptureClient(), root, generated_at="2026-07-16T08:30:00+00:00"
+                    )
+            preserved = existing.read_text(encoding="utf-8")
+            lock_path = lock.call_args.args[0]
+
+        self.assertEqual(preserved, '{"preserve": true}\n')
+        self.assertEqual(lock_path, root / DATA_CAPTURE_LOCK_NAME)
+
+    def test_successful_capture_marks_all_raw_rows_and_manifest_with_one_generation_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            summary = capture_platform_data_fields(
+                FakeCaptureClient(),
+                root,
+                generated_at="2026-07-16T08:30:00+00:00",
+                instrument_types=["EQUITY"],
+                regions=["USA"],
+                delays=[1],
+                universes=["TOP3000"],
+            )
+            capture = Path(summary["capture_dir"])
+            manifest = json.loads((capture / "manifest.json").read_text(encoding="utf-8"))
+            rows = [
+                json.loads(line)
+                for name in ("scopes.jsonl", "data_sets.jsonl", "data_fields.jsonl", "errors.jsonl")
+                for line in (capture / name).read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+        self.assertTrue(manifest["capture_generation_id"])
+        self.assertTrue(rows)
+        self.assertEqual({row["capture_generation_id"] for row in rows}, {manifest["capture_generation_id"]})
+
+    def test_unlimited_capture_with_truncated_data_sets_stays_partial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            with patch("wqb.data_field_capture.fetch_data_sets_with_metadata", return_value=([{"id": "fundamental3"}], True)):
+                summary = capture_platform_data_fields(
+                    FakeCaptureClient(), root, generated_at="2026-07-16T08:30:00+00:00",
+                    instrument_types=["EQUITY"], regions=["USA"], delays=[1], universes=["TOP3000"],
+                )
+                capture = Path(summary["capture_dir"])
+                outcomes = [json.loads(line) for line in (capture / "scopes.jsonl").read_text(encoding="utf-8").splitlines()]
+                compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+                compiled = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertEqual(outcomes[-1]["certification_status"], "partial")
+        self.assertEqual(compiled["coverage_status"], "partial")
+
+    def test_unlimited_capture_with_truncated_fields_stays_partial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            with patch("wqb.data_field_capture.fetch_data_fields_with_metadata", return_value=([{"id": "cash_field", "type": "MATRIX"}], True)):
+                summary = capture_platform_data_fields(
+                    FakeCaptureClient(), root, generated_at="2026-07-16T08:30:00+00:00",
+                    instrument_types=["EQUITY"], regions=["USA"], delays=[1], universes=["TOP3000"],
+                )
+                capture = Path(summary["capture_dir"])
+                errors = [json.loads(line) for line in (capture / "errors.jsonl").read_text(encoding="utf-8").splitlines()]
+                compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+                compiled = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertTrue(any("truncated" in row["message"] for row in errors))
+        self.assertEqual(compiled["coverage_status"], "partial")
+
+    def test_limited_resume_keeps_fully_certified_scope_without_new_terminal_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture_platform_data_fields(
+                FakeCaptureClient(), root, generated_at="2026-07-16T08:30:00+00:00",
+                instrument_types=["EQUITY"], regions=["USA"], delays=[1], universes=["TOP3000"],
+            )
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            before = (capture / "scopes.jsonl").read_text(encoding="utf-8")
+            resumed_client = FakeCaptureClient()
+
+            summary = capture_platform_data_fields(
+                resumed_client, root, generated_at="2026-07-16T08:30:00+00:00",
+                instrument_types=["EQUITY"], regions=["USA"], delays=[1], universes=["TOP3000"],
+                max_fields_per_dataset=1, resume_capture=True,
+            )
+            after = (capture / "scopes.jsonl").read_text(encoding="utf-8")
+
+        self.assertFalse(any(path.startswith("/data-sets?") or path.startswith("/data-fields?") for path in resumed_client.paths))
+        self.assertEqual(after, before)
+        self.assertEqual(summary["certification_status"], "complete")
 
 
 if __name__ == "__main__":

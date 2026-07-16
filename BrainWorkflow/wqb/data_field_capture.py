@@ -5,8 +5,10 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
-from wqb.data_catalog import fetch_data_fields, fetch_data_sets, fetch_operators
+from wqb.data_catalog import fetch_data_fields_with_metadata, fetch_data_sets_with_metadata, fetch_operators
+from wqb.lockfile import exclusive_json_lock
 
 
 DEFAULT_CAPTURE_INSTRUMENT_TYPES = ("EQUITY",)
@@ -15,6 +17,10 @@ DEFAULT_CAPTURE_DELAYS = (0, 1)
 DEFAULT_CAPTURE_UNIVERSES = ("TOP3000", "TOP2000", "TOP1000", "TOP500", "TOP200")
 RAW_CAPTURE_ROOT = Path("raw") / "platform" / "data_fields"
 SAFE_PAGE_LIMIT = 50
+DATA_CAPTURE_LOCK_NAME = ".data_capture_compile.lock"
+DATA_CAPTURE_LOCK_TIMEOUT_SECONDS = 5.0
+DATA_CAPTURE_LOCK_SLEEP_SECONDS = 0.05
+DATA_CAPTURE_LOCK_STALE_SECONDS = 3600.0
 
 
 @dataclass(frozen=True)
@@ -80,12 +86,8 @@ def _clear_outputs(capture_dir: Path) -> None:
             path.unlink()
 
 
-def _completed_scope_keys(
-    capture_dir: Path, certification_complete: bool
-) -> set[tuple[str, str, int, str]]:
+def _completed_scope_keys(capture_dir: Path) -> set[tuple[str, str, int, str]]:
     """Input: capture directory and requested certification status. Output: reusable scope keys. Skip only fully certified completed scopes."""
-    if not certification_complete:
-        return set()
     return {
         key
         for key, row in _latest_scope_rows(capture_dir).items()
@@ -96,8 +98,12 @@ def _completed_scope_keys(
 def _scope_key(scope: CaptureScope | dict[str, Any]) -> tuple[str, str, int, str]:
     """Input: CaptureScope or scope dict. Output: stable scope key tuple. Normalize a persisted capture scope key."""
     if isinstance(scope, CaptureScope):
-        return scope.instrument_type, scope.region, int(scope.delay), scope.universe
-    return str(scope["instrument_type"]), str(scope["region"]), int(scope["delay"]), str(scope["universe"])
+        key = scope.instrument_type, scope.region, int(scope.delay), scope.universe
+    else:
+        key = str(scope["instrument_type"]), str(scope["region"]), int(scope["delay"]), str(scope["universe"])
+    if not key[0].strip() or not key[1].strip() or key[2] < 0 or not key[3].strip():
+        raise ValueError("capture scope must include instrument_type, region, non-negative delay, and universe")
+    return key
 
 
 def _latest_scope_rows(capture_dir: Path) -> dict[tuple[str, str, int, str], dict[str, Any]]:
@@ -188,8 +194,37 @@ def capture_platform_data_fields(
     resume_capture: bool = False,
 ) -> dict[str, Any]:
     """Input: client, vault root, scope filters, limits. Output: summary dict. Capture platform data fields into raw."""
+    root = Path(knowledge_root)
+    with exclusive_json_lock(
+        root / DATA_CAPTURE_LOCK_NAME,
+        DATA_CAPTURE_LOCK_TIMEOUT_SECONDS,
+        DATA_CAPTURE_LOCK_SLEEP_SECONDS,
+        DATA_CAPTURE_LOCK_STALE_SECONDS,
+        "data capture lock is busy",
+    ):
+        return _capture_platform_data_fields_locked(
+            client, knowledge_root, generated_at, instrument_types, regions, delays, universes,
+            max_scopes, max_datasets_per_scope, max_fields_per_dataset, resume_capture,
+        )
+
+
+def _capture_platform_data_fields_locked(
+    client: Any,
+    knowledge_root: str | Path,
+    generated_at: str | None = None,
+    instrument_types: list[str] | None = None,
+    regions: list[str] | None = None,
+    delays: list[int] | None = None,
+    universes: list[str] | None = None,
+    max_scopes: int = 0,
+    max_datasets_per_scope: int = 0,
+    max_fields_per_dataset: int = 0,
+    resume_capture: bool = False,
+) -> dict[str, Any]:
+    """Input: capture settings while holding the shared lock. Output: summary dict. Write one non-interleaved raw generation."""
     generated = generated_at or _now()
     root = Path(knowledge_root)
+    capture_generation_id = uuid4().hex
     capture_dir = root / RAW_CAPTURE_ROOT / _capture_day(generated)
     capture_dir.mkdir(parents=True, exist_ok=True)
     if not resume_capture:
@@ -197,7 +232,11 @@ def capture_platform_data_fields(
     certification_complete = not any(
         limit > 0 for limit in (max_scopes, max_datasets_per_scope, max_fields_per_dataset)
     )
-    completed_scopes = _completed_scope_keys(capture_dir, certification_complete) if resume_capture else set()
+    completed_scopes = _completed_scope_keys(capture_dir) if resume_capture else set()
+
+    def append(name: str, row: dict[str, Any]) -> None:
+        """Input: artifact name and row. Output: none. Append one row tagged with this capture generation."""
+        _append_jsonl(capture_dir / name, {**row, "capture_generation_id": capture_generation_id})
 
     operators: list[dict[str, Any]] = []
     operator_fetch_succeeded = True
@@ -206,7 +245,7 @@ def capture_platform_data_fields(
         _write_json(capture_dir / "operators.json", {"generated_at": generated, "operators": operators})
     except Exception as error:
         operator_fetch_succeeded = False
-        _append_jsonl(capture_dir / "errors.jsonl", _error_row(None, "/operators", error, generated))
+        append("errors.jsonl", _error_row(None, "/operators", error, generated))
         _write_json(capture_dir / "operators.json", {"generated_at": generated, "operators": []})
 
     requested_scopes = build_capture_scopes(instrument_types, regions, delays, universes)
@@ -215,9 +254,9 @@ def capture_platform_data_fields(
         if _scope_key(scope) in completed_scopes:
             continue
         scope_row = {"generated_at": generated, "scope": _scope_dict(scope), "status": "started"}
-        _append_jsonl(capture_dir / "scopes.jsonl", scope_row)
+        append("scopes.jsonl", scope_row)
         try:
-            data_sets = fetch_data_sets(
+            data_sets, data_sets_truncated = fetch_data_sets_with_metadata(
                 client,
                 scope.instrument_type,
                 scope.region,
@@ -229,24 +268,28 @@ def capture_platform_data_fields(
                 data_sets = data_sets[: int(max_datasets_per_scope)]
         except Exception as error:
             scope_row.update({"status": "failed", "data_set_count": 0, "message": str(error), "certification_status": "partial"})
-            _append_jsonl(capture_dir / "scopes.jsonl", scope_row)
-            _append_jsonl(capture_dir / "errors.jsonl", _error_row(scope, "/data-sets", error, generated))
+            append("scopes.jsonl", scope_row)
+            append("errors.jsonl", _error_row(scope, "/data-sets", error, generated))
             continue
 
         field_errors: list[str] = []
+        if data_sets_truncated and max_datasets_per_scope == 0:
+            error = ValueError("data-set pagination truncated at implicit cap")
+            append("errors.jsonl", _error_row(scope, "/data-sets", error, generated))
+            field_errors.append(str(error))
         for data_set in data_sets:
             dataset_id = str(data_set.get("id", ""))
-            _append_jsonl(
-                capture_dir / "data_sets.jsonl",
+            append(
+                "data_sets.jsonl",
                 {"generated_at": generated, "scope": _scope_dict(scope), "data_set": data_set},
             )
             if not dataset_id:
                 error = ValueError("missing dataset id")
-                _append_jsonl(capture_dir / "errors.jsonl", _error_row(scope, "/data-sets", error, generated))
+                append("errors.jsonl", _error_row(scope, "/data-sets", error, generated))
                 field_errors.append(str(error))
                 continue
             try:
-                fields = fetch_data_fields(
+                fields, fields_truncated = fetch_data_fields_with_metadata(
                     client,
                     scope.instrument_type,
                     scope.region,
@@ -257,12 +300,16 @@ def capture_platform_data_fields(
                     max_records=max_fields_per_dataset if max_fields_per_dataset > 0 else 1000000,
                 )
             except Exception as error:
-                _append_jsonl(capture_dir / "errors.jsonl", _error_row(scope, f"/data-fields?dataset.id={dataset_id}", error, generated))
+                append("errors.jsonl", _error_row(scope, f"/data-fields?dataset.id={dataset_id}", error, generated))
                 field_errors.append(str(error))
                 continue
+            if fields_truncated and max_fields_per_dataset == 0:
+                error = ValueError(f"data-field pagination truncated at implicit cap for dataset {dataset_id}")
+                append("errors.jsonl", _error_row(scope, f"/data-fields?dataset.id={dataset_id}", error, generated))
+                field_errors.append(str(error))
             for field in fields:
-                _append_jsonl(
-                    capture_dir / "data_fields.jsonl",
+                append(
+                    "data_fields.jsonl",
                     {
                         "generated_at": generated,
                         "scope": _scope_dict(scope),
@@ -275,7 +322,7 @@ def capture_platform_data_fields(
             scope_row.update({"status": "partial", "data_set_count": len(data_sets), "error_count": len(field_errors), "message": "; ".join(field_errors), "certification_status": "partial"})
         else:
             scope_row.update({"status": "completed", "data_set_count": len(data_sets), "certification_status": "complete" if certification_complete else "partial"})
-        _append_jsonl(capture_dir / "scopes.jsonl", scope_row)
+        append("scopes.jsonl", scope_row)
 
     latest_scope_rows = _latest_scope_rows(capture_dir)
     unresolved_scope_rows = [
@@ -284,8 +331,10 @@ def capture_platform_data_fields(
         if latest_scope_rows.get(_scope_key(scope), {}).get("status") != "completed"
     ]
     error_count = _unresolved_scope_error_count(unresolved_scope_rows) + (0 if operator_fetch_succeeded else 1)
+    reused_complete_scopes = bool(scopes) and all(_scope_key(scope) in completed_scopes for scope in scopes)
     summary = {
         "generated_at": generated,
+        "capture_generation_id": capture_generation_id,
         "capture_dir": str(capture_dir),
         "scope_count": len(latest_scope_rows),
         "scope_event_count": _jsonl_row_count(capture_dir / "scopes.jsonl"),
@@ -301,7 +350,7 @@ def capture_platform_data_fields(
             "max_fields_per_dataset": int(max_fields_per_dataset),
         },
         "latest_scope_outcomes": [latest_scope_rows[key] for key in sorted(latest_scope_rows)],
-        "certification_status": "complete" if certification_complete else "partial",
+        "certification_status": "complete" if certification_complete or reused_complete_scopes else "partial",
     }
     _write_json(capture_dir / "manifest.json", summary)
     errors_path = capture_dir / "errors.jsonl"

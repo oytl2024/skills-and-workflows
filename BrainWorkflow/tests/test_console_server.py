@@ -14,12 +14,31 @@ def make_paths(root: Path) -> ConsolePaths:
     return ConsolePaths(root, root / "BrainWorkflow", root / "knowledge", root / "runs", root / "milestone.md", root / "todo.md", root / "runs" / "console_jobs")
 
 
+def valid_option(**overrides):
+    """Input: optional option-card overrides. Output: valid option-card row. Build durable console fixtures."""
+    row = {
+        "title": "Power Pool",
+        "primary_incentive": "power_pool",
+        "secondary_incentives": [],
+        "why_now": "Fresh measured coverage is available.",
+        "candidate_scope": "USA D1 TOP3000",
+        "expected_asset_value": "A measured research direction.",
+        "correlation_risk": "low",
+        "resource_cost": "small",
+        "evidence": [{"source_type": "ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "title": "Ledger", "timestamp": "2026-07-16"}],
+        "failure_modes": [],
+        "decision_needed": "Start the selected scope.",
+        "score": {"total": 1.0, "components": {}, "penalties": {}, "reasons": ["measured coverage"]},
+    }
+    return {**row, **overrides}
+
+
 class ConsoleServerTests(unittest.TestCase):
     def test_render_dashboard_exposes_research_progress_and_knowledge_controls(self):
         state = {
             "readiness": {"exists": True, "passed": True, "blocked": False},
             "freshness": {"exists": True, "stale_count": 0, "missing_count": 0},
-            "option_cards": [{"title": "Power Pool"}],
+            "option_cards": [valid_option()],
             "schedule": {"preview": "# Schedule"},
             "jobs": [{"job_id": "job1", "status": "completed", "action": "readiness-check"}],
             "proposal_counts": {"proposed": 1},
@@ -42,7 +61,7 @@ class ConsoleServerTests(unittest.TestCase):
             "freshness": {"exists": True, "valid": True, "record_count": 6, "stale_count": 0, "missing_count": 0},
             "data_coverage": {"exists": True, "field_count": 120, "scope_count": 4, "data_set_count": 8, "error_count": 0, "status": "completed"},
             "startable_scopes": [{"region": "USA", "delay": 1, "universe": "TOP3000"}],
-            "option_cards": [{"title": "Power Pool", "primary_incentive": "power_pool", "candidate_scope": "USA D1 TOP3000", "score": {"total": 9.0}}],
+            "option_cards": [valid_option(score={"total": 9.0, "components": {}, "penalties": {}, "reasons": ["measured coverage"]})],
             "schedule": {"preview": "# Schedule"},
             "jobs": [],
             "proposal_counts": {},
@@ -117,17 +136,35 @@ class ConsoleServerTests(unittest.TestCase):
             decisions = paths.knowledge_root / "wiki" / "70_decisions"
             decisions.mkdir(parents=True)
             (decisions / "research_option_cards.jsonl").write_text(
-                json.dumps({"title": "First objective", "candidate_scope": "USA D1 TOP3000"}) + "\n\nnot-json\n" + json.dumps({"title": "Second objective", "candidate_scope": "USA D1 TOP3000"}) + "\n",
+                json.dumps(valid_option(title="First objective")) + "\n\nnot-json\n" + json.dumps(valid_option(title="Second objective")) + "\n",
                 encoding="utf-8",
             )
             template = paths.knowledge_root / "wiki" / "30_templates" / "template_library.jsonl"
             template.parent.mkdir(parents=True)
             template.write_text(json.dumps({"template_id": "matrix_ts_zscore_rank", "status": "discovery_ready", "required_field_types": ["MATRIX"]}) + "\n", encoding="utf-8")
-            html = render_dashboard({"option_cards": [{"title": "First objective"}, {"title": "Second objective"}]})
+            html = render_dashboard({"option_cards": [valid_option(title="First objective"), valid_option(title="Second objective")]})
             command = build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-2", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
         self.assertIn('value="option-2"', html)
         self.assertIn("Second objective", " ".join(command))
+
+    def test_malformed_option_card_does_not_render_or_start_and_does_not_consume_fallback_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            decisions = paths.knowledge_root / "wiki" / "70_decisions"
+            decisions.mkdir(parents=True)
+            (decisions / "research_option_cards.jsonl").write_text(
+                "{}\n" + json.dumps(valid_option(title="Valid second row")) + "\n", encoding="utf-8"
+            )
+
+            html = render_dashboard({"option_cards": [{}, valid_option(title="Valid second row")]})
+            with self.assertRaisesRegex(ValueError, "not available"):
+                build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-2", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
+
+        self.assertNotIn("Research option", html)
+        self.assertIn('value="option-1"', html)
+        self.assertIn("Valid second row", html)
 
     def test_render_proposals_includes_input_form(self):
         html = render_proposals([{"proposal_id": "p1", "title": "Improve template", "status": "proposed"}])
@@ -277,6 +314,25 @@ class ConsoleServerTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "data coverage"):
                     build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
+    def test_build_action_command_starts_certified_exact_scope_and_rejects_partial_exact_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            self._write_start_fixture(
+                paths,
+                {"title": "Power Pool"},
+                [
+                    {"dataset_id": "fundamental3", "field_id": "cash_field", "region": "USA", "delay": 1, "universe": "TOP3000", "source_quality": "platform_raw_capture", "coverage_status": "measured_raw", "compatible_template_ids": ["matrix_ts_zscore_rank"], "available_scopes": [{"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}]},
+                    {"dataset_id": "fundamental3", "field_id": "cash_field", "region": "EUR", "delay": 1, "universe": "TOP3000", "source_quality": "platform_raw_capture", "coverage_status": "partial", "compatible_template_ids": ["matrix_ts_zscore_rank"], "available_scopes": [{"instrument_type": "EQUITY", "region": "EUR", "delay": 1, "universe": "TOP3000"}]},
+                ],
+            )
+
+            command = build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
+            with self.assertRaisesRegex(ValueError, "data coverage"):
+                build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "EUR", "selected_delay": "1", "selected_universe": "TOP3000"})
+
+        self.assertIn("USA D1 TOP3000", " ".join(command))
+
     def test_build_action_command_refuses_warning_capture_compiled_ledger(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -307,7 +363,7 @@ class ConsoleServerTests(unittest.TestCase):
             decisions = paths.knowledge_root / "wiki" / "70_decisions"
             decisions.mkdir(parents=True, exist_ok=True)
             (decisions / "research_option_cards.jsonl").write_text(
-                json.dumps({"title": "Power Pool", "candidate_scope": "USA D1 TOP3000"}) + "\n",
+                json.dumps(valid_option()) + "\n",
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "data coverage"):
@@ -362,7 +418,7 @@ class ConsoleServerTests(unittest.TestCase):
         )
         decisions = paths.knowledge_root / "wiki" / "70_decisions"
         decisions.mkdir(parents=True, exist_ok=True)
-        (decisions / "research_option_cards.jsonl").write_text(json.dumps(option) + "\n", encoding="utf-8")
+        (decisions / "research_option_cards.jsonl").write_text(json.dumps(valid_option(**option)) + "\n", encoding="utf-8")
 
     def test_build_action_command_rejects_direct_start_even_when_freshness_is_clean(self):
         with tempfile.TemporaryDirectory() as tmp:

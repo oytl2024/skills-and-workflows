@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from wqb.data_field_capture import DATA_CAPTURE_LOCK_NAME
 from wqb.data_ledger import DataLedgerRecord, data_ledger_record_to_dict, load_data_ledger, write_data_ledger_markdown
 from wqb.lockfile import exclusive_json_lock
 from wqb.semantics import field_semantic_embedding
@@ -16,7 +17,7 @@ RAW_CAPTURE_ROOT = Path("raw") / "platform" / "data_fields"
 DATA_LEDGER_JSONL = Path("wiki") / "20_semantics" / "data_ledger.jsonl"
 DATA_LEDGER_MD = Path("wiki") / "20_semantics" / "data_ledger.md"
 FRESHNESS_MANIFEST = Path("wiki") / "80_maintenance" / "freshness_manifest.json"
-COMPILE_LOCK_NAME = ".compile_data_ledger.lock"
+COMPILE_LOCK_NAME = DATA_CAPTURE_LOCK_NAME
 COMPILE_LOCK_TIMEOUT_SECONDS = 5.0
 COMPILE_LOCK_SLEEP_SECONDS = 0.05
 COMPILE_LOCK_STALE_SECONDS = 3600.0
@@ -146,7 +147,7 @@ def _scope_key(scope: dict[str, Any]) -> tuple[str, str, int, str] | None:
         )
     except (TypeError, ValueError):
         return None
-    return key if key[0] and key[1] and key[3] else None
+    return key if key[0] and key[1] and key[2] >= 0 and key[3] else None
 
 
 def _latest_scope_outcomes(capture_dir: Path) -> dict[tuple[str, str, int, str], dict[str, Any]]:
@@ -262,20 +263,6 @@ def compile_data_ledger_from_raw(
     generated = generated_at or _now()
     root = Path(knowledge_root)
     selected_capture = Path(capture_dir) if capture_dir is not None else latest_capture_dir(root)
-    fields_path = selected_capture / "data_fields.jsonl"
-    manifest = _read_json(selected_capture / "manifest.json")
-    rows = _read_jsonl(fields_path, strict_objects=True)
-    _validate_raw_rows(rows)
-    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    for row in rows:
-        field = row.get("field", {}) if isinstance(row.get("field"), dict) else {}
-        data_set = row.get("data_set", {}) if isinstance(row.get("data_set"), dict) else {}
-        field_id = str(field.get("id", ""))
-        dataset_id = str(data_set.get("id", ""))
-        grouped[(dataset_id, field_id)].append(row)
-    if not grouped:
-        raise ValueError("raw data fields contain no valid rows")
-
     ledger_path = root / DATA_LEDGER_JSONL
     markdown_path = root / DATA_LEDGER_MD
     manifest_path = root / FRESHNESS_MANIFEST
@@ -284,9 +271,6 @@ def compile_data_ledger_from_raw(
     markdown_tmp_path = markdown_path.with_name(f"{markdown_path.name}.{token}.tmp")
     manifest_tmp_path = manifest_path.with_name(f"{manifest_path.name}.{token}.tmp")
     tmp_paths = [ledger_tmp_path, markdown_tmp_path, manifest_tmp_path]
-    certification_complete = _capture_certification_complete(manifest)
-    scope_outcomes = _latest_scope_outcomes(selected_capture)
-    source_day = _capture_source_day(manifest, selected_capture)
     with exclusive_json_lock(
         root / COMPILE_LOCK_NAME,
         COMPILE_LOCK_TIMEOUT_SECONDS,
@@ -295,9 +279,25 @@ def compile_data_ledger_from_raw(
         "data ledger compile lock is busy",
     ):
         try:
+            fields_path = selected_capture / "data_fields.jsonl"
+            manifest = _read_json(selected_capture / "manifest.json")
+            rows = _read_jsonl(fields_path, strict_objects=True)
+            _validate_raw_rows(rows)
+            grouped: dict[tuple[str, str, tuple[str, str, int, str] | None], list[dict[str, Any]]] = defaultdict(list)
+            for row in rows:
+                field = row.get("field", {}) if isinstance(row.get("field"), dict) else {}
+                data_set = row.get("data_set", {}) if isinstance(row.get("data_set"), dict) else {}
+                scope = row.get("scope") if isinstance(row.get("scope"), dict) else {}
+                grouped[(str(data_set.get("id", "")), str(field.get("id", "")), _scope_key(scope))].append(row)
+            if not grouped:
+                raise ValueError("raw data fields contain no valid rows")
+
+            certification_complete = _capture_certification_complete(manifest)
+            scope_outcomes = _latest_scope_outcomes(selected_capture)
+            source_day = _capture_source_day(manifest, selected_capture)
             prior_records = {(record.dataset_id, record.field_id): record for record in load_data_ledger(ledger_path)}
             output_rows = []
-            for key in sorted(grouped):
+            for key in sorted(grouped, key=repr):
                 row_scope_keys = [
                     _scope_key(row.get("scope")) if isinstance(row.get("scope"), dict) else None
                     for row in grouped[key]
@@ -309,7 +309,7 @@ def compile_data_ledger_from_raw(
                     and outcome.get("certification_status") == "complete"
                     for scope_key in row_scope_keys
                 )
-                output_rows.append(_record_from_group(root, fields_path, grouped[key], prior_records.get(key)) | {"coverage_status": "measured_raw" if measured else "partial"})
+                output_rows.append(_record_from_group(root, fields_path, grouped[key], prior_records.get(key[:2])) | {"coverage_status": "measured_raw" if measured else "partial"})
             if not output_rows:
                 raise ValueError("raw data fields contain no valid rows")
             _write_jsonl(ledger_tmp_path, output_rows)

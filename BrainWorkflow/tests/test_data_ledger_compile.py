@@ -5,7 +5,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from wqb.data_ledger import load_data_ledger
-from wqb.data_ledger_compile import compile_data_ledger_from_raw, latest_capture_dir
+from wqb.data_field_capture import DATA_CAPTURE_LOCK_NAME
+from wqb.data_ledger_compile import COMPILE_LOCK_NAME, compile_data_ledger_from_raw, latest_capture_dir
 
 
 def write_jsonl(path, rows):
@@ -24,7 +25,7 @@ class DataLedgerCompileTests(unittest.TestCase):
 
             self.assertEqual(latest_capture_dir(root), new)
 
-    def test_compile_data_ledger_from_raw_aggregates_scope_and_source_paths(self):
+    def test_compile_data_ledger_from_raw_emits_one_record_per_exact_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
             capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
@@ -54,19 +55,52 @@ class DataLedgerCompileTests(unittest.TestCase):
             records = load_data_ledger(ledger_path)
             raw_row = json.loads(ledger_path.read_text(encoding="utf-8").splitlines()[0])
 
-        self.assertEqual(summary["record_count"], 1)
-        self.assertEqual(records[0].field_id, "fnd3_q_cash_fast_d1")
-        self.assertEqual(records[0].available_regions, ["EUR", "USA"])
-        self.assertEqual(records[0].available_delays, [0, 1])
-        self.assertEqual(records[0].available_universes, ["TOP3000", "TOP500"])
-        self.assertEqual(records[0].available_scopes, [
-            {"instrument_type": "EQUITY", "region": "EUR", "delay": 0, "universe": "TOP500"},
-            {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"},
+        self.assertEqual(summary["record_count"], 2)
+        self.assertEqual([record.field_id for record in records], ["fnd3_q_cash_fast_d1", "fnd3_q_cash_fast_d1"])
+        self.assertEqual([record.available_scopes for record in records], [
+            [{"instrument_type": "EQUITY", "region": "EUR", "delay": 0, "universe": "TOP500"}],
+            [{"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}],
         ])
         self.assertIn("cash", records[0].semantic_tags)
         self.assertIn("raw/platform/data_fields/2026-07-16/data_fields.jsonl", raw_row["source_paths"][0])
         self.assertEqual(raw_row["source_quality"], "platform_raw_capture")
         self.assertEqual(raw_row["coverage_status"], "measured_raw")
+
+    def test_compile_keeps_certified_and_partial_exact_scopes_separate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            certified = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+            partial = {"instrument_type": "EQUITY", "region": "EUR", "delay": 1, "universe": "TOP3000"}
+            write_jsonl(capture / "data_fields.jsonl", [
+                {"scope": certified, "data_set": {"id": "fundamental3"}, "field": {"id": "cash_field", "type": "MATRIX"}},
+                {"scope": partial, "data_set": {"id": "fundamental3"}, "field": {"id": "cash_field", "type": "MATRIX"}},
+            ])
+            write_jsonl(capture / "scopes.jsonl", [
+                {"scope": certified, "status": "completed", "certification_status": "complete"},
+                {"scope": partial, "status": "partial", "certification_status": "partial"},
+            ])
+            (capture / "manifest.json").write_text(json.dumps({"status": "completed_with_warnings", "certification_status": "complete"}), encoding="utf-8")
+
+            compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            rows = [json.loads(line) for line in (root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual([(row["region"], row["coverage_status"]) for row in rows], [("EUR", "partial"), ("USA", "measured_raw")])
+        self.assertTrue(all(len(row["available_scopes"]) == 1 for row in rows))
+
+    def test_compile_marks_negative_delay_scope_partial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            scope = {"instrument_type": "EQUITY", "region": "USA", "delay": -1, "universe": "TOP3000"}
+            write_jsonl(capture / "data_fields.jsonl", [{"scope": scope, "data_set": {"id": "fundamental3"}, "field": {"id": "cash_field", "type": "MATRIX"}}])
+            write_jsonl(capture / "scopes.jsonl", [{"scope": scope, "status": "completed", "certification_status": "complete"}])
+            (capture / "manifest.json").write_text(json.dumps({"status": "completed", "certification_status": "complete"}), encoding="utf-8")
+
+            compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertEqual(row["coverage_status"], "partial")
 
     def test_compile_marks_rows_partial_without_explicit_certified_scope_outcome(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -339,6 +373,9 @@ class DataLedgerCompileTests(unittest.TestCase):
                     compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
 
         lock.assert_called_once()
+
+    def test_capture_and_compile_share_the_same_knowledge_root_lock_name(self):
+        self.assertEqual(COMPILE_LOCK_NAME, DATA_CAPTURE_LOCK_NAME)
 
 
 if __name__ == "__main__":

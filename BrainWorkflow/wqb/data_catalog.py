@@ -5,6 +5,24 @@ from urllib.parse import quote
 GROUPING_FIELD_IDS = {"country", "industry", "subindustry", "currency", "market", "sector", "exchange"}
 
 
+def _fetch_paginated_rows(client, path_builder, limit: int, max_records: int) -> tuple[list[dict[str, Any]], bool]:
+    """Input: client, path builder, page and record limits. Output: rows and truncation flag. Fetch a bounded catalog safely."""
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    page_limit = min(max(int(limit), 1), 50)
+    record_limit = max(int(max_records), 0)
+    while len(rows) < record_limit:
+        request_limit = min(page_limit, record_limit - len(rows))
+        batch = result_rows(client.get_json(path_builder(request_limit, offset)))
+        rows.extend(batch[:request_limit])
+        if len(batch) < request_limit:
+            return rows, False
+        offset += request_limit
+    if record_limit == 0:
+        return rows, False
+    return rows, bool(result_rows(client.get_json(path_builder(1, offset))))
+
+
 def fetch_data_fields(
     client,
     instrument_type: str,
@@ -17,10 +35,25 @@ def fetch_data_fields(
     max_records: int = 300,
 ) -> list[dict[str, Any]]:
     """Input: WQB client and field filters. Output: data-field records. Fetch a bounded field pool."""
-    fields: list[dict[str, Any]] = []
-    offset = 0
-    page_limit = min(max(int(limit), 1), 50)
-    while offset < max_records:
+    fields, _ = fetch_data_fields_with_metadata(
+        client, instrument_type, region, delay, universe, dataset_id, search, limit, max_records
+    )
+    return fields
+
+
+def fetch_data_fields_with_metadata(
+    client,
+    instrument_type: str,
+    region: str,
+    delay: int,
+    universe: str,
+    dataset_id: str = "",
+    search: str = "",
+    limit: int = 50,
+    max_records: int = 300,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Input: WQB client and field filters. Output: rows and truncation flag. Detect bounded field pagination."""
+    def path_builder(page_limit: int, offset: int) -> str:
         path = (
             f"/data-fields?instrumentType={instrument_type}&region={region}&delay={delay}"
             f"&universe={universe}&limit={page_limit}&offset={offset}"
@@ -29,13 +62,9 @@ def fetch_data_fields(
             path += f"&dataset.id={quote(dataset_id)}"
         if search:
             path += f"&search={quote(search)}"
-        result = client.get_json(path)
-        batch = result.get("results", [])
-        fields.extend(batch)
-        if len(batch) < page_limit:
-            break
-        offset += page_limit
-    return fields[:max_records]
+        return path
+
+    return _fetch_paginated_rows(client, path_builder, limit, max_records)
 
 
 def select_seed_fields(fields: list[dict[str, Any]], max_fields: int = 40) -> list[dict[str, Any]]:
@@ -94,20 +123,29 @@ def fetch_data_sets(
     max_records: int = 1000,
 ) -> list[dict[str, Any]]:
     """Input: client and setting filters. Output: dataset rows. Fetch a bounded dataset catalog."""
-    rows: list[dict[str, Any]] = []
-    offset = 0
-    page_limit = min(max(int(limit), 1), 50)
-    while offset < max_records:
-        path = (
+    rows, _ = fetch_data_sets_with_metadata(
+        client, instrument_type, region, delay, universe, limit, max_records
+    )
+    return rows
+
+
+def fetch_data_sets_with_metadata(
+    client,
+    instrument_type: str,
+    region: str,
+    delay: int,
+    universe: str,
+    limit: int = 100,
+    max_records: int = 1000,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Input: client and setting filters. Output: rows and truncation flag. Detect bounded dataset pagination."""
+    def path_builder(page_limit: int, offset: int) -> str:
+        return (
             f"/data-sets?instrumentType={instrument_type}&region={region}&delay={delay}"
             f"&universe={universe}&limit={page_limit}&offset={offset}"
         )
-        batch = result_rows(client.get_json(path))
-        rows.extend(batch)
-        if len(batch) < page_limit:
-            break
-        offset += page_limit
-    return rows[:max_records]
+
+    return _fetch_paginated_rows(client, path_builder, limit, max_records)
 
 
 def build_metadata_cache(
