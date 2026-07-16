@@ -108,10 +108,11 @@ def _data_coverage_summary(knowledge_root: Path) -> dict[str, Any]:
     """Input: knowledge root. Output: data coverage summary. Read latest raw data-field capture manifest."""
     root = knowledge_root / "raw" / "platform" / "data_fields"
     captures = sorted([path for path in root.glob("*") if path.is_dir()])
-    if not captures:
+    valid_captures = [(capture, _read_json(capture / "manifest.json")) for capture in captures]
+    valid_captures = [(capture, manifest) for capture, manifest in valid_captures if manifest]
+    if not valid_captures:
         return {"exists": False, "latest_capture_dir": "", "field_count": 0, "scope_count": 0, "data_set_count": 0, "error_count": 0, "status": ""}
-    latest = captures[-1]
-    manifest = _read_json(latest / "manifest.json")
+    latest, manifest = valid_captures[-1]
     return {
         "exists": bool(manifest),
         "latest_capture_dir": str(latest),
