@@ -716,6 +716,37 @@ class CliTests(unittest.TestCase):
         compiler.assert_called_once_with("custom_knowledge")
         self.assertEqual(json.loads(output.getvalue())["markdown_path"], "compile.md")
 
+    def test_capture_platform_data_fields_requires_live_api_flag(self):
+        with patch("sys.argv", ["wqb", "capture-platform-data-fields"]):
+            with self.assertRaises(SystemExit) as ctx:
+                main()
+
+        self.assertIn("--enable-live-api", str(ctx.exception))
+
+    def test_capture_platform_data_fields_dispatches_with_scope_limits(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "capture-platform-data-fields", "--enable-live-api", "--capture-region", "USA,EUR", "--capture-delay", "1", "--capture-universe", "TOP3000", "--max-scopes", "2"]):
+            with patch("wqb.cli.capture_platform_data_fields_command", return_value={"field_count": 7}) as command:
+                with redirect_stdout(output):
+                    main()
+
+        kwargs = command.call_args.kwargs
+        self.assertEqual(kwargs["regions"], ["USA", "EUR"])
+        self.assertEqual(kwargs["delays"], [1])
+        self.assertEqual(kwargs["universes"], ["TOP3000"])
+        self.assertEqual(kwargs["max_scopes"], 2)
+        self.assertEqual(json.loads(output.getvalue())["field_count"], 7)
+
+    def test_compile_data_ledger_dispatches_without_live_api(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "compile-data-ledger", "--knowledge-root", "knowledge"]):
+            with patch("wqb.cli.compile_data_ledger_command", return_value={"record_count": 3}) as command:
+                with redirect_stdout(output):
+                    main()
+
+        self.assertEqual(command.call_args.args[0], "knowledge")
+        self.assertEqual(json.loads(output.getvalue())["record_count"], 3)
+
     def test_launch_console_parse_and_dispatch(self):
         output = io.StringIO()
         with patch("sys.argv", ["wqb", "launch-console", "--console-host", "127.0.0.1", "--console-port", "0", "--no-open-browser"]), patch(

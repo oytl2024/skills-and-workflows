@@ -25,7 +25,9 @@ from wqb.data_catalog import (
     filter_fields_by_suffix,
     select_seed_fields,
 )
+from wqb.data_field_capture import capture_platform_data_fields
 from wqb.data_ledger import load_data_ledger
+from wqb.data_ledger_compile import compile_data_ledger_from_raw
 from wqb.decision_log import write_option_cards
 from wqb.expression import expression_hash, is_power_pool_complexity_ok, replace_operator_names
 from wqb.generator import build_settings, generate_seed_candidates, simulation_payload
@@ -173,6 +175,42 @@ def bootstrap_knowledge_command(knowledge_root: str | Path, seed_root: str | Pat
 def compile_research_records_command(knowledge_root: str | Path) -> dict[str, Any]:
     """Input: knowledge root. Output: summary dict. Compile raw research records into wiki notes."""
     return compile_research_records(knowledge_root)
+
+
+def capture_platform_data_fields_command(
+    config: dict[str, Any],
+    knowledge_root: str | Path,
+    instrument_types: list[str] | None = None,
+    regions: list[str] | None = None,
+    delays: list[int] | None = None,
+    universes: list[str] | None = None,
+    max_scopes: int = 0,
+    max_datasets_per_scope: int = 0,
+    max_fields_per_dataset: int = 0,
+    resume_capture: bool = False,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Input: config, vault root, filters, limits. Output: capture summary. Fetch platform data fields into raw."""
+    client = build_client(config)
+    client.authenticate()
+    return capture_platform_data_fields(
+        client,
+        knowledge_root,
+        generated_at=generated_at,
+        instrument_types=instrument_types,
+        regions=regions,
+        delays=delays,
+        universes=universes,
+        max_scopes=max_scopes,
+        max_datasets_per_scope=max_datasets_per_scope,
+        max_fields_per_dataset=max_fields_per_dataset,
+        resume_capture=resume_capture,
+    )
+
+
+def compile_data_ledger_command(knowledge_root: str | Path, capture_dir: str | Path | None = None) -> dict[str, Any]:
+    """Input: vault root and optional capture dir. Output: compile summary. Build the data ledger from raw fields."""
+    return compile_data_ledger_from_raw(knowledge_root, capture_dir=capture_dir)
 
 
 def readiness_check(
@@ -639,6 +677,23 @@ def list_fields(config: dict[str, Any], dataset_id: str, field_search: str, fiel
 def parse_csv_arg(value: str) -> list[str]:
     """Input: comma-separated string. Output: cleaned string list. Parse compact CLI lists."""
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def parse_optional_csv(value: str) -> list[str] | None:
+    """Input: comma-separated string. Output: list or None. Parse optional CLI filters."""
+    items = parse_csv_arg(value)
+    return items or None
+
+
+def parse_optional_int_csv(value: str) -> list[int] | None:
+    """Input: comma-separated integers. Output: int list or None. Parse optional numeric filters."""
+    items = parse_csv_arg(value)
+    if not items:
+        return None
+    try:
+        return [int(item) for item in items]
+    except ValueError as err:
+        raise SystemExit(f"integer list expected: {value}") from err
 
 
 def cache_metadata(
@@ -3228,6 +3283,8 @@ def parse_args() -> argparse.Namespace:
             "retry-planned",
             "run-expression-file",
             "plan-research-options",
+            "capture-platform-data-fields",
+            "compile-data-ledger",
             "knowledge-health-check",
             "readiness-check",
             "launch-workflow",
@@ -3284,6 +3341,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--freshness-report", default="wiki/80_maintenance/freshness_report.md")
     parser.add_argument("--knowledge-root", default=str(default_knowledge_root()))
     parser.add_argument("--knowledge-seed-root", default="docs/knowledge")
+    parser.add_argument("--data-capture-date", default="")
+    parser.add_argument("--capture-region", default="")
+    parser.add_argument("--capture-delay", default="")
+    parser.add_argument("--capture-universe", default="")
+    parser.add_argument("--max-scopes", type=int, default=0)
+    parser.add_argument("--max-datasets-per-scope", type=int, default=0)
+    parser.add_argument("--max-fields-per-dataset", type=int, default=0)
+    parser.add_argument("--resume-capture", action="store_true", default=False)
+    parser.add_argument("--capture-dir", default="")
     parser.add_argument("--readiness-output-dir", default="")
     parser.add_argument("--readiness-mode", choices=["maintenance", "plan-only", "research", "submit-candidate"], default="plan-only")
     parser.add_argument("--batch-size", type=int, default=30)
@@ -3572,6 +3638,29 @@ def main() -> None:
         if not args.enable_live_api:
             raise SystemExit("--enable-live-api is required for plan-research-options")
         result = plan_research_options(config, args.max_options, args.option_output_dir)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "capture-platform-data-fields":
+        if not args.enable_live_api:
+            raise SystemExit("--enable-live-api is required for capture-platform-data-fields")
+        generated_at = args.data_capture_date or None
+        if generated_at and len(generated_at) == 10:
+            generated_at = f"{generated_at}T00:00:00+00:00"
+        result = capture_platform_data_fields_command(
+            config,
+            args.knowledge_root,
+            instrument_types=None,
+            regions=parse_optional_csv(args.capture_region),
+            delays=parse_optional_int_csv(args.capture_delay),
+            universes=parse_optional_csv(args.capture_universe),
+            max_scopes=args.max_scopes,
+            max_datasets_per_scope=args.max_datasets_per_scope,
+            max_fields_per_dataset=args.max_fields_per_dataset,
+            resume_capture=args.resume_capture,
+            generated_at=generated_at,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "compile-data-ledger":
+        result = compile_data_ledger_command(args.knowledge_root, capture_dir=args.capture_dir or None)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "knowledge-health-check":
         result = knowledge_health_check(
