@@ -42,6 +42,14 @@ class FakeCaptureClient:
         return {"results": []}
 
 
+class FailingFieldCaptureClient(FakeCaptureClient):
+    def get_json(self, path):
+        if path.startswith("/data-fields?") and "dataset.id=fundamental3" in path:
+            self.paths.append(path)
+            raise RuntimeError("field endpoint failed")
+        return super().get_json(path)
+
+
 class DataFieldCaptureTests(unittest.TestCase):
     def test_build_capture_scopes_expands_matrix_and_applies_limit(self):
         scopes = build_capture_scopes(
@@ -136,6 +144,40 @@ class DataFieldCaptureTests(unittest.TestCase):
             )
 
             self.assertTrue(any(path.startswith("/data-sets?") for path in client.paths))
+
+    def test_resume_capture_retries_scope_when_a_field_fetch_failed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            first_client = FailingFieldCaptureClient()
+            first_summary = capture_platform_data_fields(
+                first_client,
+                root,
+                generated_at="2026-07-16T08:30:00+00:00",
+                instrument_types=["EQUITY"],
+                regions=["USA"],
+                delays=[1],
+                universes=["TOP3000"],
+            )
+            capture = Path(first_summary["capture_dir"])
+            scope_rows = [json.loads(line) for line in (capture / "scopes.jsonl").read_text(encoding="utf-8").splitlines()]
+            errors = [json.loads(line) for line in (capture / "errors.jsonl").read_text(encoding="utf-8").splitlines()]
+            resumed_client = FailingFieldCaptureClient()
+
+            capture_platform_data_fields(
+                resumed_client,
+                root,
+                generated_at="2026-07-16T08:30:00+00:00",
+                instrument_types=["EQUITY"],
+                regions=["USA"],
+                delays=[1],
+                universes=["TOP3000"],
+                resume_capture=True,
+            )
+
+        self.assertEqual(scope_rows[-1]["status"], "partial")
+        self.assertIn("field endpoint failed", errors[-1]["message"])
+        self.assertTrue(any(path.startswith("/data-sets?") for path in resumed_client.paths))
+        self.assertTrue(any(path.startswith("/data-fields?") for path in resumed_client.paths))
 
 
 if __name__ == "__main__":

@@ -60,6 +60,26 @@ class DataLedgerCompileTests(unittest.TestCase):
         self.assertEqual(raw_row["source_quality"], "platform_raw_capture")
         self.assertEqual(raw_row["coverage_status"], "measured_raw")
 
+    def test_compile_marks_warning_capture_rows_partial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            write_jsonl(
+                capture / "data_fields.jsonl",
+                [{
+                    "scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"},
+                    "data_set": {"id": "fundamental3", "name": "Fundamentals", "category": "fundamental"},
+                    "field": {"id": "cash_field", "type": "MATRIX", "description": "Quarterly cash"},
+                }],
+            )
+            (capture / "manifest.json").write_text(json.dumps({"status": "completed_with_warnings"}), encoding="utf-8")
+
+            summary = compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertEqual(summary["source_status"], "partial")
+        self.assertEqual(row["coverage_status"], "partial")
+
     def test_compile_preserves_field_description_and_existing_usage_memory(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"

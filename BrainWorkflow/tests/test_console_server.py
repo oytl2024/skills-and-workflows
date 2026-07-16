@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from wqb.console_server import build_action_command, create_console_proposal, make_console_server, render_dashboard, render_proposals, run_console_action
 from wqb.console_state import ConsolePaths
+from wqb.data_ledger_compile import compile_data_ledger_from_raw
 
 
 def make_paths(root: Path) -> ConsolePaths:
@@ -267,6 +268,44 @@ class ConsoleServerTests(unittest.TestCase):
                 self._write_start_fixture(paths, option, [invalid])
                 with self.assertRaisesRegex(ValueError, "data coverage"):
                     build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1"})
+
+    def test_build_action_command_refuses_warning_capture_compiled_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            capture = paths.knowledge_root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            capture.mkdir(parents=True)
+            (capture / "data_fields.jsonl").write_text(
+                json.dumps({
+                    "scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"},
+                    "data_set": {"id": "fundamental3", "name": "Fundamentals", "category": "fundamental"},
+                    "field": {"id": "cash_field", "type": "MATRIX", "description": "Quarterly cash"},
+                }) + "\n",
+                encoding="utf-8",
+            )
+            (capture / "manifest.json").write_text(json.dumps({"status": "completed_with_warnings"}), encoding="utf-8")
+            compile_data_ledger_from_raw(paths.knowledge_root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            ledger = paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            compiled_row = json.loads(ledger.read_text(encoding="utf-8").splitlines()[0])
+            maintenance = paths.knowledge_root / "wiki" / "80_maintenance"
+            maintenance.mkdir(parents=True, exist_ok=True)
+            (maintenance / "freshness_manifest.json").write_text(
+                json.dumps([
+                    {"name": name, "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7}
+                    for name in ("data_ledger", "template_library", "benchmark_rules", "activity_snapshot", "operator_catalog", "research_option_cards")
+                ]),
+                encoding="utf-8",
+            )
+            decisions = paths.knowledge_root / "wiki" / "70_decisions"
+            decisions.mkdir(parents=True, exist_ok=True)
+            (decisions / "research_option_cards.jsonl").write_text(
+                json.dumps({"title": "Power Pool", "candidate_scope": "USA D1 TOP3000"}) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "data coverage"):
+                build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1"})
+
+        self.assertEqual(compiled_row["coverage_status"], "partial")
 
     def test_build_action_command_refuses_when_ledger_has_no_matching_scope(self):
         with tempfile.TemporaryDirectory() as tmp:

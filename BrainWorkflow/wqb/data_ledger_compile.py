@@ -191,6 +191,7 @@ def compile_data_ledger_from_raw(
     selected_capture = Path(capture_dir) if capture_dir is not None else latest_capture_dir(root)
     fields_path = selected_capture / "data_fields.jsonl"
     manifest = _read_json(selected_capture / "manifest.json")
+    partial = str(manifest.get("status", "")) != "completed"
     rows = _read_jsonl(fields_path)
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -210,7 +211,8 @@ def compile_data_ledger_from_raw(
     tmp_paths = [ledger_tmp_path, markdown_tmp_path, manifest_tmp_path]
     try:
         prior_records = {(record.dataset_id, record.field_id): record for record in load_data_ledger(ledger_path)}
-        output_rows = [_record_from_group(root, fields_path, grouped[key], prior_records.get(key)) for key in sorted(grouped)]
+        coverage_status = "partial" if partial else "measured_raw"
+        output_rows = [_record_from_group(root, fields_path, grouped[key], prior_records.get(key)) | {"coverage_status": coverage_status} for key in sorted(grouped)]
         _write_jsonl(ledger_tmp_path, output_rows)
         records = load_data_ledger(ledger_tmp_path)
         write_data_ledger_markdown(markdown_tmp_path, records, generated)
@@ -220,7 +222,6 @@ def compile_data_ledger_from_raw(
     finally:
         for path in tmp_paths:
             path.unlink(missing_ok=True)
-    partial = str(manifest.get("status", "")) != "completed"
     return {
         "generated_at": generated,
         "capture_dir": str(selected_capture),

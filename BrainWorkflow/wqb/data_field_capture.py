@@ -180,6 +180,7 @@ def capture_platform_data_fields(
         if (scope.instrument_type, scope.region, int(scope.delay), scope.universe) in completed_scopes:
             continue
         scope_row = {"generated_at": generated, "scope": _scope_dict(scope), "status": "started"}
+        _append_jsonl(capture_dir / "scopes.jsonl", scope_row)
         try:
             data_sets = fetch_data_sets(
                 client,
@@ -191,14 +192,13 @@ def capture_platform_data_fields(
             )
             if max_datasets_per_scope > 0:
                 data_sets = data_sets[: int(max_datasets_per_scope)]
-            scope_row.update({"status": "completed", "data_set_count": len(data_sets)})
-            _append_jsonl(capture_dir / "scopes.jsonl", scope_row)
         except Exception as error:
             scope_row.update({"status": "failed", "data_set_count": 0, "message": str(error)})
             _append_jsonl(capture_dir / "scopes.jsonl", scope_row)
             _append_jsonl(capture_dir / "errors.jsonl", _error_row(scope, "/data-sets", error, generated))
             continue
 
+        field_errors: list[str] = []
         for data_set in data_sets:
             dataset_id = str(data_set.get("id", ""))
             _append_jsonl(
@@ -220,6 +220,7 @@ def capture_platform_data_fields(
                 )
             except Exception as error:
                 _append_jsonl(capture_dir / "errors.jsonl", _error_row(scope, f"/data-fields?dataset.id={dataset_id}", error, generated))
+                field_errors.append(str(error))
                 continue
             for field in fields:
                 _append_jsonl(
@@ -232,6 +233,11 @@ def capture_platform_data_fields(
                         "endpoint": "/data-fields",
                     },
                 )
+        if field_errors:
+            scope_row.update({"status": "partial", "data_set_count": len(data_sets), "error_count": len(field_errors), "message": "; ".join(field_errors)})
+        else:
+            scope_row.update({"status": "completed", "data_set_count": len(data_sets)})
+        _append_jsonl(capture_dir / "scopes.jsonl", scope_row)
 
     summary = {
         "generated_at": generated,
