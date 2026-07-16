@@ -84,13 +84,15 @@ Use this after a research session, after platform rule/activity changes, or on a
 
 Use this when the user asks to refresh platform data coverage before research.
 
+Raw capture is a live platform API action and must be run only with explicit authorization via `--enable-live-api`.
+
 Capture raw platform data fields:
 
 ```powershell
 python -m wqb.cli capture-platform-data-fields --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --enable-live-api
 ```
 
-Compile the data ledger from raw:
+Compile the data ledger from raw local snapshots. This command is local-only and does not call the platform API:
 
 ```powershell
 python -m wqb.cli compile-data-ledger --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
