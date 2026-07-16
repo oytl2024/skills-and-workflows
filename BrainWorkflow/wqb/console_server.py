@@ -108,12 +108,22 @@ def render_dashboard(state: dict[str, Any]) -> str:
     knowledge_forms = """
 <form method="post" action="/actions/run"><input type="hidden" name="action" value="readiness-check"><button>Run readiness check</button></form>
 <form method="post" action="/actions/run"><input type="hidden" name="action" value="compile-research-records"><button>Compile research records</button></form>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="compile-data-ledger"><button>Compile data ledger</button></form>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="capture-platform-data-fields"><label><input type="checkbox" name="enable_live_api"> Enable live API</label><button>Capture platform data fields</button></form>
 <form method="post" action="/actions/run"><input type="hidden" name="action" value="plan-research-options"><label><input type="checkbox" name="enable_live_api"> Enable live API</label><button>Refresh research options</button></form>
 <form method="post" action="/actions/run"><input type="hidden" name="action" value="knowledge-health-check"><button>Check knowledge health</button></form>
 """
     data_coverage_panel = (
+        "<form method=\"post\" action=\"/actions/run\">"
+        "<input type=\"hidden\" name=\"action\" value=\"capture-platform-data-fields\">"
+        "<label><input type=\"checkbox\" name=\"enable_live_api\"> enable_live_api</label>"
+        "<select name=\"max_scopes\">"
+        "<option value=\"0\">All configured scopes</option>"
+        "<option value=\"4\">First 4 scopes</option>"
+        "<option value=\"10\">First 10 scopes</option>"
+        "</select>"
+        "<button>Capture platform data fields</button></form>"
+        "<form method=\"post\" action=\"/actions/run\">"
+        "<input type=\"hidden\" name=\"action\" value=\"compile-data-ledger\">"
+        "<button>Compile data ledger from raw</button></form>"
         f"<p>Fields: <code>{escape(str(data_coverage.get('field_count', 0)))}</code></p>"
         f"<p>Scopes: <code>{escape(str(data_coverage.get('scope_count', 0)))}</code></p>"
         f"<p>Data sets: <code>{escape(str(data_coverage.get('data_set_count', 0)))}</code></p>"
@@ -147,10 +157,21 @@ def render_proposals(proposals: list[dict[str, Any]]) -> str:
 <section class="wide"><h2>Workflow Proposal Inbox</h2><ul>{rows}</ul></section>
 <section class="wide"><h2>New Proposal</h2>
 <form method="post" action="/proposals/create">
-<input name="issue_type" placeholder="issue_type">
+<select name="issue_type">
+<option value="template_innovation">template_innovation</option>
+<option value="data_coverage">data_coverage</option>
+<option value="benchmark_rule">benchmark_rule</option>
+<option value="workflow_gate">workflow_gate</option>
+</select>
 <textarea name="summary" placeholder="summary"></textarea>
 <textarea name="evidence_paths" placeholder="evidence paths"></textarea>
-<input name="affected_modules" placeholder="affected_modules">
+<select name="affected_modules">
+<option value="template_library">template_library</option>
+<option value="data_coverage">data_coverage</option>
+<option value="console">console</option>
+<option value="orchestrator">orchestrator</option>
+<option value="knowledge_compile">knowledge_compile</option>
+</select>
 <button>Create Proposal</button>
 </form></section>
 """

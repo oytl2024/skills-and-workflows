@@ -59,6 +59,36 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertNotIn('<input name="objective"', html)
         self.assertNotIn('type="text" name="selected_option_id"', html)
 
+    def test_render_dashboard_exposes_data_capture_and_compile_controls(self):
+        state = {
+            "readiness": {"exists": True, "passed": False, "blocked": True},
+            "freshness": {"exists": True, "valid": True, "record_count": 6, "stale_count": 1, "missing_count": 0},
+            "data_coverage": {"exists": True, "field_count": 120, "scope_count": 4, "data_set_count": 8, "error_count": 0, "status": "completed"},
+            "option_cards": [],
+            "schedule": {"preview": ""},
+            "jobs": [],
+            "proposal_counts": {},
+            "active_workflow": {"exists": False},
+            "approved_queue": [],
+            "queue_diagnostics": [],
+            "workflow_events": [],
+        }
+
+        html = render_dashboard(state)
+
+        self.assertIn('value="capture-platform-data-fields"', html)
+        self.assertIn('value="compile-data-ledger"', html)
+        self.assertIn('name="enable_live_api"', html)
+        self.assertIn("120", html)
+
+    def test_render_proposals_uses_select_controls_for_structured_fields(self):
+        html = render_proposals([])
+
+        self.assertIn("<select name=\"issue_type\"", html)
+        self.assertIn("<select name=\"affected_modules\"", html)
+        self.assertIn("template_innovation", html)
+        self.assertIn("data_coverage", html)
+
     def test_second_fallback_option_survives_invalid_jsonl_line(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
