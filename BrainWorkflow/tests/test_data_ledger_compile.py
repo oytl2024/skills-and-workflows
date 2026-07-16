@@ -43,7 +43,11 @@ class DataLedgerCompileTests(unittest.TestCase):
                 },
             ]
             write_jsonl(capture / "data_fields.jsonl", rows)
-            (capture / "manifest.json").write_text(json.dumps({"status": "completed", "field_count": 2}), encoding="utf-8")
+            write_jsonl(capture / "scopes.jsonl", [
+                {"scope": rows[0]["scope"], "status": "completed", "certification_status": "complete"},
+                {"scope": rows[1]["scope"], "status": "completed", "certification_status": "complete"},
+            ])
+            (capture / "manifest.json").write_text(json.dumps({"status": "completed", "field_count": 2, "certification_status": "complete"}), encoding="utf-8")
 
             summary = compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
             ledger_path = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
@@ -55,10 +59,70 @@ class DataLedgerCompileTests(unittest.TestCase):
         self.assertEqual(records[0].available_regions, ["EUR", "USA"])
         self.assertEqual(records[0].available_delays, [0, 1])
         self.assertEqual(records[0].available_universes, ["TOP3000", "TOP500"])
+        self.assertEqual(records[0].available_scopes, [
+            {"instrument_type": "EQUITY", "region": "EUR", "delay": 0, "universe": "TOP500"},
+            {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"},
+        ])
         self.assertIn("cash", records[0].semantic_tags)
         self.assertIn("raw/platform/data_fields/2026-07-16/data_fields.jsonl", raw_row["source_paths"][0])
         self.assertEqual(raw_row["source_quality"], "platform_raw_capture")
         self.assertEqual(raw_row["coverage_status"], "measured_raw")
+
+    def test_compile_marks_rows_partial_without_explicit_certified_scope_outcome(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            raw_row = {
+                "scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"},
+                "data_set": {"id": "fundamental3"},
+                "field": {"id": "cash_field", "type": "MATRIX"},
+            }
+            write_jsonl(capture / "data_fields.jsonl", [raw_row])
+            (capture / "manifest.json").write_text(json.dumps({"status": "completed", "certification_status": "complete"}), encoding="utf-8")
+
+            compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertEqual(row["coverage_status"], "partial")
+
+    def test_compile_marks_invalid_raw_scope_partial_even_with_completed_outcome(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            raw_row = {
+                "scope": {"instrument_type": "EQUITY", "region": "USA", "delay": "not-a-delay", "universe": "TOP3000"},
+                "data_set": {"id": "fundamental3"},
+                "field": {"id": "cash_field", "type": "MATRIX"},
+            }
+            write_jsonl(capture / "data_fields.jsonl", [raw_row])
+            write_jsonl(capture / "scopes.jsonl", [{"scope": raw_row["scope"], "status": "completed", "certification_status": "complete"}])
+            (capture / "manifest.json").write_text(json.dumps({"status": "completed", "certification_status": "complete"}), encoding="utf-8")
+
+            compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertEqual(row["coverage_status"], "partial")
+
+    def test_compile_rejects_non_object_jsonl_row_without_replacing_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger.parent.mkdir(parents=True)
+            ledger.write_text('{"field_id":"last_good"}\n', encoding="utf-8")
+            write_jsonl(capture / "data_fields.jsonl", [{
+                "scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"},
+                "data_set": {"id": "fundamental3"},
+                "field": {"id": "cash_field", "type": "MATRIX"},
+            }])
+            with (capture / "data_fields.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write("null\n")
+
+            with self.assertRaisesRegex(ValueError, "line 2"):
+                compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            persisted = ledger.read_text(encoding="utf-8")
+
+        self.assertEqual(persisted, '{"field_id":"last_good"}\n')
 
     def test_compile_marks_warning_capture_rows_partial(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -215,7 +279,7 @@ class DataLedgerCompileTests(unittest.TestCase):
             capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
             write_jsonl(capture / "data_fields.jsonl", [{"scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}, "data_set": {"id": "fundamental3"}, "field": {"id": "cash_field", "type": "MATRIX"}}])
             write_jsonl(capture / "scopes.jsonl", [
-                {"scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}, "status": "completed"},
+                {"scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}, "status": "completed", "certification_status": "complete"},
                 {"scope": {"instrument_type": "EQUITY", "region": "EUR", "delay": 1, "universe": "TOP3000"}, "status": "failed"},
             ])
             (capture / "manifest.json").write_text(json.dumps({"status": "completed_with_warnings", "generated_at": "2026-07-16T08:00:00+00:00", "certification_status": "complete"}), encoding="utf-8")

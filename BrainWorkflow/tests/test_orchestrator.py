@@ -151,6 +151,56 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(state.objective, "Power Pool")
         self.assertEqual(active["run_id"], result["run_id"])
 
+    def test_selected_scope_is_persisted_and_drives_schedule_for_generic_option_card(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            knowledge = root / "knowledge"
+            decisions = knowledge / "wiki" / "70_decisions"
+            decisions.mkdir(parents=True)
+            (decisions / "research_option_cards.jsonl").write_text(json.dumps({
+                "option_id": "option-1",
+                "title": "Build Genius and Osmosis alpha pool",
+                "primary_incentive": "cash",
+                "candidate_scope": "Generate a later concrete plan across multiple region-delay scopes after user selection.",
+            }) + "\n", encoding="utf-8")
+            ledger = knowledge / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger.parent.mkdir(parents=True)
+            ledger.write_text(json.dumps({
+                "dataset_id": "fundamental3", "dataset_name": "Fundamentals", "field_id": "cash_field", "field_type": "MATRIX",
+                "region": "USA", "delay": 1, "universe": "TOP3000", "semantic_tags": ["cash"], "coverage": 1.0,
+                "alpha_count": 0, "user_count": 0, "simulation_usage_count": 0, "submitted_usage_count": 0,
+                "last_used_at": "", "best_result_label": "unexplored", "correlation_risk": "low", "source_paths": [],
+                "available_scopes": [
+                    {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"},
+                    {"instrument_type": "EQUITY", "region": "EUR", "delay": 0, "universe": "TOP500"},
+                ],
+            }) + "\n", encoding="utf-8")
+            templates = knowledge / "wiki" / "30_templates" / "template_library.jsonl"
+            templates.parent.mkdir(parents=True)
+            templates.write_text(json.dumps({
+                "template_id": "matrix_ts_zscore_rank", "status": "discovery_ready", "required_field_types": ["MATRIX"],
+                "compatible_regions": ["USA"], "compatible_delays": [1], "compatible_universes": ["TOP3000"],
+            }) + "\n", encoding="utf-8")
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+
+            started = orchestrator.start(
+                "Build Genius and Osmosis alpha pool",
+                "option-1",
+                "2026-07-12T00:00:00Z",
+                selected_scope={"region": "USA", "delay": 1, "universe": "TOP3000"},
+            )
+            run_dir = Path(str(started["run_dir"]))
+            manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+            created_event = read_workflow_events(run_dir)[0]
+            orchestrator.continue_once("2026-07-12T00:01:00Z")
+            orchestrator.continue_once("2026-07-12T00:02:00Z")
+            schedule = json.loads((run_dir / "stages" / "schedule" / "research_schedule.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(manifest["selected_scope"], {"region": "USA", "delay": 1, "universe": "TOP3000"})
+        self.assertEqual(created_event.payload["selected_scope"], manifest["selected_scope"])
+        self.assertEqual((schedule["region"], schedule["delay"], schedule["universe"]), ("USA", 1, "TOP3000"))
+        self.assertEqual([row["field_id"] for row in schedule["selected_data"]], ["cash_field"])
+
     def test_start_keeps_user_controlled_timestamp_run_directory_inside_run_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

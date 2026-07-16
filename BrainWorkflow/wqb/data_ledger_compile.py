@@ -44,16 +44,18 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    """Input: JSONL path. Output: row list. Load raw capture rows."""
+def _read_jsonl(path: Path, strict_objects: bool = False) -> list[dict[str, Any]]:
+    """Input: JSONL path and strict flag. Output: row list. Load capture rows and reject non-object compile input."""
     rows: list[dict[str, Any]] = []
     if not path.exists():
         return rows
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if line.strip():
             row = json.loads(line)
             if isinstance(row, dict):
                 rows.append(row)
+            elif strict_objects:
+                raise ValueError(f"{path} line {line_number} must be a JSON object")
     return rows
 
 
@@ -147,19 +149,21 @@ def _scope_key(scope: dict[str, Any]) -> tuple[str, str, int, str] | None:
     return key if key[0] and key[1] and key[3] else None
 
 
-def _latest_scope_outcomes(capture_dir: Path) -> dict[tuple[str, str, int, str], str]:
-    """Input: capture directory. Output: latest status by scope. Read append-only capture scope outcomes."""
-    outcomes: dict[tuple[str, str, int, str], str] = {}
+def _latest_scope_outcomes(capture_dir: Path) -> dict[tuple[str, str, int, str], dict[str, Any]]:
+    """Input: capture directory. Output: latest outcome row by scope. Read append-only capture scope outcomes."""
+    outcomes: dict[tuple[str, str, int, str], dict[str, Any]] = {}
     for row in _read_jsonl(capture_dir / "scopes.jsonl"):
         scope = row.get("scope") if isinstance(row.get("scope"), dict) else {}
         key = _scope_key(scope)
         if key is not None:
-            outcomes[key] = str(row.get("status", ""))
+            outcomes[key] = row
     return outcomes
 
 
 def _capture_certification_complete(manifest: dict[str, Any]) -> bool:
     """Input: capture manifest. Output: bool. Decide whether limits permit measured coverage certification."""
+    if not manifest:
+        return False
     if "certification_status" in manifest:
         return manifest.get("certification_status") == "complete"
     limits = manifest.get("active_limits", {})
@@ -193,16 +197,21 @@ def _record_from_group(root: Path, capture_path: Path, rows: list[dict[str, Any]
     field = first.get("field", {}) if isinstance(first.get("field"), dict) else {}
     data_set = first.get("data_set", {}) if isinstance(first.get("data_set"), dict) else {}
     scopes = [row.get("scope", {}) for row in rows if isinstance(row.get("scope"), dict)]
+    valid_scope_keys = [key for scope in scopes if (key := _scope_key(scope)) is not None]
+    exact_scopes = [
+        {"instrument_type": instrument_type, "region": region, "delay": delay, "universe": universe}
+        for instrument_type, region, delay, universe in sorted(set(valid_scope_keys))
+    ]
     embedding = field_semantic_embedding({**field, "dataset": data_set})
     field_id = str(field.get("id", ""))
     field_type = str(field.get("type", ""))
     alpha_count = max(int(row.get("field", {}).get("alphaCount", 0) or 0) for row in rows)
     user_count = max(int(row.get("field", {}).get("userCount", row.get("field", {}).get("user_count", 0)) or 0) for row in rows)
     tags = sorted(set(embedding["tags"]) | {str(data_set.get("category", "")).lower()} - {""})
-    regions = sorted({str(scope.get("region", "")) for scope in scopes if scope.get("region")})
-    delays = sorted({int(scope.get("delay", 0)) for scope in scopes})
-    universes = sorted({str(scope.get("universe", "")) for scope in scopes if scope.get("universe")})
-    primary_scope = scopes[0] if scopes else {}
+    regions = sorted({scope["region"] for scope in exact_scopes})
+    delays = sorted({scope["delay"] for scope in exact_scopes})
+    universes = sorted({scope["universe"] for scope in exact_scopes})
+    primary_scope = exact_scopes[0] if exact_scopes else {}
     coverage_values = [float(row.get("field", {}).get("coverage", 0.0) or 0.0) for row in rows]
     coverage = max(coverage_values) if coverage_values else 0.0
     correlation_risk = _risk_from_counts(alpha_count, user_count)
@@ -228,6 +237,7 @@ def _record_from_group(root: Path, capture_path: Path, rows: list[dict[str, Any]
             available_regions=regions,
             available_delays=delays,
             available_universes=universes,
+            available_scopes=exact_scopes,
             activity_tags=prior.activity_tags if prior else [],
             compatible_template_ids=_template_ids(field_type, tags),
             gate_requirements=["verify_platform_availability_before_live_run"],
@@ -254,7 +264,7 @@ def compile_data_ledger_from_raw(
     selected_capture = Path(capture_dir) if capture_dir is not None else latest_capture_dir(root)
     fields_path = selected_capture / "data_fields.jsonl"
     manifest = _read_json(selected_capture / "manifest.json")
-    rows = _read_jsonl(fields_path)
+    rows = _read_jsonl(fields_path, strict_objects=True)
     _validate_raw_rows(rows)
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -288,9 +298,17 @@ def compile_data_ledger_from_raw(
             prior_records = {(record.dataset_id, record.field_id): record for record in load_data_ledger(ledger_path)}
             output_rows = []
             for key in sorted(grouped):
-                row_scopes = [row.get("scope") for row in grouped[key] if isinstance(row.get("scope"), dict)]
-                statuses = [scope_outcomes.get(_scope_key(scope), "unknown") for scope in row_scopes if _scope_key(scope) is not None] if scope_outcomes else []
-                measured = certification_complete and (all(status == "completed" for status in statuses) if statuses else manifest.get("status", "completed") == "completed")
+                row_scope_keys = [
+                    _scope_key(row.get("scope")) if isinstance(row.get("scope"), dict) else None
+                    for row in grouped[key]
+                ]
+                measured = certification_complete and all(
+                    scope_key is not None
+                    and (outcome := scope_outcomes.get(scope_key)) is not None
+                    and outcome.get("status") == "completed"
+                    and outcome.get("certification_status") == "complete"
+                    for scope_key in row_scope_keys
+                )
                 output_rows.append(_record_from_group(root, fields_path, grouped[key], prior_records.get(key)) | {"coverage_status": "measured_raw" if measured else "partial"})
             if not output_rows:
                 raise ValueError("raw data fields contain no valid rows")
@@ -309,5 +327,5 @@ def compile_data_ledger_from_raw(
         "ledger_path": str(ledger_path),
         "markdown_path": str(markdown_path),
         "record_count": len(records),
-        "source_status": "partial" if str(manifest.get("status", "completed")) != "completed" or not certification_complete else "complete",
+        "source_status": "complete" if certification_complete else "partial",
     }

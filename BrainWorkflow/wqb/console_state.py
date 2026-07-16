@@ -147,6 +147,24 @@ def _startable_scopes(knowledge_root: Path) -> list[dict[str, Any]]:
     for row in rows:
         if row.get("source_quality") != "platform_raw_capture" or row.get("coverage_status") != "measured_raw":
             continue
+        if "available_scopes" in row:
+            exact_scopes = row.get("available_scopes")
+            if not isinstance(exact_scopes, list):
+                continue
+            for scope in exact_scopes:
+                if not isinstance(scope, dict):
+                    continue
+                try:
+                    normalized = (
+                        str(scope.get("region", "")).strip().upper(),
+                        int(scope.get("delay")),
+                        str(scope.get("universe", "")).strip().upper(),
+                    )
+                except (TypeError, ValueError):
+                    continue
+                if normalized[0] and normalized[2] and normalized[1] >= 0:
+                    scopes.add(normalized)
+            continue
         regions = row.get("available_regions") if isinstance(row.get("available_regions"), list) else [row.get("region")]
         delays = row.get("available_delays") if isinstance(row.get("available_delays"), list) else [row.get("delay")]
         universes = row.get("available_universes") if isinstance(row.get("available_universes"), list) else [row.get("universe")]

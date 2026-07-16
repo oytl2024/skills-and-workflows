@@ -78,16 +78,11 @@ def _render_scope_controls(scopes: list[dict[str, Any]]) -> str:
     """Input: ledger-backed scope rows. Output: HTML. Render required concrete scope selectors."""
     if not scopes:
         return "<div class='empty'>No measured ledger scopes are available for workflow start.</div>"
-    regions = sorted({str(scope["region"]) for scope in scopes})
-    delays = sorted({int(scope["delay"]) for scope in scopes})
-    universes = sorted({str(scope["universe"]) for scope in scopes})
-    def options(values: list[Any]) -> str:
-        return "".join(f'<option value="{escape(str(value))}">{escape(str(value))}</option>' for value in values)
-    return (
-        f'<label>Region <select name="selected_region">{options(regions)}</select></label>'
-        f'<label>Delay <select name="selected_delay">{options(delays)}</select></label>'
-        f'<label>Universe <select name="selected_universe">{options(universes)}</select></label>'
+    options = "".join(
+        f'<option value="{escape(json.dumps(scope, sort_keys=True))}">{escape("{} D{} {}".format(scope["region"], scope["delay"], scope["universe"]))}</option>'
+        for scope in scopes
     )
+    return f'<label>Scope <select name="selected_scope">{options}</select></label>'
 
 
 def render_dashboard(state: dict[str, Any]) -> str:
@@ -258,9 +253,13 @@ def _option_objective(row: dict[str, Any]) -> str:
 def _selected_scope(form: dict[str, Any]) -> dict[str, Any]:
     """Input: action form. Output: concrete scope dict. Validate the user-selected ledger scope fields."""
     try:
-        region = str(form.get("selected_region", "")).strip().upper()
-        delay = int(form.get("selected_delay", ""))
-        universe = str(form.get("selected_universe", "")).strip().upper()
+        selected = form.get("selected_scope")
+        payload = json.loads(str(selected)) if selected else form
+        if not isinstance(payload, dict):
+            raise ValueError
+        region = str(payload.get("region", payload.get("selected_region", ""))).strip().upper()
+        delay = int(payload.get("delay", payload.get("selected_delay", "")))
+        universe = str(payload.get("universe", payload.get("selected_universe", ""))).strip().upper()
     except (TypeError, ValueError):
         raise ValueError("select a concrete region, delay, and universe scope before starting workflow") from None
     if not region or delay < 0 or not universe:
@@ -270,6 +269,15 @@ def _selected_scope(form: dict[str, Any]) -> dict[str, Any]:
 
 def _matches_scope(record: dict[str, Any], scope: dict[str, Any]) -> bool:
     """Input: ledger row and requested scope. Output: bool. Match one ledger row using available scope fields first."""
+    if "available_scopes" in record:
+        return any(
+            isinstance(item, dict)
+            and str(item.get("region", "")).upper() == scope["region"]
+            and item.get("delay") == scope["delay"]
+            and str(item.get("universe", "")).upper() == scope["universe"]
+            for item in record.get("available_scopes", [])
+        )
+
     def values(available_key: str, fallback_key: str) -> list[Any]:
         if available_key in record:
             value = record.get(available_key)
@@ -341,6 +349,9 @@ def build_action_command(action: str, paths: ConsolePaths, form: dict[str, Any] 
         normalized = {
             "objective": f"{_option_objective(option)} | scope: {scope['region']} D{scope['delay']} {scope['universe']}",
             "selected_option_id": str(option.get("option_id")),
+            "selected_region": scope["region"],
+            "selected_delay": scope["delay"],
+            "selected_universe": scope["universe"],
         }
         return build_raw_cli_command("workflow-start", paths, normalized)
     normalized = {key: (_truthy(value) if key in {"enable_live_api", "confirm_submit"} else value) for key, value in data.items()}

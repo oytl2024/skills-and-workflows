@@ -222,7 +222,7 @@ def build_cli_command(action: str, paths: ConsolePaths, form: dict[str, Any] | N
             command.append("--enable-live-api")
         return command
     if action == "workflow-start":
-        return [
+        command = [
             *base,
             "workflow-start",
             "--knowledge-root",
@@ -234,6 +234,14 @@ def build_cli_command(action: str, paths: ConsolePaths, form: dict[str, Any] | N
             "--selected-option-id",
             str(data.get("selected_option_id", "")),
         ]
+        for flag, key in (
+            ("--selected-region", "selected_region"),
+            ("--selected-delay", "selected_delay"),
+            ("--selected-universe", "selected_universe"),
+        ):
+            if data.get(key) not in (None, ""):
+                command.extend([flag, str(data[key])])
+        return command
     if action == "workflow-continue":
         return [*base, "workflow-continue", "--knowledge-root", knowledge_root, "--run-dir", str(paths.runs_root)]
     if action == "workflow-status":

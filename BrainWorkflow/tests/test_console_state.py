@@ -3,10 +3,33 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from wqb.console_state import ConsolePaths, _active_workflow_summary, load_console_state
+from wqb.console_state import ConsolePaths, _active_workflow_summary, _startable_scopes, load_console_state
 
 
 class ConsoleStateTests(unittest.TestCase):
+    def test_startable_scopes_keeps_exact_available_scope_tuples(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger.parent.mkdir(parents=True)
+            ledger.write_text(json.dumps({
+                "source_quality": "platform_raw_capture",
+                "coverage_status": "measured_raw",
+                "available_regions": ["USA", "EUR"],
+                "available_delays": [0, 1],
+                "available_universes": ["TOP500", "TOP3000"],
+                "available_scopes": [
+                    {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"},
+                    {"instrument_type": "EQUITY", "region": "EUR", "delay": 0, "universe": "TOP500"},
+                ],
+            }) + "\n", encoding="utf-8")
+
+            scopes = _startable_scopes(root)
+
+        self.assertEqual(scopes, [
+            {"region": "EUR", "delay": 0, "universe": "TOP500"},
+            {"region": "USA", "delay": 1, "universe": "TOP3000"},
+        ])
     def test_active_workflow_discovery_recovers_missing_pointer_without_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

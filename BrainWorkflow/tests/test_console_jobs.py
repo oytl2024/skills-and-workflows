@@ -91,6 +91,19 @@ class ConsoleJobsTests(unittest.TestCase):
         self.assertIn("--run-dir", command)
         self.assertIn(str(paths.runs_root), command)
 
+    def test_workflow_start_command_carries_structured_selected_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            command = build_cli_command(
+                "workflow-start",
+                paths,
+                {"objective": "Power Pool", "selected_option_id": "option-1", "selected_region": "USA", "selected_delay": 1, "selected_universe": "TOP3000"},
+            )
+
+        self.assertEqual(command[command.index("--selected-region") + 1], "USA")
+        self.assertEqual(command[command.index("--selected-delay") + 1], "1")
+        self.assertEqual(command[command.index("--selected-universe") + 1], "TOP3000")
+
     def test_job_json_contains_context_for_recovery(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

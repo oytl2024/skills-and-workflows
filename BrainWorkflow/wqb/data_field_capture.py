@@ -80,9 +80,17 @@ def _clear_outputs(capture_dir: Path) -> None:
             path.unlink()
 
 
-def _completed_scope_keys(capture_dir: Path) -> set[tuple[str, str, int, str]]:
-    """Input: capture directory. Output: completed scope keys. Read resumable completed scopes from persisted JSONL."""
-    return {key for key, row in _latest_scope_rows(capture_dir).items() if row.get("status") == "completed"}
+def _completed_scope_keys(
+    capture_dir: Path, certification_complete: bool
+) -> set[tuple[str, str, int, str]]:
+    """Input: capture directory and requested certification status. Output: reusable scope keys. Skip only fully certified completed scopes."""
+    if not certification_complete:
+        return set()
+    return {
+        key
+        for key, row in _latest_scope_rows(capture_dir).items()
+        if row.get("status") == "completed" and row.get("certification_status") == "complete"
+    }
 
 
 def _scope_key(scope: CaptureScope | dict[str, Any]) -> tuple[str, str, int, str]:
@@ -186,7 +194,10 @@ def capture_platform_data_fields(
     capture_dir.mkdir(parents=True, exist_ok=True)
     if not resume_capture:
         _clear_outputs(capture_dir)
-    completed_scopes = _completed_scope_keys(capture_dir) if resume_capture else set()
+    certification_complete = not any(
+        limit > 0 for limit in (max_scopes, max_datasets_per_scope, max_fields_per_dataset)
+    )
+    completed_scopes = _completed_scope_keys(capture_dir, certification_complete) if resume_capture else set()
 
     operators: list[dict[str, Any]] = []
     operator_fetch_succeeded = True
@@ -217,7 +228,7 @@ def capture_platform_data_fields(
             if max_datasets_per_scope > 0:
                 data_sets = data_sets[: int(max_datasets_per_scope)]
         except Exception as error:
-            scope_row.update({"status": "failed", "data_set_count": 0, "message": str(error)})
+            scope_row.update({"status": "failed", "data_set_count": 0, "message": str(error), "certification_status": "partial"})
             _append_jsonl(capture_dir / "scopes.jsonl", scope_row)
             _append_jsonl(capture_dir / "errors.jsonl", _error_row(scope, "/data-sets", error, generated))
             continue
@@ -261,9 +272,9 @@ def capture_platform_data_fields(
                     },
                 )
         if field_errors:
-            scope_row.update({"status": "partial", "data_set_count": len(data_sets), "error_count": len(field_errors), "message": "; ".join(field_errors)})
+            scope_row.update({"status": "partial", "data_set_count": len(data_sets), "error_count": len(field_errors), "message": "; ".join(field_errors), "certification_status": "partial"})
         else:
-            scope_row.update({"status": "completed", "data_set_count": len(data_sets)})
+            scope_row.update({"status": "completed", "data_set_count": len(data_sets), "certification_status": "complete" if certification_complete else "partial"})
         _append_jsonl(capture_dir / "scopes.jsonl", scope_row)
 
     latest_scope_rows = _latest_scope_rows(capture_dir)
@@ -276,7 +287,8 @@ def capture_platform_data_fields(
     summary = {
         "generated_at": generated,
         "capture_dir": str(capture_dir),
-        "scope_count": _jsonl_row_count(capture_dir / "scopes.jsonl"),
+        "scope_count": len(latest_scope_rows),
+        "scope_event_count": _jsonl_row_count(capture_dir / "scopes.jsonl"),
         "operator_count": len(operators),
         "data_set_count": _jsonl_row_count(capture_dir / "data_sets.jsonl"),
         "field_count": _jsonl_row_count(capture_dir / "data_fields.jsonl"),
@@ -289,7 +301,7 @@ def capture_platform_data_fields(
             "max_fields_per_dataset": int(max_fields_per_dataset),
         },
         "latest_scope_outcomes": [latest_scope_rows[key] for key in sorted(latest_scope_rows)],
-        "certification_status": "partial" if any(limit > 0 for limit in (max_scopes, max_datasets_per_scope, max_fields_per_dataset)) else "complete",
+        "certification_status": "complete" if certification_complete else "partial",
     }
     _write_json(capture_dir / "manifest.json", summary)
     errors_path = capture_dir / "errors.jsonl"

@@ -132,6 +132,40 @@ class DataFieldCaptureTests(unittest.TestCase):
         self.assertEqual(manifest["active_limits"], {"max_scopes": 1, "max_datasets_per_scope": 1, "max_fields_per_dataset": 1})
         self.assertEqual(len(manifest["requested_matrix"]), 2)
         self.assertEqual(manifest["latest_scope_outcomes"][0]["status"], "completed")
+        self.assertEqual(manifest["latest_scope_outcomes"][0]["certification_status"], "partial")
+
+    def test_unlimited_resume_retries_previously_limited_completed_scope_before_certification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            first_summary = capture_platform_data_fields(
+                FakeCaptureClient(),
+                root,
+                generated_at="2026-07-16T08:30:00+00:00",
+                instrument_types=["EQUITY"],
+                regions=["USA"],
+                delays=[1],
+                universes=["TOP3000"],
+                max_datasets_per_scope=1,
+            )
+            resumed_client = FakeCaptureClient()
+            resumed_summary = capture_platform_data_fields(
+                resumed_client,
+                root,
+                generated_at="2026-07-16T08:30:00+00:00",
+                instrument_types=["EQUITY"],
+                regions=["USA"],
+                delays=[1],
+                universes=["TOP3000"],
+                resume_capture=True,
+            )
+            capture = Path(resumed_summary["capture_dir"])
+            compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertEqual(first_summary["certification_status"], "partial")
+        self.assertTrue(any(path.startswith("/data-sets?") for path in resumed_client.paths))
+        self.assertEqual(resumed_summary["certification_status"], "complete")
+        self.assertEqual(row["coverage_status"], "measured_raw")
 
     def test_resume_capture_skips_completed_scope_without_duplicate_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -139,7 +173,7 @@ class DataFieldCaptureTests(unittest.TestCase):
             capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
             scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
             capture.mkdir(parents=True)
-            (capture / "scopes.jsonl").write_text(json.dumps({"scope": scope, "status": "completed"}) + "\n", encoding="utf-8")
+            (capture / "scopes.jsonl").write_text(json.dumps({"scope": scope, "status": "completed", "certification_status": "complete"}) + "\n", encoding="utf-8")
             (capture / "data_fields.jsonl").write_text(json.dumps({"scope": scope, "field": {"id": "cash_field"}}) + "\n", encoding="utf-8")
             client = FakeCaptureClient()
 

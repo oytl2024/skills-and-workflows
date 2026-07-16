@@ -38,6 +38,7 @@ class DataLedgerRecord:
     available_regions: list[str] = field(default_factory=list)
     available_delays: list[int] = field(default_factory=list)
     available_universes: list[str] = field(default_factory=list)
+    available_scopes: list[dict[str, Any]] | None = None
     activity_tags: list[str] = field(default_factory=list)
     compatible_template_ids: list[str] = field(default_factory=list)
     gate_requirements: list[str] = field(default_factory=list)
@@ -53,7 +54,10 @@ class DataLedgerRecord:
 
 def data_ledger_record_to_dict(record: DataLedgerRecord) -> dict[str, Any]:
     """Input: DataLedgerRecord. Output: dict[str, Any]. Convert ledger record to JSON-safe data."""
-    return asdict(record)
+    row = asdict(record)
+    if row["available_scopes"] is None:
+        row.pop("available_scopes")
+    return row
 
 
 def _record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
@@ -79,6 +83,11 @@ def _record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
         available_regions=[str(item) for item in row.get("available_regions", []) if str(item)],
         available_delays=[int(item) for item in row.get("available_delays", [])],
         available_universes=[str(item) for item in row.get("available_universes", []) if str(item)],
+        available_scopes=(
+            [dict(item) for item in row.get("available_scopes", []) if isinstance(item, dict)]
+            if "available_scopes" in row
+            else None
+        ),
         activity_tags=[str(item) for item in row.get("activity_tags", []) if str(item)],
         compatible_template_ids=[str(item) for item in row.get("compatible_template_ids", []) if str(item)],
         gate_requirements=[str(item) for item in row.get("gate_requirements", []) if str(item)],
@@ -142,12 +151,7 @@ def select_data_for_research(
     eligible = [
         record
         for record in records
-        if region.upper() in {item.upper() for item in (record.available_regions or [record.region])}
-        and int(delay) in set(record.available_delays or [record.delay])
-        and (
-            universe is None
-            or universe.upper() in {item.upper() for item in (record.available_universes or [record.universe])}
-        )
+        if _record_matches_scope(record, region, delay, universe)
     ]
     scored = sorted(
         eligible,
@@ -155,6 +159,28 @@ def select_data_for_research(
         reverse=True,
     )
     return scored[: max(int(limit), 0)]
+
+
+def _record_matches_scope(
+    record: DataLedgerRecord, region: str, delay: int, universe: str | None
+) -> bool:
+    """Input: ledger record and requested scope. Output: bool. Prefer exact captured scope tuples over legacy scope lists."""
+    if record.available_scopes is not None:
+        return any(
+            str(scope.get("region", "")).upper() == region.upper()
+            and int(scope.get("delay", -1)) == int(delay)
+            and (universe is None or str(scope.get("universe", "")).upper() == universe.upper())
+            for scope in record.available_scopes
+            if isinstance(scope, dict)
+        )
+    return (
+        region.upper() in {item.upper() for item in (record.available_regions or [record.region])}
+        and int(delay) in set(record.available_delays or [record.delay])
+        and (
+            universe is None
+            or universe.upper() in {item.upper() for item in (record.available_universes or [record.universe])}
+        )
+    )
 
 
 def write_data_ledger_markdown(path: Path, records: list[DataLedgerRecord], generated_at: str) -> Path:

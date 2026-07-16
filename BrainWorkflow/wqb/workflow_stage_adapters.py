@@ -93,7 +93,10 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def schedule_research_stage(
-    knowledge_root: str | Path, run_dir: str | Path, selected_option_id: str
+    knowledge_root: str | Path,
+    run_dir: str | Path,
+    selected_option_id: str,
+    selected_scope: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Input: knowledge root, run dir, option id. Output: schedule summary. Write a plan-only schedule artifact."""
     knowledge = Path(knowledge_root)
@@ -113,7 +116,7 @@ def schedule_research_stage(
     stage_dir = Path(run_dir) / "stages" / "schedule"
     stage_dir.mkdir(parents=True, exist_ok=True)
     option = _option_card_from_row(selected)
-    region, delay, universe = _scope_from_option(selected)
+    region, delay, universe = _scope_from_selected_or_option(selected_scope, selected)
     ledger = load_data_ledger(knowledge / "wiki" / "20_semantics" / "data_ledger.jsonl")
     templates = load_template_library(knowledge / "wiki" / "30_templates" / "template_library.jsonl")
     schedule = build_research_schedule(option, ledger, templates, region, delay, universe)
@@ -170,6 +173,23 @@ def _scope_from_option(row: dict[str, Any]) -> tuple[str, int, str]:
     universe = str(
         row.get("universe", next((item for item in tokens if item.upper().startswith("TOP")), "TOP3000"))
     )
+    return region, delay, universe
+
+
+def _scope_from_selected_or_option(
+    selected_scope: dict[str, Any] | None, option: dict[str, Any]
+) -> tuple[str, int, str]:
+    """Input: optional selected scope and option card. Output: region, delay, universe. Prefer persisted concrete scope over planner prose."""
+    if selected_scope is None:
+        return _scope_from_option(option)
+    try:
+        region = str(selected_scope["region"]).strip().upper()
+        delay = int(selected_scope["delay"])
+        universe = str(selected_scope["universe"]).strip().upper()
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("selected workflow scope must include region, delay, and universe") from exc
+    if not region or delay < 0 or not universe:
+        raise ValueError("selected workflow scope must include region, delay, and universe")
     return region, delay, universe
 
 

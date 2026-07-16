@@ -3372,6 +3372,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--schedule-universe", default="TOP3000")
     parser.add_argument("--objective", default="")
     parser.add_argument("--selected-option-id", default="")
+    parser.add_argument("--selected-region", default="")
+    parser.add_argument("--selected-delay", type=int, default=None)
+    parser.add_argument("--selected-universe", default="")
     parser.add_argument("--now", default="")
     parser.add_argument("--reason", default="")
     parser.add_argument("--candidate-id", action="append", default=[])
@@ -3461,7 +3464,15 @@ def main() -> None:
         if args.command == "workflow-start":
             if not args.objective or not args.selected_option_id:
                 raise SystemExit("--objective and --selected-option-id are required for workflow-start")
-            result = orchestrator.start(args.objective, args.selected_option_id, now)
+            selected_scope_values = (args.selected_region, args.selected_delay, args.selected_universe)
+            if any(value not in (None, "") for value in selected_scope_values) and not all(value not in (None, "") for value in selected_scope_values):
+                raise SystemExit("--selected-region, --selected-delay, and --selected-universe must be provided together")
+            selected_scope = (
+                {"region": args.selected_region, "delay": args.selected_delay, "universe": args.selected_universe}
+                if all(value not in (None, "") for value in selected_scope_values)
+                else None
+            )
+            result = orchestrator.start(args.objective, args.selected_option_id, now, selected_scope=selected_scope)
         elif args.command == "workflow-continue":
             result = orchestrator.continue_once(now)
         elif args.command == "workflow-status":

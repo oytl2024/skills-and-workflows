@@ -14,6 +14,23 @@ from wqb.data_ledger import (
 
 
 class DataLedgerTest(unittest.TestCase):
+    def test_select_data_rejects_cross_product_scope_when_exact_scopes_exist(self):
+        record = DataLedgerRecord(
+            dataset_id="fundamental3", dataset_name="Fundamentals", field_id="cash_field", field_type="MATRIX",
+            region="USA", delay=1, universe="TOP3000", semantic_tags=["cash"], coverage=1.0,
+            alpha_count=0, user_count=0, simulation_usage_count=0, submitted_usage_count=0,
+            last_used_at="", best_result_label="unexplored", correlation_risk="low", source_paths=[],
+            available_regions=["USA", "EUR"], available_delays=[0, 1], available_universes=["TOP500", "TOP3000"],
+            available_scopes=[
+                {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"},
+                {"instrument_type": "EQUITY", "region": "EUR", "delay": 0, "universe": "TOP500"},
+            ],
+        )
+
+        selected = select_data_for_research([record], "cash", "USA", 0, limit=5, universe="TOP500")
+
+        self.assertEqual(selected, [])
+
     def test_load_data_ledger_round_trips_jsonl(self):
         row = {
             "dataset_id": "news12",

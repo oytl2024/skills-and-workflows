@@ -107,12 +107,24 @@ class WorkflowOrchestrator:
         """Input: OrchestratorPaths. Output: instance. Create a workflow controller over durable files."""
         self.paths = paths
 
-    def start(self, objective: str, selected_option_id: str, created_at: str) -> dict[str, object]:
+    def start(
+        self,
+        objective: str,
+        selected_option_id: str,
+        created_at: str,
+        selected_scope: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         """Input: objective, option id, timestamp. Output: start summary. Create a formal workflow run."""
         with _workflow_mutation_lock(self.paths.run_root):
-            return self._start_unlocked(objective, selected_option_id, created_at)
+            return self._start_unlocked(objective, selected_option_id, created_at, selected_scope)
 
-    def _start_unlocked(self, objective: str, selected_option_id: str, created_at: str) -> dict[str, object]:
+    def _start_unlocked(
+        self,
+        objective: str,
+        selected_option_id: str,
+        created_at: str,
+        selected_scope: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         """Input: objective, option id, timestamp. Output: start summary. Create run under mutation lock."""
         self.paths.run_root.mkdir(parents=True, exist_ok=True)
         discovery = self._active_discovery()
@@ -131,6 +143,18 @@ class WorkflowOrchestrator:
             "created_at": str(created_at),
             "knowledge_root": str(self.paths.knowledge_root),
         }
+        if selected_scope is not None:
+            try:
+                scope = {
+                    "region": str(selected_scope["region"]).strip().upper(),
+                    "delay": int(selected_scope["delay"]),
+                    "universe": str(selected_scope["universe"]).strip().upper(),
+                }
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("selected workflow scope must include region, delay, and universe") from exc
+            if not scope["region"] or scope["delay"] < 0 or not scope["universe"]:
+                raise ValueError("selected workflow scope must include region, delay, and universe")
+            manifest["selected_scope"] = scope
         (run_dir / "run_manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -282,7 +306,10 @@ class WorkflowOrchestrator:
                     (run_dir / "run_manifest.json").read_text(encoding="utf-8")
                 )
                 result = schedule_research_stage(
-                    self.paths.knowledge_root, run_dir, str(manifest.get("selected_option_id", ""))
+                    self.paths.knowledge_root,
+                    run_dir,
+                    str(manifest.get("selected_option_id", "")),
+                    selected_scope=manifest.get("selected_scope"),
                 )
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 blocker = f"{type(exc).__name__}: {exc}"

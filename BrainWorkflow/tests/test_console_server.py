@@ -56,9 +56,7 @@ class ConsoleServerTests(unittest.TestCase):
 
         self.assertIn('type="radio"', html)
         self.assertIn('name="selected_option_id"', html)
-        self.assertIn('name="selected_region"', html)
-        self.assertIn('name="selected_delay"', html)
-        self.assertIn('name="selected_universe"', html)
+        self.assertIn('name="selected_scope"', html)
         self.assertIn('value="option-1"', html)
         self.assertIn('value="workflow-start-from-option"', html)
         self.assertNotIn('name="selected_option_id" value="option-1" checked', html)
@@ -211,9 +209,45 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn("workflow-start", command)
         self.assertIn("--selected-option-id", command)
         self.assertIn("option-1", command)
+        self.assertIn("--selected-region", command)
+        self.assertIn("--selected-delay", command)
+        self.assertIn("--selected-universe", command)
         self.assertIn("--objective", command)
         self.assertIn("Build Genius and Osmosis alpha pool", " ".join(command))
         self.assertIn("USA D1 TOP3000", " ".join(command))
+
+    def test_build_action_command_rejects_cartesian_scope_from_exact_ledger_scopes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            self._write_start_fixture(
+                paths,
+                {"title": "Power Pool", "candidate_scope": "USA D1 TOP3000"},
+                [{
+                    "dataset_id": "fundamental3",
+                    "field_id": "cash_field",
+                    "region": "USA",
+                    "delay": 1,
+                    "universe": "TOP3000",
+                    "available_regions": ["USA", "EUR"],
+                    "available_delays": [0, 1],
+                    "available_universes": ["TOP500", "TOP3000"],
+                    "available_scopes": [
+                        {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"},
+                        {"instrument_type": "EQUITY", "region": "EUR", "delay": 0, "universe": "TOP500"},
+                    ],
+                    "source_quality": "platform_raw_capture",
+                    "coverage_status": "measured_raw",
+                    "compatible_template_ids": ["matrix_ts_zscore_rank"],
+                }],
+            )
+
+            with self.assertRaisesRegex(ValueError, "no records matching"):
+                build_action_command(
+                    "workflow-start-from-option",
+                    paths,
+                    {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "0", "selected_universe": "TOP500"},
+                )
 
     def test_build_action_command_requires_selected_ledger_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
