@@ -105,8 +105,10 @@ def _freshness_summary(knowledge_root: Path) -> dict[str, Any]:
 
 
 def _valid_coverage_manifest(manifest: dict[str, Any]) -> bool:
-    """Input: manifest dict. Output: bool. Check required numeric coverage counts."""
+    """Input: manifest dict. Output: bool. Check terminal status and numeric coverage counts."""
     required_counts = ("field_count", "scope_count", "data_set_count", "error_count")
+    if manifest.get("status") not in {"completed", "completed_with_warnings"}:
+        return False
     try:
         return all(
             key in manifest and not isinstance(manifest[key], bool)
