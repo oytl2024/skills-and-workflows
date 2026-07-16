@@ -81,6 +81,19 @@ The Obsidian vault follows a raw-to-wiki pattern:
 
 Research commands should read compiled wiki artifacts. Full source refresh and wiki compilation should be a separate maintenance loop.
 
+## Data Field Coverage Contract
+
+Authoritative data scheduling coverage comes from `knowledge/raw/platform/data_fields/YYYY-MM-DD/` snapshots compiled by `compile-data-ledger`.
+
+The previous `cache-metadata` path is useful for small targeted experiments, but it does not represent all accessible data fields and must not be treated as full coverage.
+
+If a future Codex resumes this work and sees a partial ledger, run or schedule:
+
+```powershell
+python -m wqb.cli capture-platform-data-fields --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --enable-live-api
+python -m wqb.cli compile-data-ledger --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
+```
+
 Knowledge maintenance has two official entry points:
 
 - Research-record compile: raw research records accumulated from completed runs are compiled into `wiki/40_experiments/research_record_compile.md` by `python -m wqb.cli compile-research-records`.

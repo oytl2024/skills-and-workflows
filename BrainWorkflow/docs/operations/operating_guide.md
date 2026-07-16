@@ -80,6 +80,41 @@ python -m wqb.cli readiness-check --knowledge-root 'C:\Users\oytl\Desktop\pyproj
 
 Use this after a research session, after platform rule/activity changes, or on a scheduled maintenance day.
 
+## Platform Data Field Maintenance
+
+Use this when the user asks to refresh platform data coverage before research.
+
+Capture raw platform data fields:
+
+```powershell
+python -m wqb.cli capture-platform-data-fields --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --enable-live-api
+```
+
+Compile the data ledger from raw:
+
+```powershell
+python -m wqb.cli compile-data-ledger --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
+```
+
+Then check knowledge health:
+
+```powershell
+python -m wqb.cli knowledge-health-check --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
+```
+
+`cache-metadata` remains a targeted exploration command. It is not the authoritative data scheduling ledger.
+
+## Console Research Selection
+
+The normal UI path is:
+
+1. Refresh option cards with live API authorization.
+2. Select one research option card in the console.
+3. Start workflow from the selected card.
+4. Continue the Orchestrator one legal step at a time.
+
+Do not type option IDs manually in normal operation. The console maps the selected card to `workflow-start`.
+
 ## Candidate Gate And Submission Records
 
 The Orchestrator owns durable candidate state:

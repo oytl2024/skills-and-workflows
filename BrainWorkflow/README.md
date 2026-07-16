@@ -69,6 +69,7 @@ Operational docs:
 
 - `docs/operations/operating_guide.md`: how to run research, readiness, knowledge maintenance, and console state inspection.
 - `docs/operations/maintainer_handoff.md`: how future Codex sessions should maintain and extend the project without relying on a long chat context.
+- Platform data-field maintenance and selectable console operation are documented in `docs/operations/operating_guide.md`.
 
 ## Current Phase
 
