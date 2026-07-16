@@ -85,6 +85,52 @@ class DataLedgerCompileTests(unittest.TestCase):
 
             self.assertIn("last_good", ledger.read_text(encoding="utf-8"))
 
+    def test_markdown_failure_keeps_existing_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger.parent.mkdir(parents=True)
+            capture.mkdir(parents=True)
+            ledger.write_text('{"field_id": "last_good"}\n', encoding="utf-8")
+            write_jsonl(
+                capture / "data_fields.jsonl",
+                [{
+                    "scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"},
+                    "data_set": {"id": "fundamental3", "name": "Fundamentals", "category": "fundamental"},
+                    "field": {"id": "cash_field", "type": "MATRIX", "description": "Quarterly cash"},
+                }],
+            )
+
+            with patch("wqb.data_ledger_compile.write_data_ledger_markdown", side_effect=OSError("markdown failed")):
+                with self.assertRaisesRegex(OSError, "markdown failed"):
+                    compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+
+            self.assertEqual(ledger.read_text(encoding="utf-8"), '{"field_id": "last_good"}\n')
+
+    def test_manifest_failure_keeps_existing_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger.parent.mkdir(parents=True)
+            capture.mkdir(parents=True)
+            ledger.write_text('{"field_id": "last_good"}\n', encoding="utf-8")
+            write_jsonl(
+                capture / "data_fields.jsonl",
+                [{
+                    "scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"},
+                    "data_set": {"id": "fundamental3", "name": "Fundamentals", "category": "fundamental"},
+                    "field": {"id": "cash_field", "type": "MATRIX", "description": "Quarterly cash"},
+                }],
+            )
+
+            with patch("wqb.data_ledger_compile._update_manifest", side_effect=OSError("manifest failed")):
+                with self.assertRaisesRegex(OSError, "manifest failed"):
+                    compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+
+            self.assertEqual(ledger.read_text(encoding="utf-8"), '{"field_id": "last_good"}\n')
+
 
 if __name__ == "__main__":
     unittest.main()

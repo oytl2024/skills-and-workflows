@@ -76,8 +76,8 @@ def _template_ids(field_type: str, tags: list[str]) -> list[str]:
     return ["matrix_ts_zscore_rank"]
 
 
-def _update_manifest(root: Path, generated_at: str) -> None:
-    """Input: knowledge root and timestamp. Output: none. Mark ledger freshness after compile."""
+def _update_manifest(root: Path, generated_at: str, output_path: Path | None = None) -> None:
+    """Input: knowledge root, timestamp, optional output path. Output: none. Stage ledger freshness metadata."""
     manifest_path = root / FRESHNESS_MANIFEST
     rows: list[dict[str, Any]] = []
     if manifest_path.exists():
@@ -93,8 +93,9 @@ def _update_manifest(root: Path, generated_at: str) -> None:
         "status": "refreshed",
         "source_note": "Compiled from raw platform data-field captures.",
     }
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps([by_name[name] for name in sorted(by_name)], ensure_ascii=False, indent=2), encoding="utf-8")
+    destination = output_path or manifest_path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps([by_name[name] for name in sorted(by_name)], ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -184,13 +185,24 @@ def compile_data_ledger_from_raw(
     output_rows = [_record_from_group(root, fields_path, grouped[key]) for key in sorted(grouped)]
     ledger_path = root / DATA_LEDGER_JSONL
     markdown_path = root / DATA_LEDGER_MD
-    tmp_path = ledger_path.with_suffix(".jsonl.tmp")
-    _write_jsonl(tmp_path, output_rows)
-    records = load_data_ledger(tmp_path)
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path.replace(ledger_path)
-    write_data_ledger_markdown(markdown_path, records, generated)
-    _update_manifest(root, generated)
+    manifest_path = root / FRESHNESS_MANIFEST
+    ledger_tmp_path = ledger_path.with_suffix(".jsonl.tmp")
+    markdown_tmp_path = markdown_path.with_suffix(".md.tmp")
+    manifest_tmp_path = manifest_path.with_suffix(".json.tmp")
+    tmp_paths = [ledger_tmp_path, markdown_tmp_path, manifest_tmp_path]
+    try:
+        _write_jsonl(ledger_tmp_path, output_rows)
+        records = load_data_ledger(ledger_tmp_path)
+        write_data_ledger_markdown(markdown_tmp_path, records, generated)
+        _update_manifest(root, generated, manifest_tmp_path)
+
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        markdown_tmp_path.replace(markdown_path)
+        manifest_tmp_path.replace(manifest_path)
+        ledger_tmp_path.replace(ledger_path)
+    finally:
+        for path in tmp_paths:
+            path.unlink(missing_ok=True)
     partial = str(manifest.get("status", "")) != "completed"
     return {
         "generated_at": generated,
