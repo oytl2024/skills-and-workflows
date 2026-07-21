@@ -7,6 +7,7 @@ from unittest.mock import patch
 from wqb.data_ledger import load_data_ledger
 from wqb.data_field_capture import DATA_CAPTURE_LOCK_NAME
 from wqb.data_ledger_compile import COMPILE_LOCK_NAME, compile_data_ledger_from_raw, latest_capture_dir
+from wqb.run_readiness import evaluate_run_readiness
 
 
 def write_jsonl(path, rows):
@@ -65,6 +66,7 @@ class DataLedgerCompileTests(unittest.TestCase):
         self.assertIn("raw/platform/data_fields/2026-07-16/data_fields.jsonl", raw_row["source_paths"][0])
         self.assertEqual(raw_row["source_quality"], "platform_raw_capture")
         self.assertEqual(raw_row["coverage_status"], "measured_raw")
+        self.assertEqual(raw_row["source_updated_at"], "2026-07-16")
 
     def test_compile_keeps_certified_and_partial_exact_scopes_separate(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -175,6 +177,65 @@ class DataLedgerCompileTests(unittest.TestCase):
         self.assertEqual(by_region["EUR"]["coverage_status"], "measured_raw")
         self.assertEqual(by_region["USA"]["field_id"], "usa_field")
 
+    def test_targeted_compile_splits_legacy_multi_scope_rows_for_unattempted_scopes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            usa_scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+            eur_scope = {"instrument_type": "EQUITY", "region": "EUR", "delay": 1, "universe": "TOP3000"}
+            write_jsonl(ledger, [{
+                "dataset_id": "fundamental3",
+                "field_id": "cash_field",
+                "field_type": "MATRIX",
+                "region": "USA",
+                "delay": 1,
+                "universe": "TOP3000",
+                "semantic_tags": ["cash"],
+                "coverage": 1.0,
+                "alpha_count": 0,
+                "user_count": 0,
+                "simulation_usage_count": 0,
+                "submitted_usage_count": 0,
+                "last_used_at": "",
+                "best_result_label": "unexplored",
+                "correlation_risk": "low",
+                "source_paths": [],
+                "source_quality": "platform_raw_capture",
+                "coverage_status": "measured_raw",
+                "source_updated_at": "2026-07-15",
+                "available_scopes": [usa_scope, eur_scope],
+                "available_regions": ["USA", "EUR"],
+                "available_delays": [1],
+                "available_universes": ["TOP3000"],
+            }])
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            write_jsonl(capture / "data_fields.jsonl", [{
+                "capture_generation_id": "generation-usa",
+                "scope": usa_scope,
+                "data_set": {"id": "fundamental3", "name": "Fundamentals", "category": "fundamental"},
+                "field": {"id": "cash_field", "type": "MATRIX"},
+            }])
+            write_jsonl(capture / "scopes.jsonl", [{
+                "capture_generation_id": "generation-usa",
+                "scope": usa_scope,
+                "status": "completed",
+                "certification_status": "complete",
+            }])
+            (capture / "manifest.json").write_text(
+                json.dumps({"status": "completed", "generated_at": "2026-07-16T08:00:00+00:00", "certification_status": "complete", "requested_matrix": [usa_scope]}),
+                encoding="utf-8",
+            )
+
+            compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            rows = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+
+        by_region = {row["region"]: row for row in rows}
+        self.assertEqual(sorted(by_region), ["EUR", "USA"])
+        self.assertEqual(by_region["EUR"]["available_scopes"], [eur_scope])
+        self.assertEqual(by_region["EUR"]["available_regions"], ["EUR"])
+        self.assertEqual(by_region["EUR"]["source_updated_at"], "2026-07-15")
+        self.assertEqual(by_region["USA"]["source_updated_at"], "2026-07-16")
+
     def test_targeted_compile_replaces_attempted_scope_with_partial_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
@@ -225,6 +286,124 @@ class DataLedgerCompileTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["region"], "EUR")
         self.assertEqual(rows[0]["coverage_status"], "partial")
+
+    def test_targeted_compile_removes_prior_measured_row_for_completed_zero_field_attempt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+            write_jsonl(ledger, [{
+                "dataset_id": "fundamental3",
+                "field_id": "cash_field",
+                "field_type": "MATRIX",
+                "region": "USA",
+                "delay": 1,
+                "universe": "TOP3000",
+                "semantic_tags": ["cash"],
+                "coverage": 1.0,
+                "alpha_count": 0,
+                "user_count": 0,
+                "simulation_usage_count": 0,
+                "submitted_usage_count": 0,
+                "last_used_at": "",
+                "best_result_label": "unexplored",
+                "correlation_risk": "low",
+                "source_paths": [],
+                "source_quality": "platform_raw_capture",
+                "coverage_status": "measured_raw",
+                "source_updated_at": "2026-07-15",
+                "available_scopes": [scope],
+            }])
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            write_jsonl(capture / "data_fields.jsonl", [])
+            write_jsonl(capture / "scopes.jsonl", [{
+                "capture_generation_id": "generation-empty",
+                "scope": scope,
+                "status": "completed",
+                "certification_status": "complete",
+            }])
+            (capture / "manifest.json").write_text(
+                json.dumps({"status": "completed", "generated_at": "2026-07-16T08:00:00+00:00", "certification_status": "complete", "requested_matrix": [scope]}),
+                encoding="utf-8",
+            )
+
+            summary = compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            persisted = [line for line in ledger.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+        self.assertEqual(summary["record_count"], 0)
+        self.assertEqual(summary["source_status"], "complete")
+        self.assertEqual(persisted, [])
+
+    def test_targeted_compile_does_not_leave_prior_measured_row_for_failed_zero_field_attempt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+            write_jsonl(ledger, [{
+                "dataset_id": "fundamental3",
+                "field_id": "cash_field",
+                "field_type": "MATRIX",
+                "region": "USA",
+                "delay": 1,
+                "universe": "TOP3000",
+                "semantic_tags": ["cash"],
+                "coverage": 1.0,
+                "alpha_count": 0,
+                "user_count": 0,
+                "simulation_usage_count": 0,
+                "submitted_usage_count": 0,
+                "last_used_at": "",
+                "best_result_label": "unexplored",
+                "correlation_risk": "low",
+                "source_paths": [],
+                "source_quality": "platform_raw_capture",
+                "coverage_status": "measured_raw",
+                "source_updated_at": "2026-07-15",
+                "available_scopes": [scope],
+            }])
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            write_jsonl(capture / "data_fields.jsonl", [])
+            write_jsonl(capture / "scopes.jsonl", [{
+                "capture_generation_id": "generation-empty",
+                "scope": scope,
+                "status": "failed",
+                "certification_status": "partial",
+            }])
+            (capture / "manifest.json").write_text(
+                json.dumps({"status": "completed_with_warnings", "generated_at": "2026-07-16T08:00:00+00:00", "certification_status": "partial", "requested_matrix": [scope]}),
+                encoding="utf-8",
+            )
+
+            summary = compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            rows = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+        self.assertEqual(summary["source_status"], "partial")
+        self.assertFalse(any(row.get("coverage_status") == "measured_raw" for row in rows))
+
+    def test_compile_marks_malformed_requested_matrix_as_partial_source_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            valid_scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+            malformed_scope = {"instrument_type": "EQUITY", "region": "EUR", "delay": "bad", "universe": "TOP3000"}
+            write_jsonl(capture / "data_fields.jsonl", [{
+                "scope": valid_scope,
+                "data_set": {"id": "fundamental3", "name": "Fundamentals", "category": "fundamental"},
+                "field": {"id": "cash_field", "type": "MATRIX"},
+            }])
+            write_jsonl(capture / "scopes.jsonl", [{
+                "scope": valid_scope,
+                "status": "completed",
+                "certification_status": "complete",
+            }])
+            (capture / "manifest.json").write_text(
+                json.dumps({"status": "completed", "certification_status": "complete", "requested_matrix": [valid_scope, malformed_scope]}),
+                encoding="utf-8",
+            )
+
+            summary = compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+
+        self.assertEqual(summary["source_status"], "partial")
 
     def test_compile_marks_negative_delay_scope_partial(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -474,6 +653,115 @@ class DataLedgerCompileTests(unittest.TestCase):
         entry = next(row for row in freshness if row["name"] == "data_ledger")
         self.assertEqual(entry["updated_at"], "2025-01-02")
         self.assertEqual(entry["compiled_at"], "2026-07-16T09:00:00+00:00")
+
+    def test_targeted_refresh_does_not_make_preserved_stale_scope_readiness_fresh(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            eur_scope = {"instrument_type": "EQUITY", "region": "EUR", "delay": 1, "universe": "TOP3000"}
+            usa_scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            write_jsonl(ledger, [{
+                "dataset_id": "fundamental3",
+                "dataset_name": "Fundamentals",
+                "field_id": "eur_cash_field",
+                "field_type": "MATRIX",
+                "region": "EUR",
+                "delay": 1,
+                "universe": "TOP3000",
+                "semantic_tags": ["cash", "power_pool"],
+                "coverage": 1.0,
+                "alpha_count": 0,
+                "user_count": 0,
+                "simulation_usage_count": 0,
+                "submitted_usage_count": 0,
+                "last_used_at": "",
+                "best_result_label": "unexplored",
+                "correlation_risk": "low",
+                "source_paths": [],
+                "source_quality": "platform_raw_capture",
+                "coverage_status": "measured_raw",
+                "source_updated_at": "2026-07-10",
+                "available_scopes": [eur_scope],
+                "compatible_template_ids": ["matrix_ts_zscore_rank"],
+            }])
+            template = root / "wiki" / "30_templates" / "template_library.jsonl"
+            write_jsonl(template, [{
+                "template_id": "matrix_ts_zscore_rank",
+                "hypothesis": "Rank cash.",
+                "skeleton": "rank({field})",
+                "required_field_types": ["MATRIX"],
+                "compatible_semantic_tags": ["cash", "power_pool"],
+                "operator_tags": [],
+                "status": "discovery_ready",
+                "correlation_risk": "low",
+                "repair_levers": [],
+                "source_paths": [],
+                "compatible_regions": ["USA", "EUR"],
+                "compatible_delays": [1],
+                "compatible_universes": ["TOP3000"],
+            }])
+            (root / "wiki" / "50_benchmarks").mkdir(parents=True, exist_ok=True)
+            (root / "wiki" / "50_benchmarks" / "correlation_and_novelty.md").write_text("# Benchmarks\n", encoding="utf-8")
+            (root / "wiki" / "10_foundations").mkdir(parents=True, exist_ok=True)
+            (root / "wiki" / "10_foundations" / "activity_snapshot.md").write_text("# Activity Snapshot\n", encoding="utf-8")
+            freshness = root / "wiki" / "80_maintenance" / "freshness_manifest.json"
+            freshness.parent.mkdir(parents=True, exist_ok=True)
+            freshness.write_text(
+                json.dumps(
+                    [
+                        {"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-10", "max_age_days": 1},
+                        {"name": "template_library", "path": "wiki/30_templates/template_library.jsonl", "updated_at": "2026-07-16", "max_age_days": 7},
+                        {"name": "benchmark_rules", "path": "wiki/50_benchmarks/correlation_and_novelty.md", "updated_at": "2026-07-16", "max_age_days": 7},
+                        {"name": "activity_snapshot", "path": "wiki/10_foundations/activity_snapshot.md", "updated_at": "2026-07-16", "max_age_days": 7},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            write_jsonl(capture / "data_fields.jsonl", [{
+                "scope": usa_scope,
+                "data_set": {"id": "fundamental3", "name": "Fundamentals", "category": "fundamental"},
+                "field": {"id": "usa_cash_field", "type": "MATRIX", "coverage": 1.0},
+            }])
+            write_jsonl(capture / "scopes.jsonl", [{
+                "scope": usa_scope,
+                "status": "completed",
+                "certification_status": "complete",
+            }])
+            (capture / "manifest.json").write_text(
+                json.dumps({"status": "completed", "generated_at": "2026-07-16T08:00:00+00:00", "certification_status": "complete", "requested_matrix": [usa_scope]}),
+                encoding="utf-8",
+            )
+
+            compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            rows = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+            eur_report = evaluate_run_readiness(
+                root,
+                mode="research",
+                batch_size=30,
+                live_api_enabled=True,
+                region="EUR",
+                universe="TOP3000",
+                delay=1,
+                today_value="2026-07-16",
+            )
+            usa_report = evaluate_run_readiness(
+                root,
+                mode="research",
+                batch_size=30,
+                live_api_enabled=True,
+                region="USA",
+                universe="TOP3000",
+                delay=1,
+                today_value="2026-07-16",
+            )
+
+        by_region = {row["region"]: row for row in rows}
+        self.assertEqual(by_region["EUR"]["source_updated_at"], "2026-07-10")
+        self.assertEqual(by_region["USA"]["source_updated_at"], "2026-07-16")
+        self.assertFalse(eur_report.passed)
+        self.assertIn("stale_scope_data", {issue.code for issue in eur_report.issues})
+        self.assertTrue(usa_report.passed)
 
     def test_compile_rejects_malformed_or_empty_raw_data_without_replacing_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:

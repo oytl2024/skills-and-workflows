@@ -187,11 +187,10 @@ def _validate_start_artifact_rows(
 def create_start_snapshot(
     knowledge_root: str | Path,
     selected_option_id: str,
-    selected_scope: dict[str, Any],
+    selected_scope: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Input: knowledge root, option id, scope. Output: snapshot dict. Bind validated start artifacts immutably."""
     knowledge = Path(knowledge_root)
-    scope = _validate_scope(selected_scope)
     options_path = knowledge / "wiki" / "70_decisions" / "research_option_cards.jsonl"
     options = read_option_card_jsonl(options_path)
     selected = next((row for row in options if str(row.get("option_id", "")) == str(selected_option_id)), None)
@@ -199,6 +198,11 @@ def create_start_snapshot(
         raise ValueError("no research option cards found")
     if selected is None:
         raise ValueError(f"selected research option not found: {selected_option_id}")
+    if selected_scope is None:
+        region, delay, universe = _scope_from_option(selected)
+        scope = _validate_scope({"region": region, "delay": delay, "universe": universe})
+    else:
+        scope = _validate_scope(selected_scope)
     ledger_rows = [
         row
         for row in _read_jsonl_objects(knowledge / "wiki" / "20_semantics" / "data_ledger.jsonl")

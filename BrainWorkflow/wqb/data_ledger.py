@@ -35,6 +35,9 @@ class DataLedgerRecord:
     best_result_label: str
     correlation_risk: str
     source_paths: list[str]
+    source_quality: str = ""
+    coverage_status: str = ""
+    source_updated_at: str = ""
     available_regions: list[str] = field(default_factory=list)
     available_delays: list[int] = field(default_factory=list)
     available_universes: list[str] = field(default_factory=list)
@@ -80,6 +83,9 @@ def data_ledger_record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
         best_result_label=str(row.get("best_result_label", "")),
         correlation_risk=str(row.get("correlation_risk", "unknown")),
         source_paths=[str(item) for item in row.get("source_paths", []) if str(item)],
+        source_quality=str(row.get("source_quality", "")),
+        coverage_status=str(row.get("coverage_status", "")),
+        source_updated_at=str(row.get("source_updated_at", "")),
         available_regions=[str(item) for item in row.get("available_regions", []) if str(item)],
         available_delays=[int(item) for item in row.get("available_delays", [])],
         available_universes=[str(item) for item in row.get("available_universes", []) if str(item)],

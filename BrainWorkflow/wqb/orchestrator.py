@@ -142,23 +142,17 @@ class WorkflowOrchestrator:
             "created_at": str(created_at),
             "knowledge_root": str(self.paths.knowledge_root),
         }
-        if selected_scope is not None:
-            try:
-                scope = {
-                    "region": str(selected_scope["region"]).strip().upper(),
-                    "delay": int(selected_scope["delay"]),
-                    "universe": str(selected_scope["universe"]).strip().upper(),
-                }
-            except (KeyError, TypeError, ValueError) as exc:
-                raise ValueError("selected workflow scope must include region, delay, and universe") from exc
-            if not scope["region"] or scope["delay"] < 0 or not scope["universe"]:
-                raise ValueError("selected workflow scope must include region, delay, and universe")
-            manifest["selected_scope"] = scope
-            manifest["start_snapshot"] = create_start_snapshot(
+        option_artifacts_exist = (
+            self.paths.knowledge_root / "wiki" / "70_decisions" / "research_option_cards.jsonl"
+        ).exists()
+        if selected_scope is not None or option_artifacts_exist:
+            snapshot = create_start_snapshot(
                 self.paths.knowledge_root,
                 str(selected_option_id),
-                scope,
+                selected_scope,
             )
+            manifest["selected_scope"] = dict(snapshot["selected_scope"])
+            manifest["start_snapshot"] = snapshot
         run_dir.mkdir(parents=True, exist_ok=False)
         (run_dir / "run_manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"

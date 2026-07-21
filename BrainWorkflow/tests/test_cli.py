@@ -99,6 +99,9 @@ def write_ready_knowledge_artifacts(root: Path) -> None:
                 "best_result_label": "unexplored",
                 "correlation_risk": "low",
                 "source_paths": [],
+                "source_quality": "platform_raw_capture",
+                "coverage_status": "measured_raw",
+                "source_updated_at": fresh_date,
                 "available_regions": ["USA"],
                 "available_delays": [1],
                 "available_universes": ["TOP3000"],
@@ -543,6 +546,9 @@ class CliTests(unittest.TestCase):
                         "best_result_label": "repairable_signal",
                         "correlation_risk": "medium",
                         "source_paths": ["raw"],
+                        "source_quality": "platform_raw_capture",
+                        "coverage_status": "measured_raw",
+                        "source_updated_at": date.today().isoformat(),
                     }
                 )
                 + "\n",
@@ -602,7 +608,7 @@ class CliTests(unittest.TestCase):
             ledger_dir.mkdir(parents=True, exist_ok=True)
             template_dir.mkdir(parents=True, exist_ok=True)
             (ledger_dir / "data_ledger.jsonl").write_text(
-                json.dumps({"dataset_id": "news12", "dataset_name": "News", "field_id": "news_field", "field_type": "MATRIX", "region": "USA", "delay": 1, "universe": "TOP3000", "semantic_tags": ["power_pool"], "coverage": 0.8, "alpha_count": 0, "user_count": 0, "simulation_usage_count": 0, "submitted_usage_count": 0, "last_used_at": "", "best_result_label": "unexplored", "correlation_risk": "low", "source_paths": []}) + "\n",
+                json.dumps({"dataset_id": "news12", "dataset_name": "News", "field_id": "news_field", "field_type": "MATRIX", "region": "USA", "delay": 1, "universe": "TOP3000", "semantic_tags": ["power_pool"], "coverage": 0.8, "alpha_count": 0, "user_count": 0, "simulation_usage_count": 0, "submitted_usage_count": 0, "last_used_at": "", "best_result_label": "unexplored", "correlation_risk": "low", "source_paths": [], "source_quality": "platform_raw_capture", "coverage_status": "measured_raw", "source_updated_at": date.today().isoformat()}) + "\n",
                 encoding="utf-8",
             )
             (template_dir / "template_library.jsonl").write_text(

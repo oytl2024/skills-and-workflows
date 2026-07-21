@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from wqb.data_ledger import load_data_ledger, select_data_for_research
+from wqb.data_ledger import DataLedgerRecord, load_data_ledger, select_data_for_research
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest
 from wqb.template_library import load_template_library, select_templates_for_data
 
@@ -75,6 +75,22 @@ def _level_for_mode(mode: str) -> str:
     return "block" if mode in STRICT_BLOCKING_MODES else "warn"
 
 
+def _data_ledger_max_age_days(records: list[Any]) -> int | None:
+    """Input: freshness records. Output: optional max age. Find the data-ledger freshness policy."""
+    for record in records:
+        if getattr(record, "name", "") == "data_ledger":
+            return int(getattr(record, "max_age_days", 0))
+    return None
+
+
+def _record_source_date(record: DataLedgerRecord) -> date | None:
+    """Input: ledger record. Output: optional date. Parse per-record raw source freshness."""
+    try:
+        return date.fromisoformat(str(record.source_updated_at))
+    except ValueError:
+        return None
+
+
 def _validate_scope_artifacts(
     root: Path,
     mode: str,
@@ -82,6 +98,8 @@ def _validate_scope_artifacts(
     region: str | None,
     universe: str | None,
     delay: int | None,
+    current: date,
+    data_ledger_max_age_days: int | None,
 ) -> None:
     """Input: root, mode, issues, scope. Output: none. Validate ledger/template fit for a selected run scope."""
     if region is None or universe is None or delay is None:
@@ -114,7 +132,79 @@ def _validate_scope_artifacts(
             )
         )
         return
-    covered_data = [record for record in selected_data if float(record.coverage) > 0.0]
+    if mode in STRICT_BLOCKING_MODES:
+        zero_coverage = [record for record in selected_data if float(record.coverage) <= 0.0]
+        if zero_coverage:
+            issues.append(
+                _issue(
+                    level,
+                    "insufficient_data_coverage",
+                    f"Compatible data ledger records for {region} D{int(delay)} {universe} include zero coverage.",
+                    ledger_path,
+                    "Replace schema-only seeds with measured data ledger records before research.",
+                )
+            )
+            return
+        uncertified = [
+            record
+            for record in selected_data
+            if record.source_quality != "platform_raw_capture" or record.coverage_status != "measured_raw"
+        ]
+        if uncertified:
+            issues.append(
+                _issue(
+                    level,
+                    "uncertified_data_coverage",
+                    f"Compatible data ledger records for {region} D{int(delay)} {universe} are not certified measured platform coverage.",
+                    ledger_path,
+                    "Refresh platform raw data fields and compile measured ledger rows before research.",
+                )
+            )
+            return
+        if data_ledger_max_age_days is None or data_ledger_max_age_days <= 0:
+            issues.append(
+                _issue(
+                    level,
+                    "invalid_scope_data_freshness",
+                    "Data ledger freshness policy is missing for scoped readiness.",
+                    root / FRESHNESS_MANIFEST_PATH,
+                    "Fix freshness_manifest.json before running research.",
+                )
+            )
+            return
+        invalid_freshness = [
+            record for record in selected_data if _record_source_date(record) is None
+        ]
+        if invalid_freshness:
+            issues.append(
+                _issue(
+                    level,
+                    "invalid_scope_data_freshness",
+                    f"Compatible data ledger records for {region} D{int(delay)} {universe} are missing valid per-record source dates.",
+                    ledger_path,
+                    "Refresh platform raw data fields and compile ledger rows with source_updated_at.",
+                )
+            )
+            return
+        stale = [
+            record
+            for record in selected_data
+            if (current - _record_source_date(record)).days > data_ledger_max_age_days  # type: ignore[arg-type]
+        ]
+        if stale:
+            issues.append(
+                _issue(
+                    level,
+                    "stale_scope_data",
+                    f"Compatible data ledger records for {region} D{int(delay)} {universe} are stale for the selected exact scope.",
+                    ledger_path,
+                    "Refresh platform raw data fields for this exact scope before research.",
+                )
+            )
+            return
+        covered_data = selected_data
+    else:
+        covered_data = [record for record in selected_data if float(record.coverage) > 0.0]
     if not covered_data:
         issues.append(
             _issue(
@@ -168,13 +258,14 @@ def evaluate_run_readiness(
     current = date.fromisoformat(today_value) if today_value else date.today()
     generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     issues: list[ReadinessIssue] = []
+    freshness_records: list[Any] = []
     manifest = root / FRESHNESS_MANIFEST_PATH
     if not manifest.exists():
         issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "missing_manifest", "Freshness manifest is missing.", manifest, "Run bootstrap-knowledge."))
     else:
         try:
-            records = load_freshness_manifest(manifest, strict=True)
-            statuses = evaluate_freshness(records, current, artifact_root=root)
+            freshness_records = load_freshness_manifest(manifest, strict=True)
+            statuses = evaluate_freshness(freshness_records, current, artifact_root=root)
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
             issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "parse_error", f"Cannot load freshness manifest: {error}", manifest, "Fix the freshness manifest before running."))
         else:
@@ -185,7 +276,16 @@ def evaluate_run_readiness(
                     issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "stale_artifact", f"Required artifact is stale: {status.name}", status.path, "Run knowledge maintenance."))
     _check_jsonl_artifact(root / DATA_LEDGER_PATH, "data_ledger", issues, mode)
     _check_jsonl_artifact(root / TEMPLATE_LIBRARY_PATH, "template_library", issues, mode)
-    _validate_scope_artifacts(root, mode, issues, region, universe, delay)
+    _validate_scope_artifacts(
+        root,
+        mode,
+        issues,
+        region,
+        universe,
+        delay,
+        current,
+        _data_ledger_max_age_days(freshness_records),
+    )
     if mode == "research" and batch_size < 30:
         issues.append(_issue("block", "batch_size_too_small", "Research discovery batch size must be at least 30.", "", "Set batch_size to 30 or higher."))
     if mode == "research" and not live_api_enabled:

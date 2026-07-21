@@ -168,13 +168,18 @@ def _capture_certification_complete(
     """Input: capture manifest and latest scope outcomes. Output: bool. Validate manifest-level certification."""
     if not manifest:
         return False
-    requested = manifest.get("requested_matrix")
-    requested_keys = [
-        key
-        for row in requested
-        if isinstance(row, dict) and (key := _scope_key(row)) is not None
-    ] if isinstance(requested, list) else []
-    if requested_keys:
+    if "requested_matrix" in manifest:
+        requested = manifest.get("requested_matrix")
+        if not isinstance(requested, list) or not requested:
+            return False
+        requested_keys: list[tuple[str, str, int, str]] = []
+        for row in requested:
+            if not isinstance(row, dict):
+                return False
+            key = _scope_key(row)
+            if key is None:
+                return False
+            requested_keys.append(key)
         return all(
             (outcome := scope_outcomes.get(key)) is not None
             and outcome.get("status") == "completed"
@@ -199,9 +204,7 @@ def _capture_source_day(manifest: dict[str, Any], capture_dir: Path) -> str:
 
 
 def _validate_raw_rows(rows: list[dict[str, Any]]) -> None:
-    """Input: raw field rows. Output: none. Refuse malformed or empty raw input before staging outputs."""
-    if not rows:
-        raise ValueError("raw data fields contain no valid rows")
+    """Input: raw field rows. Output: none. Refuse malformed raw field rows before staging outputs."""
     for row in rows:
         field = row.get("field") if isinstance(row.get("field"), dict) else {}
         data_set = row.get("data_set") if isinstance(row.get("data_set"), dict) else {}
@@ -230,6 +233,55 @@ def _ledger_row_scope_keys(row: dict[str, Any]) -> set[tuple[str, str, int, str]
     return keys
 
 
+def _scope_dict_from_key(scope_key: tuple[str, str, int, str]) -> dict[str, Any]:
+    """Input: exact scope key. Output: JSON-safe scope dict. Rebuild a canonical ledger scope row."""
+    instrument_type, region, delay, universe = scope_key
+    return {
+        "instrument_type": instrument_type,
+        "region": region,
+        "delay": int(delay),
+        "universe": universe,
+    }
+
+
+def _scope_lists(scope_keys: set[tuple[str, str, int, str]]) -> tuple[list[dict[str, Any]], list[str], list[int], list[str]]:
+    """Input: exact scope keys. Output: scopes, regions, delays, universes. Keep preserved rows internally consistent."""
+    scopes = [_scope_dict_from_key(key) for key in sorted(scope_keys)]
+    regions = sorted({scope["region"] for scope in scopes})
+    delays = sorted({int(scope["delay"]) for scope in scopes})
+    universes = sorted({scope["universe"] for scope in scopes})
+    return scopes, regions, delays, universes
+
+
+def _preserve_prior_row_fragments(
+    row: dict[str, Any],
+    attempted_scope_keys: set[tuple[str, str, int, str]],
+    attempted_field_keys: set[tuple[str, str]],
+) -> list[dict[str, Any]]:
+    """Input: prior ledger row and attempted keys. Output: rows to preserve. Drop attempted scopes at exact-scope granularity."""
+    scope_keys = _ledger_row_scope_keys(row)
+    field_key = (str(row.get("dataset_id", "")), str(row.get("field_id", "")))
+    if not scope_keys:
+        return [row] if field_key not in attempted_field_keys else []
+    preserved_scope_keys = scope_keys - attempted_scope_keys
+    if not preserved_scope_keys:
+        return []
+    if preserved_scope_keys == scope_keys:
+        return [row]
+    scopes, regions, delays, universes = _scope_lists(preserved_scope_keys)
+    primary_scope = scopes[0]
+    fragment = dict(row)
+    fragment["available_scopes"] = scopes
+    fragment["available_regions"] = regions
+    fragment["available_delays"] = delays
+    fragment["available_universes"] = universes
+    fragment["instrument_type"] = primary_scope["instrument_type"]
+    fragment["region"] = primary_scope["region"]
+    fragment["delay"] = primary_scope["delay"]
+    fragment["universe"] = primary_scope["universe"]
+    return [fragment]
+
+
 def _row_matches_outcome_generation(row: dict[str, Any], outcome: dict[str, Any]) -> bool:
     """Input: raw field row and scope outcome. Output: bool. Match generation IDs while preserving legacy rows."""
     outcome_generation = outcome.get("capture_generation_id")
@@ -253,7 +305,13 @@ def _row_sort_key(row: dict[str, Any]) -> tuple[str, int, str, str, str]:
     )
 
 
-def _record_from_group(root: Path, capture_path: Path, rows: list[dict[str, Any]], prior: DataLedgerRecord | None = None) -> dict[str, Any]:
+def _record_from_group(
+    root: Path,
+    capture_path: Path,
+    rows: list[dict[str, Any]],
+    source_day: str,
+    prior: DataLedgerRecord | None = None,
+) -> dict[str, Any]:
     """Input: root, raw source path, grouped rows. Output: data ledger JSON row."""
     first = rows[0]
     field = first.get("field", {}) if isinstance(first.get("field"), dict) else {}
@@ -296,6 +354,9 @@ def _record_from_group(root: Path, capture_path: Path, rows: list[dict[str, Any]
             best_result_label=prior.best_result_label if prior else "unexplored_raw_candidate",
             correlation_risk=correlation_risk,
             source_paths=[_relative_source(root, capture_path)],
+            source_quality="platform_raw_capture",
+            coverage_status="measured_raw",
+            source_updated_at=source_day,
             available_regions=regions,
             available_delays=delays,
             available_universes=universes,
@@ -312,7 +373,7 @@ def _record_from_group(root: Path, capture_path: Path, rows: list[dict[str, Any]
             repair_usage_count=prior.repair_usage_count if prior else 0,
             field_description=str(field.get("description", "")),
         )
-    ) | {"source_quality": "platform_raw_capture", "coverage_status": "measured_raw"}
+    )
 
 
 def compile_data_ledger_from_raw(
@@ -342,10 +403,16 @@ def compile_data_ledger_from_raw(
         try:
             fields_path = selected_capture / "data_fields.jsonl"
             manifest = _read_json(selected_capture / "manifest.json")
+            scope_outcomes = _latest_scope_outcomes(selected_capture)
+            attempted_scope_keys = {
+                key
+                for key, outcome in scope_outcomes.items()
+                if outcome.get("status") in {"completed", "partial", "failed"}
+            }
             rows = _read_jsonl(fields_path, strict_objects=True)
             _validate_raw_rows(rows)
-            scope_outcomes = _latest_scope_outcomes(selected_capture)
-            attempted_scope_keys = set(scope_outcomes)
+            if not rows and not attempted_scope_keys:
+                raise ValueError("raw data fields contain no valid rows")
             generation_filtered_rows: list[dict[str, Any]] = []
             for row in rows:
                 scope = row.get("scope") if isinstance(row.get("scope"), dict) else {}
@@ -363,7 +430,7 @@ def compile_data_ledger_from_raw(
                 data_set = row.get("data_set", {}) if isinstance(row.get("data_set"), dict) else {}
                 scope = row.get("scope") if isinstance(row.get("scope"), dict) else {}
                 grouped[(str(data_set.get("id", "")), str(field.get("id", "")), _scope_key(scope))].append(row)
-            if not grouped:
+            if not grouped and not attempted_scope_keys:
                 raise ValueError("raw data fields contain no valid rows")
 
             certification_complete = _capture_certification_complete(manifest, scope_outcomes)
@@ -395,21 +462,16 @@ def compile_data_ledger_from_raw(
                     if key[2] is not None
                     else None
                 ) or prior_records_by_field.get(key[:2])
-                output_rows.append(_record_from_group(root, fields_path, grouped[key], prior) | {"coverage_status": "measured_raw" if measured else "partial"})
-            if not output_rows:
-                raise ValueError("raw data fields contain no valid rows")
+                output_rows.append(_record_from_group(root, fields_path, grouped[key], source_day, prior) | {"coverage_status": "measured_raw" if measured else "partial"})
             attempted_field_keys = {
                 (str(row.get("dataset_id", "")), str(row.get("field_id", "")))
                 for row in output_rows
             }
             preserved_rows = []
             for row in prior_rows:
-                scope_keys = _ledger_row_scope_keys(row)
-                field_key = (str(row.get("dataset_id", "")), str(row.get("field_id", "")))
-                if scope_keys and scope_keys.isdisjoint(attempted_scope_keys):
-                    preserved_rows.append(row)
-                elif not scope_keys and field_key not in attempted_field_keys:
-                    preserved_rows.append(row)
+                preserved_rows.extend(
+                    _preserve_prior_row_fragments(row, attempted_scope_keys, attempted_field_keys)
+                )
             output_rows = sorted([*preserved_rows, *output_rows], key=_row_sort_key)
             _write_jsonl(ledger_tmp_path, output_rows)
             records = load_data_ledger(ledger_tmp_path)

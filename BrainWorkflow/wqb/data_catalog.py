@@ -16,8 +16,10 @@ def _payload_rows_and_count(payload: Any) -> tuple[list[dict[str, Any]], int | N
         raw_rows = payload["results"]
         if not isinstance(raw_rows, list):
             raise ValueError("catalog payload results must be a list")
-        raw_count = payload.get("count")
-        if isinstance(raw_count, int) and raw_count >= 0:
+        if "count" in payload:
+            raw_count = payload.get("count")
+            if isinstance(raw_count, bool) or not isinstance(raw_count, int) or raw_count < 0:
+                raise ValueError("catalog payload count must be a non-negative integer")
             count = raw_count
     else:
         raise ValueError("catalog payload must be a list or contain a results list")
@@ -35,7 +37,9 @@ def _fetch_paginated_rows(client, path_builder, limit: int, max_records: int) ->
     latest_count: int | None = None
     while len(rows) < record_limit:
         request_limit = min(page_limit, record_limit - len(rows))
-        batch, latest_count = _payload_rows_and_count(client.get_json(path_builder(request_limit, offset)))
+        batch, authoritative_count = _payload_rows_and_count(client.get_json(path_builder(request_limit, offset)))
+        if authoritative_count is not None:
+            latest_count = authoritative_count
         rows.extend(batch[:request_limit])
         fetched = offset + len(batch)
         if latest_count is not None and latest_count > fetched and len(batch) < request_limit:

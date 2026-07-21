@@ -63,6 +63,9 @@ class DataLedgerTest(unittest.TestCase):
             "crowding_risk": "medium",
             "known_operators": ["ts_delta", "rank"],
             "repair_usage_count": 2,
+            "source_quality": "platform_raw_capture",
+            "coverage_status": "measured_raw",
+            "source_updated_at": "2026-07-09",
         }
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "data_ledger.jsonl"
@@ -81,9 +84,15 @@ class DataLedgerTest(unittest.TestCase):
         self.assertEqual(records[0].crowding_risk, "medium")
         self.assertEqual(records[0].known_operators, ["ts_delta", "rank"])
         self.assertEqual(records[0].repair_usage_count, 2)
+        self.assertEqual(records[0].source_quality, "platform_raw_capture")
+        self.assertEqual(records[0].coverage_status, "measured_raw")
+        self.assertEqual(records[0].source_updated_at, "2026-07-09")
         serialized = data_ledger_record_to_dict(records[0])
         self.assertEqual(serialized["instrument_type"], "EQUITY")
         self.assertEqual(serialized["repair_usage_count"], 2)
+        self.assertEqual(serialized["source_quality"], "platform_raw_capture")
+        self.assertEqual(serialized["coverage_status"], "measured_raw")
+        self.assertEqual(serialized["source_updated_at"], "2026-07-09")
 
     def test_select_data_hard_filters_region_delay_and_universe_before_ranking(self):
         matching = DataLedgerRecord(

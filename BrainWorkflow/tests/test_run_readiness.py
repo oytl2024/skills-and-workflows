@@ -90,6 +90,9 @@ class RunReadinessTests(unittest.TestCase):
                     "best_result_label": "unexplored",
                     "correlation_risk": "low",
                     "source_paths": [],
+                    "source_quality": "platform_raw_capture",
+                    "coverage_status": "measured_raw",
+                    "source_updated_at": "2026-07-10",
                 }
             )
             + "\n",
@@ -198,6 +201,96 @@ class RunReadinessTests(unittest.TestCase):
 
         self.assertFalse(report.passed)
         self.assertIn("insufficient_data_coverage", {issue.code for issue in report.issues})
+
+    def test_research_blocks_schema_seed_even_with_positive_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.create_scope_ready_artifacts(root)
+            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8"))
+            row["source_quality"] = "schema_seed"
+            row["coverage_status"] = "measured_raw"
+            (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            report = evaluate_run_readiness(
+                root,
+                mode="research",
+                batch_size=30,
+                live_api_enabled=True,
+                region="USA",
+                universe="TOP3000",
+                delay=1,
+                today_value="2026-07-10",
+            )
+
+        self.assertFalse(report.passed)
+        self.assertIn("uncertified_data_coverage", {issue.code for issue in report.issues})
+
+    def test_research_blocks_partial_coverage_status_even_with_positive_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.create_scope_ready_artifacts(root)
+            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8"))
+            row["source_quality"] = "platform_raw_capture"
+            row["coverage_status"] = "partial"
+            (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            report = evaluate_run_readiness(
+                root,
+                mode="research",
+                batch_size=30,
+                live_api_enabled=True,
+                region="USA",
+                universe="TOP3000",
+                delay=1,
+                today_value="2026-07-10",
+            )
+
+        self.assertFalse(report.passed)
+        self.assertIn("uncertified_data_coverage", {issue.code for issue in report.issues})
+
+    def test_research_blocks_stale_per_record_source_date(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.create_scope_ready_artifacts(root)
+            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8"))
+            row["source_updated_at"] = "2026-07-08"
+            (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            report = evaluate_run_readiness(
+                root,
+                mode="research",
+                batch_size=30,
+                live_api_enabled=True,
+                region="USA",
+                universe="TOP3000",
+                delay=1,
+                today_value="2026-07-10",
+            )
+
+        self.assertFalse(report.passed)
+        self.assertIn("stale_scope_data", {issue.code for issue in report.issues})
+
+    def test_research_blocks_missing_per_record_source_date(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.create_scope_ready_artifacts(root)
+            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8"))
+            row.pop("source_updated_at")
+            (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            report = evaluate_run_readiness(
+                root,
+                mode="research",
+                batch_size=30,
+                live_api_enabled=True,
+                region="USA",
+                universe="TOP3000",
+                delay=1,
+                today_value="2026-07-10",
+            )
+
+        self.assertFalse(report.passed)
+        self.assertIn("invalid_scope_data_freshness", {issue.code for issue in report.issues})
 
     def test_research_passes_with_scope_ready_knowledge(self):
         with tempfile.TemporaryDirectory() as tmp:

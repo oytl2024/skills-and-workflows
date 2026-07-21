@@ -132,6 +132,41 @@ class DataCatalogTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in rows], ["dataset-1"])
         self.assertTrue(truncated)
 
+    def test_catalog_retains_authoritative_count_when_later_page_omits_count(self):
+        client = FakeClient(
+            [
+                {"results": [{"id": "dataset-1"}, {"id": "dataset-2"}], "count": 5},
+                {"results": [{"id": "dataset-3"}]},
+            ]
+        )
+
+        rows, truncated = fetch_data_sets_with_metadata(
+            client,
+            instrument_type="EQUITY",
+            region="USA",
+            delay=1,
+            universe="TOP3000",
+            limit=2,
+            max_records=10,
+        )
+
+        self.assertEqual([row["id"] for row in rows], ["dataset-1", "dataset-2", "dataset-3"])
+        self.assertTrue(truncated)
+
+    def test_catalog_rejects_invalid_count_type(self):
+        client = FakeClient([{"results": [{"id": "dataset-1"}], "count": "5"}])
+
+        with self.assertRaisesRegex(ValueError, "count"):
+            fetch_data_sets_with_metadata(
+                client,
+                instrument_type="EQUITY",
+                region="USA",
+                delay=1,
+                universe="TOP3000",
+                limit=10,
+                max_records=10,
+            )
+
     def test_select_seed_fields_skips_grouping_and_sorts(self):
         fields = [
             {"id": "industry", "coverage": 1.0, "alphaCount": 100},

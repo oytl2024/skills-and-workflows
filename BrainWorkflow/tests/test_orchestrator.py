@@ -100,6 +100,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 "source_paths": [],
                 "source_quality": "platform_raw_capture",
                 "coverage_status": "measured_raw",
+                "source_updated_at": "2026-07-16",
                 "available_scopes": [{"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}],
                 "compatible_template_ids": ["matrix_ts_zscore_rank"],
             }
@@ -349,6 +350,60 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(manifest["start_snapshot"]["selected_option"]["title"], "Persisted valid option")
         self.assertEqual(result["current_stage"], "scout_seed")
         self.assertEqual(schedule["option_title"], "Persisted valid option")
+        self.assertEqual([row["field_id"] for row in schedule["selected_data"]], ["cash_field"])
+
+    def test_unscoped_start_derives_scope_and_binds_snapshot_before_current_files_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_start_artifacts(
+                root,
+                [valid_option_row(option_id="option-1", title="Persisted unscoped option", primary_incentive="cash")],
+            )
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+
+            started = orchestrator.start(
+                "Persisted unscoped option",
+                "option-1",
+                "2026-07-12T00:00:00Z",
+            )
+            run_dir = Path(str(started["run_dir"]))
+            manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+            self.write_start_artifacts(
+                root,
+                [valid_option_row(option_id="option-1", title="Mutated unscoped option", primary_incentive="cash")],
+                ledger_rows=[{
+                    "dataset_id": "fundamental3",
+                    "dataset_name": "Fundamentals",
+                    "field_id": "mutated_field",
+                    "field_type": "MATRIX",
+                    "region": "USA",
+                    "delay": 1,
+                    "universe": "TOP3000",
+                    "semantic_tags": ["cash"],
+                    "coverage": 1.0,
+                    "alpha_count": 0,
+                    "user_count": 0,
+                    "simulation_usage_count": 0,
+                    "submitted_usage_count": 0,
+                    "last_used_at": "",
+                    "best_result_label": "unexplored",
+                    "correlation_risk": "low",
+                    "source_paths": [],
+                    "source_quality": "platform_raw_capture",
+                    "coverage_status": "partial",
+                    "source_updated_at": "2026-07-16",
+                    "available_scopes": [{"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}],
+                    "compatible_template_ids": ["matrix_ts_zscore_rank"],
+                }],
+            )
+            orchestrator.continue_once("2026-07-12T00:01:00Z")
+            result = orchestrator.continue_once("2026-07-12T00:02:00Z")
+            schedule = json.loads((run_dir / "stages" / "schedule" / "research_schedule.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(manifest["selected_scope"], {"region": "USA", "delay": 1, "universe": "TOP3000"})
+        self.assertEqual(manifest["start_snapshot"]["selected_option"]["title"], "Persisted unscoped option")
+        self.assertEqual(result["current_stage"], "scout_seed")
+        self.assertEqual(schedule["option_title"], "Persisted unscoped option")
         self.assertEqual([row["field_id"] for row in schedule["selected_data"]], ["cash_field"])
 
     def test_schedule_fails_when_bound_start_snapshot_is_incomplete(self):
@@ -823,11 +878,9 @@ class WorkflowOrchestratorTests(unittest.TestCase):
     def test_continue_once_advances_created_run_to_schedule_then_scout_seed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            decisions = root / "knowledge" / "wiki" / "70_decisions"
-            decisions.mkdir(parents=True)
-            (decisions / "research_option_cards.jsonl").write_text(
-                json.dumps(valid_option_row(option_id="option-1", score={"total": 10.0, "components": {}, "penalties": {}, "reasons": ["measured coverage"]})) + "\n",
-                encoding="utf-8",
+            self.write_start_artifacts(
+                root,
+                [valid_option_row(option_id="option-1", score={"total": 10.0, "components": {}, "penalties": {}, "reasons": ["measured coverage"]})],
             )
             orchestrator = WorkflowOrchestrator(self.paths(root))
             orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
@@ -840,11 +893,9 @@ class WorkflowOrchestratorTests(unittest.TestCase):
     def test_continue_once_advances_post_schedule_stages_from_local_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            decisions = root / "knowledge" / "wiki" / "70_decisions"
-            decisions.mkdir(parents=True)
-            (decisions / "research_option_cards.jsonl").write_text(
-                json.dumps(valid_option_row(option_id="option-1", score={"total": 10.0, "components": {}, "penalties": {}, "reasons": ["measured coverage"]})) + "\n",
-                encoding="utf-8",
+            self.write_start_artifacts(
+                root,
+                [valid_option_row(option_id="option-1", score={"total": 10.0, "components": {}, "penalties": {}, "reasons": ["measured coverage"]})],
             )
             orchestrator = WorkflowOrchestrator(self.paths(root))
             started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
@@ -1539,11 +1590,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
     def test_stage_state_tracks_schedule_and_candidate_transitions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            decisions = root / "knowledge" / "wiki" / "70_decisions"
-            decisions.mkdir(parents=True)
-            (decisions / "research_option_cards.jsonl").write_text(
-                json.dumps(valid_option_row(option_id="option-1")) + "\n", encoding="utf-8"
-            )
+            self.write_start_artifacts(root, [valid_option_row(option_id="option-1")])
             orchestrator = WorkflowOrchestrator(self.paths(root))
             started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
             orchestrator.continue_once("2026-07-12T00:01:00Z")
@@ -1579,18 +1626,22 @@ class WorkflowOrchestratorTests(unittest.TestCase):
 
     def test_schedule_adapter_errors_are_persisted_as_failed_state_and_event(self):
         cases = (
-            ("missing options", None, "option-1"),
-            ("unknown option", json.dumps(valid_option_row(option_id="option-1")) + "\n", "missing"),
+            ("missing options", None, "option-1", False),
+            ("unknown option", json.dumps(valid_option_row(option_id="option-1")) + "\n", "missing", True),
         )
-        for label, option_rows, selected_id in cases:
+        for label, option_rows, selected_id, write_options_after_start in cases:
             with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
-                if option_rows is not None:
+                if option_rows is not None and not write_options_after_start:
                     decisions = root / "knowledge" / "wiki" / "70_decisions"
                     decisions.mkdir(parents=True)
                     (decisions / "research_option_cards.jsonl").write_text(option_rows, encoding="utf-8")
                 orchestrator = WorkflowOrchestrator(self.paths(root))
                 started = orchestrator.start("Power Pool", selected_id, "2026-07-12T00:00:00Z")
+                if option_rows is not None and write_options_after_start:
+                    decisions = root / "knowledge" / "wiki" / "70_decisions"
+                    decisions.mkdir(parents=True)
+                    (decisions / "research_option_cards.jsonl").write_text(option_rows, encoding="utf-8")
                 orchestrator.continue_once("2026-07-12T00:01:00Z")
 
                 summary = orchestrator.continue_once("2026-07-12T00:02:00Z")
@@ -1607,12 +1658,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
     def test_post_schedule_adapter_errors_are_persisted_as_failed_state_and_event(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            decisions = root / "knowledge" / "wiki" / "70_decisions"
-            decisions.mkdir(parents=True)
-            (decisions / "research_option_cards.jsonl").write_text(
-                json.dumps(valid_option_row(option_id="option-1")) + "\n",
-                encoding="utf-8",
-            )
+            self.write_start_artifacts(root, [valid_option_row(option_id="option-1")])
             orchestrator = WorkflowOrchestrator(self.paths(root))
             started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
             orchestrator.continue_once("2026-07-12T00:01:00Z")
@@ -1659,12 +1705,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         for stage_name in ("created", "schedule", "scout_seed"):
             with self.subTest(stage=stage_name), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
-                decisions = root / "knowledge" / "wiki" / "70_decisions"
-                decisions.mkdir(parents=True)
-                (decisions / "research_option_cards.jsonl").write_text(
-                    json.dumps(valid_option_row(option_id="option-1")) + "\n",
-                    encoding="utf-8",
-                )
+                self.write_start_artifacts(root, [valid_option_row(option_id="option-1")])
                 orchestrator = WorkflowOrchestrator(self.paths(root))
                 started = orchestrator.start(
                     "Power Pool", "option-1", "2026-07-12T00:00:00Z"
