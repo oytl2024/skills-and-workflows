@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from argparse import Namespace
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -72,6 +73,7 @@ def cleanup_run_dir(run_dir: Path) -> None:
 
 def write_ready_knowledge_artifacts(root: Path) -> None:
     """Input: knowledge root. Output: none. Create minimal scope-ready knowledge test artifacts."""
+    fresh_date = date.today().isoformat()
     (root / "wiki" / "20_semantics").mkdir(parents=True, exist_ok=True)
     (root / "wiki" / "30_templates").mkdir(parents=True, exist_ok=True)
     (root / "wiki" / "50_benchmarks").mkdir(parents=True, exist_ok=True)
@@ -131,10 +133,10 @@ def write_ready_knowledge_artifacts(root: Path) -> None:
     (root / "wiki" / "80_maintenance" / "freshness_manifest.json").write_text(
         json.dumps(
             [
-                {"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-10", "max_age_days": 7},
-                {"name": "template_library", "path": "wiki/30_templates/template_library.jsonl", "updated_at": "2026-07-10", "max_age_days": 7},
-                {"name": "benchmark_rules", "path": "wiki/50_benchmarks/correlation_and_novelty.md", "updated_at": "2026-07-10", "max_age_days": 7},
-                {"name": "activity_snapshot", "path": "wiki/10_foundations/activity_snapshot.md", "updated_at": "2026-07-10", "max_age_days": 7},
+                {"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": fresh_date, "max_age_days": 7},
+                {"name": "template_library", "path": "wiki/30_templates/template_library.jsonl", "updated_at": fresh_date, "max_age_days": 7},
+                {"name": "benchmark_rules", "path": "wiki/50_benchmarks/correlation_and_novelty.md", "updated_at": fresh_date, "max_age_days": 7},
+                {"name": "activity_snapshot", "path": "wiki/10_foundations/activity_snapshot.md", "updated_at": fresh_date, "max_age_days": 7},
             ]
         ),
         encoding="utf-8",
