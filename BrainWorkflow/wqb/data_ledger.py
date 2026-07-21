@@ -60,8 +60,8 @@ def data_ledger_record_to_dict(record: DataLedgerRecord) -> dict[str, Any]:
     return row
 
 
-def _record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
-    """Input: dict row. Output: DataLedgerRecord. Normalize one JSONL row from the data ledger."""
+def data_ledger_record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
+    """Input: dict row. Output: DataLedgerRecord. Normalize one JSON-safe data ledger row."""
     return DataLedgerRecord(
         dataset_id=str(row.get("dataset_id", "")),
         dataset_name=str(row.get("dataset_name", "")),
@@ -100,6 +100,11 @@ def _record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
         repair_usage_count=int(row.get("repair_usage_count", 0)),
         field_description=str(row.get("field_description", "")),
     )
+
+
+def _record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
+    """Input: dict row. Output: DataLedgerRecord. Keep the legacy private loader adapter."""
+    return data_ledger_record_from_dict(row)
 
 
 def load_data_ledger(path: Path) -> list[DataLedgerRecord]:

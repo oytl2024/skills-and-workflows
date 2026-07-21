@@ -161,16 +161,33 @@ def _latest_scope_outcomes(capture_dir: Path) -> dict[tuple[str, str, int, str],
     return outcomes
 
 
-def _capture_certification_complete(manifest: dict[str, Any]) -> bool:
-    """Input: capture manifest. Output: bool. Decide whether limits permit measured coverage certification."""
+def _capture_certification_complete(
+    manifest: dict[str, Any],
+    scope_outcomes: dict[tuple[str, str, int, str], dict[str, Any]],
+) -> bool:
+    """Input: capture manifest and latest scope outcomes. Output: bool. Validate manifest-level certification."""
     if not manifest:
         return False
-    if "certification_status" in manifest:
-        return manifest.get("certification_status") == "complete"
-    limits = manifest.get("active_limits", {})
-    if isinstance(limits, dict) and any(int(limits.get(name, 0) or 0) > 0 for name in ("max_scopes", "max_datasets_per_scope", "max_fields_per_dataset")):
+    requested = manifest.get("requested_matrix")
+    requested_keys = [
+        key
+        for row in requested
+        if isinstance(row, dict) and (key := _scope_key(row)) is not None
+    ] if isinstance(requested, list) else []
+    if requested_keys:
+        return all(
+            (outcome := scope_outcomes.get(key)) is not None
+            and outcome.get("status") == "completed"
+            and outcome.get("certification_status") == "complete"
+            for key in requested_keys
+        )
+    if manifest.get("certification_status") != "complete":
         return False
-    return manifest.get("status", "completed") == "completed"
+    return bool(scope_outcomes) and all(
+        outcome.get("status") == "completed"
+        and outcome.get("certification_status") == "complete"
+        for outcome in scope_outcomes.values()
+    )
 
 
 def _capture_source_day(manifest: dict[str, Any], capture_dir: Path) -> str:
@@ -190,6 +207,50 @@ def _validate_raw_rows(rows: list[dict[str, Any]]) -> None:
         data_set = row.get("data_set") if isinstance(row.get("data_set"), dict) else {}
         if not str(field.get("id", "")).strip() or not str(data_set.get("id", "")).strip():
             raise ValueError("raw data fields contain a row without dataset_id or field_id")
+
+
+def _ledger_row_scope_keys(row: dict[str, Any]) -> set[tuple[str, str, int, str]]:
+    """Input: ledger row dict. Output: exact scope keys set. Normalize current or legacy ledger scope metadata."""
+    keys: set[tuple[str, str, int, str]] = set()
+    available_scopes = row.get("available_scopes")
+    if isinstance(available_scopes, list):
+        keys.update(key for item in available_scopes if isinstance(item, dict) and (key := _scope_key(item)) is not None)
+    if not keys:
+        instrument_type = str(row.get("instrument_type", "EQUITY") or "EQUITY")
+        key = _scope_key(
+            {
+                "instrument_type": instrument_type,
+                "region": row.get("region"),
+                "delay": row.get("delay"),
+                "universe": row.get("universe"),
+            }
+        )
+        if key is not None:
+            keys.add(key)
+    return keys
+
+
+def _row_matches_outcome_generation(row: dict[str, Any], outcome: dict[str, Any]) -> bool:
+    """Input: raw field row and scope outcome. Output: bool. Match generation IDs while preserving legacy rows."""
+    outcome_generation = outcome.get("capture_generation_id")
+    if not outcome_generation:
+        return True
+    return str(row.get("capture_generation_id", "")) == str(outcome_generation)
+
+
+def _row_sort_key(row: dict[str, Any]) -> tuple[str, int, str, str, str]:
+    """Input: ledger row dict. Output: sortable tuple. Keep compiled and preserved rows deterministic."""
+    try:
+        delay = int(row.get("delay", 0))
+    except (TypeError, ValueError):
+        delay = 0
+    return (
+        str(row.get("region", "")),
+        delay,
+        str(row.get("universe", "")),
+        str(row.get("dataset_id", "")),
+        str(row.get("field_id", "")),
+    )
 
 
 def _record_from_group(root: Path, capture_path: Path, rows: list[dict[str, Any]], prior: DataLedgerRecord | None = None) -> dict[str, Any]:
@@ -283,6 +344,19 @@ def compile_data_ledger_from_raw(
             manifest = _read_json(selected_capture / "manifest.json")
             rows = _read_jsonl(fields_path, strict_objects=True)
             _validate_raw_rows(rows)
+            scope_outcomes = _latest_scope_outcomes(selected_capture)
+            attempted_scope_keys = set(scope_outcomes)
+            generation_filtered_rows: list[dict[str, Any]] = []
+            for row in rows:
+                scope = row.get("scope") if isinstance(row.get("scope"), dict) else {}
+                scope_key = _scope_key(scope)
+                if scope_key is not None:
+                    attempted_scope_keys.add(scope_key)
+                    outcome = scope_outcomes.get(scope_key)
+                    if outcome is not None and not _row_matches_outcome_generation(row, outcome):
+                        continue
+                generation_filtered_rows.append(row)
+            rows = generation_filtered_rows
             grouped: dict[tuple[str, str, tuple[str, str, int, str] | None], list[dict[str, Any]]] = defaultdict(list)
             for row in rows:
                 field = row.get("field", {}) if isinstance(row.get("field"), dict) else {}
@@ -292,26 +366,51 @@ def compile_data_ledger_from_raw(
             if not grouped:
                 raise ValueError("raw data fields contain no valid rows")
 
-            certification_complete = _capture_certification_complete(manifest)
-            scope_outcomes = _latest_scope_outcomes(selected_capture)
+            certification_complete = _capture_certification_complete(manifest, scope_outcomes)
             source_day = _capture_source_day(manifest, selected_capture)
-            prior_records = {(record.dataset_id, record.field_id): record for record in load_data_ledger(ledger_path)}
+            prior_rows = _read_jsonl(ledger_path)
+            prior_records_by_field: dict[tuple[str, str], DataLedgerRecord] = {}
+            prior_records_by_exact: dict[tuple[str, str, tuple[str, str, int, str]], DataLedgerRecord] = {}
+            for record in load_data_ledger(ledger_path):
+                row = data_ledger_record_to_dict(record)
+                prior_records_by_field.setdefault((record.dataset_id, record.field_id), record)
+                for scope_key in _ledger_row_scope_keys(row):
+                    prior_records_by_exact[(record.dataset_id, record.field_id, scope_key)] = record
             output_rows = []
             for key in sorted(grouped, key=repr):
                 row_scope_keys = [
                     _scope_key(row.get("scope")) if isinstance(row.get("scope"), dict) else None
                     for row in grouped[key]
                 ]
-                measured = certification_complete and all(
+                measured = all(
                     scope_key is not None
                     and (outcome := scope_outcomes.get(scope_key)) is not None
                     and outcome.get("status") == "completed"
                     and outcome.get("certification_status") == "complete"
+                    and all(_row_matches_outcome_generation(row, outcome) for row in grouped[key])
                     for scope_key in row_scope_keys
                 )
-                output_rows.append(_record_from_group(root, fields_path, grouped[key], prior_records.get(key[:2])) | {"coverage_status": "measured_raw" if measured else "partial"})
+                prior = (
+                    prior_records_by_exact.get((key[0], key[1], key[2]))
+                    if key[2] is not None
+                    else None
+                ) or prior_records_by_field.get(key[:2])
+                output_rows.append(_record_from_group(root, fields_path, grouped[key], prior) | {"coverage_status": "measured_raw" if measured else "partial"})
             if not output_rows:
                 raise ValueError("raw data fields contain no valid rows")
+            attempted_field_keys = {
+                (str(row.get("dataset_id", "")), str(row.get("field_id", "")))
+                for row in output_rows
+            }
+            preserved_rows = []
+            for row in prior_rows:
+                scope_keys = _ledger_row_scope_keys(row)
+                field_key = (str(row.get("dataset_id", "")), str(row.get("field_id", "")))
+                if scope_keys and scope_keys.isdisjoint(attempted_scope_keys):
+                    preserved_rows.append(row)
+                elif not scope_keys and field_key not in attempted_field_keys:
+                    preserved_rows.append(row)
+            output_rows = sorted([*preserved_rows, *output_rows], key=_row_sort_key)
             _write_jsonl(ledger_tmp_path, output_rows)
             records = load_data_ledger(ledger_tmp_path)
             write_data_ledger_markdown(markdown_tmp_path, records, generated)

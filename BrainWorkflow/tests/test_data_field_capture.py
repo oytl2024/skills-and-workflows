@@ -112,6 +112,29 @@ class DataFieldCaptureTests(unittest.TestCase):
         self.assertEqual(fields[0]["scope"]["region"], "USA")
         self.assertIn("scope rejected", errors[0]["message"])
 
+    def test_unlimited_capture_with_failed_scope_has_partial_manifest_and_compile_source_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            summary = capture_platform_data_fields(
+                FakeCaptureClient(),
+                root,
+                generated_at="2026-07-16T08:30:00+00:00",
+                instrument_types=["EQUITY"],
+                regions=["USA", "EUR"],
+                delays=[1],
+                universes=["TOP3000"],
+            )
+            capture = Path(summary["capture_dir"])
+            manifest = json.loads((capture / "manifest.json").read_text(encoding="utf-8"))
+            compile_summary = compile_data_ledger_from_raw(
+                root,
+                capture_dir=capture,
+                generated_at="2026-07-16T09:00:00+00:00",
+            )
+
+        self.assertEqual(manifest["certification_status"], "partial")
+        self.assertEqual(compile_summary["source_status"], "partial")
+
     def test_limited_capture_records_requested_matrix_and_is_not_certification_complete(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"

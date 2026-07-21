@@ -88,6 +88,50 @@ class DataCatalogTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in rows], ["field-1", "field-2"])
         self.assertTrue(truncated)
 
+    def test_catalog_payload_rejects_non_list_results(self):
+        client = FakeClient([{"results": {"id": "dataset-1"}}])
+
+        with self.assertRaisesRegex(ValueError, "results.*list"):
+            fetch_data_sets_with_metadata(
+                client,
+                instrument_type="EQUITY",
+                region="USA",
+                delay=1,
+                universe="TOP3000",
+                limit=10,
+                max_records=10,
+            )
+
+    def test_catalog_payload_rejects_non_object_result_entries(self):
+        client = FakeClient([{"results": [{"id": "dataset-1"}, "truncated-row"]}])
+
+        with self.assertRaisesRegex(ValueError, "result entries"):
+            fetch_data_sets_with_metadata(
+                client,
+                instrument_type="EQUITY",
+                region="USA",
+                delay=1,
+                universe="TOP3000",
+                limit=10,
+                max_records=10,
+            )
+
+    def test_catalog_count_greater_than_fetched_rows_reports_truncation(self):
+        client = FakeClient([{"results": [{"id": "dataset-1"}], "count": 2}])
+
+        rows, truncated = fetch_data_sets_with_metadata(
+            client,
+            instrument_type="EQUITY",
+            region="USA",
+            delay=1,
+            universe="TOP3000",
+            limit=10,
+            max_records=10,
+        )
+
+        self.assertEqual([row["id"] for row in rows], ["dataset-1"])
+        self.assertTrue(truncated)
+
     def test_select_seed_fields_skips_grouping_and_sorts(self):
         fields = [
             {"id": "industry", "coverage": 1.0, "alphaCount": 100},

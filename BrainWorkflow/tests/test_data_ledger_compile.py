@@ -88,6 +88,144 @@ class DataLedgerCompileTests(unittest.TestCase):
         self.assertEqual([(row["region"], row["coverage_status"]) for row in rows], [("EUR", "partial"), ("USA", "measured_raw")])
         self.assertTrue(all(len(row["available_scopes"]) == 1 for row in rows))
 
+    def test_compile_does_not_measure_rows_from_prior_partial_generation_after_resume_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+            write_jsonl(capture / "data_fields.jsonl", [
+                {
+                    "capture_generation_id": "generation-a",
+                    "scope": scope,
+                    "data_set": {"id": "fundamental3", "name": "Fundamentals", "category": "fundamental"},
+                    "field": {"id": "field_from_partial_generation", "type": "MATRIX"},
+                },
+                {
+                    "capture_generation_id": "generation-b",
+                    "scope": scope,
+                    "data_set": {"id": "fundamental3", "name": "Fundamentals", "category": "fundamental"},
+                    "field": {"id": "field_from_completed_generation", "type": "MATRIX"},
+                },
+            ])
+            write_jsonl(capture / "scopes.jsonl", [
+                {"capture_generation_id": "generation-a", "scope": scope, "status": "partial", "certification_status": "partial"},
+                {"capture_generation_id": "generation-b", "scope": scope, "status": "completed", "certification_status": "complete"},
+            ])
+            (capture / "manifest.json").write_text(
+                json.dumps({"status": "completed", "certification_status": "complete", "requested_matrix": [scope]}),
+                encoding="utf-8",
+            )
+
+            compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            rows = [json.loads(line) for line in (root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()]
+
+        by_field = {row["field_id"]: row["coverage_status"] for row in rows}
+        self.assertEqual(by_field["field_from_completed_generation"], "measured_raw")
+        self.assertNotEqual(by_field.get("field_from_partial_generation"), "measured_raw")
+
+    def test_targeted_compile_preserves_prior_records_for_unattempted_exact_scopes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            write_jsonl(ledger, [{
+                "dataset_id": "fundamental3",
+                "field_id": "eur_field",
+                "field_type": "MATRIX",
+                "region": "EUR",
+                "delay": 1,
+                "universe": "TOP3000",
+                "semantic_tags": ["cash"],
+                "coverage": 1.0,
+                "alpha_count": 0,
+                "user_count": 0,
+                "simulation_usage_count": 0,
+                "submitted_usage_count": 0,
+                "last_used_at": "",
+                "best_result_label": "unexplored",
+                "correlation_risk": "low",
+                "source_paths": [],
+                "source_quality": "platform_raw_capture",
+                "coverage_status": "measured_raw",
+                "available_scopes": [{"instrument_type": "EQUITY", "region": "EUR", "delay": 1, "universe": "TOP3000"}],
+            }])
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            usa_scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+            write_jsonl(capture / "data_fields.jsonl", [{
+                "capture_generation_id": "generation-usa",
+                "scope": usa_scope,
+                "data_set": {"id": "fundamental3", "name": "Fundamentals", "category": "fundamental"},
+                "field": {"id": "usa_field", "type": "MATRIX"},
+            }])
+            write_jsonl(capture / "scopes.jsonl", [{
+                "capture_generation_id": "generation-usa",
+                "scope": usa_scope,
+                "status": "completed",
+                "certification_status": "complete",
+            }])
+            (capture / "manifest.json").write_text(
+                json.dumps({"status": "completed", "certification_status": "complete", "requested_matrix": [usa_scope]}),
+                encoding="utf-8",
+            )
+
+            compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            rows = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+
+        by_region = {row["region"]: row for row in rows}
+        self.assertEqual(by_region["EUR"]["field_id"], "eur_field")
+        self.assertEqual(by_region["EUR"]["coverage_status"], "measured_raw")
+        self.assertEqual(by_region["USA"]["field_id"], "usa_field")
+
+    def test_targeted_compile_replaces_attempted_scope_with_partial_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            eur_scope = {"instrument_type": "EQUITY", "region": "EUR", "delay": 1, "universe": "TOP3000"}
+            write_jsonl(ledger, [{
+                "dataset_id": "fundamental3",
+                "field_id": "eur_field",
+                "field_type": "MATRIX",
+                "region": "EUR",
+                "delay": 1,
+                "universe": "TOP3000",
+                "semantic_tags": ["cash"],
+                "coverage": 1.0,
+                "alpha_count": 0,
+                "user_count": 0,
+                "simulation_usage_count": 0,
+                "submitted_usage_count": 0,
+                "last_used_at": "",
+                "best_result_label": "unexplored",
+                "correlation_risk": "low",
+                "source_paths": [],
+                "source_quality": "platform_raw_capture",
+                "coverage_status": "measured_raw",
+                "available_scopes": [eur_scope],
+            }])
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            write_jsonl(capture / "data_fields.jsonl", [{
+                "capture_generation_id": "generation-eur",
+                "scope": eur_scope,
+                "data_set": {"id": "fundamental3", "name": "Fundamentals", "category": "fundamental"},
+                "field": {"id": "eur_field", "type": "MATRIX"},
+            }])
+            write_jsonl(capture / "scopes.jsonl", [{
+                "capture_generation_id": "generation-eur",
+                "scope": eur_scope,
+                "status": "partial",
+                "certification_status": "partial",
+            }])
+            (capture / "manifest.json").write_text(
+                json.dumps({"status": "completed_with_warnings", "certification_status": "partial", "requested_matrix": [eur_scope]}),
+                encoding="utf-8",
+            )
+
+            compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            rows = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["region"], "EUR")
+        self.assertEqual(rows[0]["coverage_status"], "partial")
+
     def test_compile_marks_negative_delay_scope_partial(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"

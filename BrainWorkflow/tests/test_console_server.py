@@ -166,6 +166,44 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn('value="option-1"', html)
         self.assertIn("Valid second row", html)
 
+    def test_duplicate_option_ids_and_fallback_collisions_are_rejected(self):
+        cases = (
+            [
+                valid_option(option_id="dup", title="First"),
+                valid_option(option_id="dup", title="Second"),
+            ],
+            [
+                valid_option(title="Fallback option"),
+                valid_option(option_id="option-1", title="Explicit collision"),
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            self._write_start_fixture(paths, {"title": "Power Pool"}, [{
+                "dataset_id": "fundamental3",
+                "field_id": "cash_field",
+                "region": "USA",
+                "delay": 1,
+                "universe": "TOP3000",
+                "source_quality": "platform_raw_capture",
+                "coverage_status": "measured_raw",
+                "compatible_template_ids": ["matrix_ts_zscore_rank"],
+            }])
+            decisions = paths.knowledge_root / "wiki" / "70_decisions"
+            for rows in cases:
+                with self.subTest(rows=[row.get("title") for row in rows]):
+                    (decisions / "research_option_cards.jsonl").write_text(
+                        "".join(json.dumps(row) + "\n" for row in rows),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(ValueError, "duplicate research option id"):
+                        build_action_command(
+                            "workflow-start-from-option",
+                            paths,
+                            {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"},
+                        )
+
     def test_render_proposals_includes_input_form(self):
         html = render_proposals([{"proposal_id": "p1", "title": "Improve template", "status": "proposed"}])
 

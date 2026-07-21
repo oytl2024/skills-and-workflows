@@ -325,13 +325,18 @@ def _capture_platform_data_fields_locked(
         append("scopes.jsonl", scope_row)
 
     latest_scope_rows = _latest_scope_rows(capture_dir)
+    all_requested_scopes_certified = bool(requested_scopes) and all(
+        (latest := latest_scope_rows.get(_scope_key(scope))) is not None
+        and latest.get("status") == "completed"
+        and latest.get("certification_status") == "complete"
+        for scope in requested_scopes
+    )
     unresolved_scope_rows = [
         latest_scope_rows.get(_scope_key(scope), {})
         for scope in scopes
         if latest_scope_rows.get(_scope_key(scope), {}).get("status") != "completed"
     ]
     error_count = _unresolved_scope_error_count(unresolved_scope_rows) + (0 if operator_fetch_succeeded else 1)
-    reused_complete_scopes = bool(scopes) and all(_scope_key(scope) in completed_scopes for scope in scopes)
     summary = {
         "generated_at": generated,
         "capture_generation_id": capture_generation_id,
@@ -350,7 +355,7 @@ def _capture_platform_data_fields_locked(
             "max_fields_per_dataset": int(max_fields_per_dataset),
         },
         "latest_scope_outcomes": [latest_scope_rows[key] for key in sorted(latest_scope_rows)],
-        "certification_status": "complete" if certification_complete or reused_complete_scopes else "partial",
+        "certification_status": "complete" if all_requested_scopes_certified else "partial",
     }
     _write_json(capture_dir / "manifest.json", summary)
     errors_path = capture_dir / "errors.jsonl"

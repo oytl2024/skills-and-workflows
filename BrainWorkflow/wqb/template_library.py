@@ -54,8 +54,8 @@ def template_record_to_dict(record: TemplateRecord) -> dict[str, Any]:
     return asdict(record)
 
 
-def _template_from_dict(row: dict[str, Any]) -> TemplateRecord:
-    """Input: dict row. Output: TemplateRecord. Normalize one JSONL row from the template library."""
+def template_record_from_dict(row: dict[str, Any]) -> TemplateRecord:
+    """Input: dict row. Output: TemplateRecord. Normalize one JSON-safe template row."""
     return TemplateRecord(
         template_id=str(row.get("template_id", "")),
         hypothesis=str(row.get("hypothesis", "")),
@@ -81,6 +81,11 @@ def _template_from_dict(row: dict[str, Any]) -> TemplateRecord:
         known_antipatterns=[str(item) for item in row.get("known_antipatterns", []) if str(item)],
         crowded_variants=[str(item) for item in row.get("crowded_variants", []) if str(item)],
     )
+
+
+def _template_from_dict(row: dict[str, Any]) -> TemplateRecord:
+    """Input: dict row. Output: TemplateRecord. Keep the legacy private loader adapter."""
+    return template_record_from_dict(row)
 
 
 def load_template_library(path: Path) -> list[TemplateRecord]:

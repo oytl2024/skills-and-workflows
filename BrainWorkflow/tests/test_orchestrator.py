@@ -34,6 +34,25 @@ from wqb.workflow_state import (
 )
 
 
+def valid_option_row(**overrides):
+    """Input: optional overrides dict. Output: option-card dict. Build a strict workflow option fixture."""
+    row = {
+        "title": "Power Pool",
+        "primary_incentive": "power_pool",
+        "secondary_incentives": [],
+        "why_now": "Fresh measured coverage is available.",
+        "candidate_scope": "USA D1 TOP3000",
+        "expected_asset_value": "A measured research direction.",
+        "correlation_risk": "low",
+        "resource_cost": "small",
+        "evidence": [{"source_type": "ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "title": "Ledger", "timestamp": "2026-07-16"}],
+        "failure_modes": [],
+        "decision_needed": "Start the selected scope.",
+        "score": {"total": 1.0, "components": {}, "penalties": {}, "reasons": ["measured coverage"]},
+    }
+    return {**row, **overrides}
+
+
 class WorkflowOrchestratorTests(unittest.TestCase):
     def paths(self, root: Path) -> OrchestratorPaths:
         return OrchestratorPaths(
@@ -41,6 +60,76 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             workflow_root=root / "BrainWorkflow",
             knowledge_root=root / "knowledge",
             run_root=root / "runs",
+        )
+
+    def write_start_artifacts(
+        self,
+        root: Path,
+        option_rows: list[dict[str, object]],
+        ledger_rows: list[dict[str, object]] | None = None,
+        template_rows: list[dict[str, object]] | None = None,
+    ) -> None:
+        """Input: root, option, ledger, template rows. Output: none. Write start-gate artifacts."""
+        knowledge = root / "knowledge"
+        decisions = knowledge / "wiki" / "70_decisions"
+        decisions.mkdir(parents=True, exist_ok=True)
+        (decisions / "research_option_cards.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in option_rows),
+            encoding="utf-8",
+        )
+        ledger = knowledge / "wiki" / "20_semantics" / "data_ledger.jsonl"
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        default_ledger_rows = [
+            {
+                "dataset_id": "fundamental3",
+                "dataset_name": "Fundamentals",
+                "field_id": "cash_field",
+                "field_type": "MATRIX",
+                "region": "USA",
+                "delay": 1,
+                "universe": "TOP3000",
+                "semantic_tags": ["cash", "power_pool"],
+                "coverage": 1.0,
+                "alpha_count": 0,
+                "user_count": 0,
+                "simulation_usage_count": 0,
+                "submitted_usage_count": 0,
+                "last_used_at": "",
+                "best_result_label": "unexplored",
+                "correlation_risk": "low",
+                "source_paths": [],
+                "source_quality": "platform_raw_capture",
+                "coverage_status": "measured_raw",
+                "available_scopes": [{"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}],
+                "compatible_template_ids": ["matrix_ts_zscore_rank"],
+            }
+        ]
+        ledger.write_text(
+            "".join(json.dumps(row) + "\n" for row in (ledger_rows or default_ledger_rows)),
+            encoding="utf-8",
+        )
+        templates = knowledge / "wiki" / "30_templates" / "template_library.jsonl"
+        templates.parent.mkdir(parents=True, exist_ok=True)
+        default_template_rows = [
+            {
+                "template_id": "matrix_ts_zscore_rank",
+                "hypothesis": "Rank a z-scored matrix field.",
+                "skeleton": "rank(ts_zscore({field}, 20))",
+                "required_field_types": ["MATRIX"],
+                "compatible_semantic_tags": ["cash", "power_pool"],
+                "operator_tags": ["rank", "ts_zscore"],
+                "status": "discovery_ready",
+                "correlation_risk": "low",
+                "repair_levers": [],
+                "source_paths": [],
+                "compatible_regions": ["USA"],
+                "compatible_delays": [1],
+                "compatible_universes": ["TOP3000"],
+            }
+        ]
+        templates.write_text(
+            "".join(json.dumps(row) + "\n" for row in (template_rows or default_template_rows)),
+            encoding="utf-8",
         )
 
     def advance_to_candidate_gate(self, started: dict[str, object]) -> None:
@@ -157,12 +246,15 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             knowledge = root / "knowledge"
             decisions = knowledge / "wiki" / "70_decisions"
             decisions.mkdir(parents=True)
-            (decisions / "research_option_cards.jsonl").write_text(json.dumps({
-                "option_id": "option-1",
-                "title": "Build Genius and Osmosis alpha pool",
-                "primary_incentive": "cash",
-                "candidate_scope": "Generate a later concrete plan across multiple region-delay scopes after user selection.",
-            }) + "\n", encoding="utf-8")
+            (decisions / "research_option_cards.jsonl").write_text(
+                json.dumps(valid_option_row(
+                    option_id="option-1",
+                    title="Build Genius and Osmosis alpha pool",
+                    primary_incentive="cash",
+                    candidate_scope="Generate a later concrete plan across multiple region-delay scopes after user selection.",
+                )) + "\n",
+                encoding="utf-8",
+            )
             ledger = knowledge / "wiki" / "20_semantics" / "data_ledger.jsonl"
             ledger.parent.mkdir(parents=True)
             ledger.write_text(json.dumps({
@@ -170,6 +262,8 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 "region": "USA", "delay": 1, "universe": "TOP3000", "semantic_tags": ["cash"], "coverage": 1.0,
                 "alpha_count": 0, "user_count": 0, "simulation_usage_count": 0, "submitted_usage_count": 0,
                 "last_used_at": "", "best_result_label": "unexplored", "correlation_risk": "low", "source_paths": [],
+                "source_quality": "platform_raw_capture", "coverage_status": "measured_raw",
+                "compatible_template_ids": ["matrix_ts_zscore_rank"],
                 "available_scopes": [
                     {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"},
                     {"instrument_type": "EQUITY", "region": "EUR", "delay": 0, "universe": "TOP500"},
@@ -200,6 +294,92 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(created_event.payload["selected_scope"], manifest["selected_scope"])
         self.assertEqual((schedule["region"], schedule["delay"], schedule["universe"]), ("USA", 1, "TOP3000"))
         self.assertEqual([row["field_id"] for row in schedule["selected_data"]], ["cash_field"])
+
+    def test_start_snapshot_binds_option_and_ledger_when_current_files_change_before_continue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_start_artifacts(
+                root,
+                [
+                    {},
+                    valid_option_row(title="Persisted valid option", primary_incentive="cash"),
+                ],
+            )
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+
+            started = orchestrator.start(
+                "Persisted valid option | scope: USA D1 TOP3000",
+                "option-1",
+                "2026-07-12T00:00:00Z",
+                selected_scope={"region": "USA", "delay": 1, "universe": "TOP3000"},
+            )
+            run_dir = Path(str(started["run_dir"]))
+            manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+            self.write_start_artifacts(
+                root,
+                [valid_option_row(option_id="option-1", title="Mutated option", primary_incentive="cash")],
+                ledger_rows=[{
+                    "dataset_id": "fundamental3",
+                    "dataset_name": "Fundamentals",
+                    "field_id": "mutated_field",
+                    "field_type": "MATRIX",
+                    "region": "USA",
+                    "delay": 1,
+                    "universe": "TOP3000",
+                    "semantic_tags": ["cash"],
+                    "coverage": 1.0,
+                    "alpha_count": 0,
+                    "user_count": 0,
+                    "simulation_usage_count": 0,
+                    "submitted_usage_count": 0,
+                    "last_used_at": "",
+                    "best_result_label": "unexplored",
+                    "correlation_risk": "low",
+                    "source_paths": [],
+                    "source_quality": "platform_raw_capture",
+                    "coverage_status": "partial",
+                    "available_scopes": [{"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}],
+                    "compatible_template_ids": ["matrix_ts_zscore_rank"],
+                }],
+            )
+            orchestrator.continue_once("2026-07-12T00:01:00Z")
+            result = orchestrator.continue_once("2026-07-12T00:02:00Z")
+            schedule = json.loads((run_dir / "stages" / "schedule" / "research_schedule.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(manifest["start_snapshot"]["selected_option"]["title"], "Persisted valid option")
+        self.assertEqual(result["current_stage"], "scout_seed")
+        self.assertEqual(schedule["option_title"], "Persisted valid option")
+        self.assertEqual([row["field_id"] for row in schedule["selected_data"]], ["cash_field"])
+
+    def test_schedule_fails_when_bound_start_snapshot_is_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_start_artifacts(root, [valid_option_row()])
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start(
+                "Power Pool | scope: USA D1 TOP3000",
+                "option-1",
+                "2026-07-12T00:00:00Z",
+                selected_scope={"region": "USA", "delay": 1, "universe": "TOP3000"},
+            )
+            run_dir = Path(str(started["run_dir"]))
+            manifest_path = run_dir / "run_manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["start_snapshot"] = {
+                "artifact_binding_version": 1,
+                "selected_option": manifest.get("start_snapshot", {}).get("selected_option", valid_option_row(option_id="option-1")),
+                "selected_scope": {"region": "USA", "delay": 1, "universe": "TOP3000"},
+                "template_rows": [],
+            }
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+            orchestrator.continue_once("2026-07-12T00:01:00Z")
+            result = orchestrator.continue_once("2026-07-12T00:02:00Z")
+            state = load_run_state(run_dir / "run_state.json")
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(state.stages["schedule"].status, "failed")
+        self.assertIn("start snapshot", state.stages["schedule"].blocker)
 
     def test_start_keeps_user_controlled_timestamp_run_directory_inside_run_root(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -646,7 +826,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             decisions = root / "knowledge" / "wiki" / "70_decisions"
             decisions.mkdir(parents=True)
             (decisions / "research_option_cards.jsonl").write_text(
-                '{"option_id":"option-1","title":"Power Pool","scope":"USA D1","score":{"total":10}}\n',
+                json.dumps(valid_option_row(option_id="option-1", score={"total": 10.0, "components": {}, "penalties": {}, "reasons": ["measured coverage"]})) + "\n",
                 encoding="utf-8",
             )
             orchestrator = WorkflowOrchestrator(self.paths(root))
@@ -663,7 +843,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             decisions = root / "knowledge" / "wiki" / "70_decisions"
             decisions.mkdir(parents=True)
             (decisions / "research_option_cards.jsonl").write_text(
-                '{"option_id":"option-1","title":"Power Pool","scope":"USA D1","score":{"total":10}}\n',
+                json.dumps(valid_option_row(option_id="option-1", score={"total": 10.0, "components": {}, "penalties": {}, "reasons": ["measured coverage"]})) + "\n",
                 encoding="utf-8",
             )
             orchestrator = WorkflowOrchestrator(self.paths(root))
@@ -1362,7 +1542,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             decisions = root / "knowledge" / "wiki" / "70_decisions"
             decisions.mkdir(parents=True)
             (decisions / "research_option_cards.jsonl").write_text(
-                '{"option_id":"option-1","title":"Power Pool","scope":"USA D1"}\n', encoding="utf-8"
+                json.dumps(valid_option_row(option_id="option-1")) + "\n", encoding="utf-8"
             )
             orchestrator = WorkflowOrchestrator(self.paths(root))
             started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
@@ -1400,7 +1580,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
     def test_schedule_adapter_errors_are_persisted_as_failed_state_and_event(self):
         cases = (
             ("missing options", None, "option-1"),
-            ("unknown option", '{"option_id":"option-1","title":"Power Pool","scope":"USA D1"}\n', "missing"),
+            ("unknown option", json.dumps(valid_option_row(option_id="option-1")) + "\n", "missing"),
         )
         for label, option_rows, selected_id in cases:
             with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
@@ -1430,7 +1610,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             decisions = root / "knowledge" / "wiki" / "70_decisions"
             decisions.mkdir(parents=True)
             (decisions / "research_option_cards.jsonl").write_text(
-                '{"option_id":"option-1","title":"Power Pool","scope":"USA D1"}\n',
+                json.dumps(valid_option_row(option_id="option-1")) + "\n",
                 encoding="utf-8",
             )
             orchestrator = WorkflowOrchestrator(self.paths(root))
@@ -1482,7 +1662,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 decisions = root / "knowledge" / "wiki" / "70_decisions"
                 decisions.mkdir(parents=True)
                 (decisions / "research_option_cards.jsonl").write_text(
-                    '{"option_id":"option-1","title":"Power Pool","scope":"USA D1"}\n',
+                    json.dumps(valid_option_row(option_id="option-1")) + "\n",
                     encoding="utf-8",
                 )
                 orchestrator = WorkflowOrchestrator(self.paths(root))

@@ -31,7 +31,7 @@ from wqb.research_record import (
     write_research_record,
 )
 from wqb.workflow_events import append_workflow_event, read_workflow_events
-from wqb.workflow_stage_adapters import POST_SCHEDULE_STAGES, advance_post_schedule_stage, schedule_research_stage
+from wqb.workflow_stage_adapters import POST_SCHEDULE_STAGES, advance_post_schedule_stage, create_start_snapshot, schedule_research_stage
 from wqb.workflow_state import (
     STATE_FILENAME,
     WorkflowRunState,
@@ -135,7 +135,6 @@ class WorkflowOrchestrator:
         run_dir = resolved_run_root / run_id
         if Path(run_id).name != run_id or run_dir.resolve().parent != resolved_run_root:
             raise ValueError("workflow run directory must be an immediate child of run_root")
-        run_dir.mkdir(parents=True, exist_ok=False)
         manifest = {
             "run_id": run_id,
             "objective": str(objective),
@@ -155,6 +154,12 @@ class WorkflowOrchestrator:
             if not scope["region"] or scope["delay"] < 0 or not scope["universe"]:
                 raise ValueError("selected workflow scope must include region, delay, and universe")
             manifest["selected_scope"] = scope
+            manifest["start_snapshot"] = create_start_snapshot(
+                self.paths.knowledge_root,
+                str(selected_option_id),
+                scope,
+            )
+        run_dir.mkdir(parents=True, exist_ok=False)
         (run_dir / "run_manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
         )

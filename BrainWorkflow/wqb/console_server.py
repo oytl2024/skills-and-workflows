@@ -14,13 +14,13 @@ from wqb.console_jobs import create_job, finish_job, run_job
 from wqb.console_proposals import create_proposal_from_form
 from wqb.console_state import ConsolePaths, default_console_paths, load_console_state
 from wqb.data_ledger import DataLedgerRecord
-from wqb.principle_model import OptionCard, ScoreBreakdown, SourceEvidence, validate_option_card
+from wqb.option_cards import fallback_option_id, normalize_option_card_row, normalize_option_card_rows
 from wqb.template_library import load_template_library, select_templates_for_data
 
 
 def _fallback_option_id(index: int) -> str:
     """Input: valid option order. Output: fallback option ID. Normalize cards without durable IDs."""
-    return f"option-{index}"
+    return fallback_option_id(index)
 
 
 def _html_page(title: str, body: str) -> str:
@@ -77,67 +77,12 @@ def _render_option_controls(cards: list[dict[str, Any]]) -> str:
 
 def _normalized_option_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Input: option-card rows. Output: validated normalized rows. Skip malformed durable option cards."""
-    normalized_rows: list[dict[str, Any]] = []
-    for row in rows:
-        normalized = _normalize_option_row(row, len(normalized_rows) + 1)
-        if normalized is not None:
-            normalized_rows.append(normalized)
-    return normalized_rows
+    return normalize_option_card_rows(rows)
 
 
 def _normalize_option_row(row: dict[str, Any], fallback_index: int) -> dict[str, Any] | None:
     """Input: one option row and valid-row index. Output: normalized row or none. Validate persisted option-card structure."""
-    try:
-        secondary_incentives = row.get("secondary_incentives")
-        failure_modes = row.get("failure_modes")
-        evidence_rows = row.get("evidence")
-        score_row = row.get("score")
-        if not all(isinstance(value, list) for value in (secondary_incentives, failure_modes, evidence_rows)):
-            return None
-        if not isinstance(score_row, dict) or not all(isinstance(value, str) for value in secondary_incentives + failure_modes):
-            return None
-        evidence = [
-            SourceEvidence(
-                source_type=str(item["source_type"]), path=str(item["path"]),
-                title=str(item["title"]), timestamp=str(item["timestamp"]),
-                stale=bool(item.get("stale", False)), note=str(item.get("note", "")),
-            )
-            for item in evidence_rows
-            if isinstance(item, dict)
-            and all(isinstance(item.get(name), str) and item[name].strip() for name in ("source_type", "path", "title", "timestamp"))
-        ]
-        if len(evidence) != len(evidence_rows):
-            return None
-        reasons = score_row.get("reasons")
-        components = score_row.get("components")
-        penalties = score_row.get("penalties")
-        total = score_row.get("total")
-        if (
-            not isinstance(reasons, list)
-            or not all(isinstance(item, str) for item in reasons)
-            or not isinstance(components, dict)
-            or not isinstance(penalties, dict)
-            or isinstance(total, bool)
-            or not isinstance(total, (int, float))
-        ):
-            return None
-        required_text = ("title", "primary_incentive", "why_now", "candidate_scope", "expected_asset_value", "correlation_risk", "resource_cost", "decision_needed")
-        if not all(isinstance(row.get(name), str) and row[name].strip() for name in required_text):
-            return None
-        card = OptionCard(
-            title=row["title"], primary_incentive=row["primary_incentive"], secondary_incentives=secondary_incentives,
-            why_now=row["why_now"], candidate_scope=row["candidate_scope"], expected_asset_value=row["expected_asset_value"],
-            correlation_risk=row["correlation_risk"], resource_cost=row["resource_cost"], evidence=evidence,
-            failure_modes=failure_modes, decision_needed=row["decision_needed"],
-            score=ScoreBreakdown(float(total), components, penalties, reasons),
-        )
-        validate_option_card(card)
-    except (AttributeError, KeyError, TypeError, ValueError):
-        return None
-    normalized = dict(row)
-    option_id = normalized.get("option_id")
-    normalized["option_id"] = option_id.strip() if isinstance(option_id, str) and option_id.strip() else _fallback_option_id(fallback_index)
-    return normalized
+    return normalize_option_card_row(row, fallback_index)
 
 
 def _render_scope_controls(scopes: list[dict[str, Any]]) -> str:
