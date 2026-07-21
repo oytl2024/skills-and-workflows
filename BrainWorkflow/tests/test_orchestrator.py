@@ -55,7 +55,11 @@ def valid_option_row(**overrides):
 
 
 class WorkflowOrchestratorTests(unittest.TestCase):
-    def paths(self, root: Path) -> OrchestratorPaths:
+    def paths(self, root: Path, bootstrap_start_artifacts: bool = True) -> OrchestratorPaths:
+        """Input: temp root and bootstrap flag. Output: paths. Provide valid default start artifacts for new runs."""
+        option_path = root / "knowledge" / "wiki" / "70_decisions" / "research_option_cards.jsonl"
+        if bootstrap_start_artifacts and not option_path.exists():
+            self.write_start_artifacts(root, [valid_option_row(option_id="option-1")])
         return OrchestratorPaths(
             project_root=root,
             workflow_root=root / "BrainWorkflow",
@@ -257,7 +261,18 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "knowledge").mkdir()
-            orchestrator = WorkflowOrchestrator(self.paths(root))
+            orchestrator = WorkflowOrchestrator(self.paths(root, bootstrap_start_artifacts=False))
+
+            with self.assertRaisesRegex(ValueError, "research option cards"):
+                orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+
+            run_dirs = [path for path in (root / "runs").glob("*") if path.is_dir()]
+            self.assertEqual(run_dirs, [])
+
+    def test_start_rejects_new_run_when_knowledge_root_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root, bootstrap_start_artifacts=False))
 
             with self.assertRaisesRegex(ValueError, "research option cards"):
                 orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
@@ -1661,23 +1676,28 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(approved.next_action, "workflow-continue")
 
     def test_schedule_adapter_errors_are_persisted_as_failed_state_and_event(self):
+        def remove_snapshot_option(manifest: dict[str, object]) -> dict[str, object]:
+            """Input: manifest dict. Output: manifest. Corrupt the bound option payload."""
+            snapshot = dict(manifest.get("start_snapshot", {})) if isinstance(manifest.get("start_snapshot"), dict) else {}
+            snapshot.pop("selected_option", None)
+            return {**manifest, "start_snapshot": snapshot}
+
+        def mismatch_selected_option(manifest: dict[str, object]) -> dict[str, object]:
+            """Input: manifest dict. Output: manifest. Corrupt selected option identity after start."""
+            return {**manifest, "selected_option_id": "missing"}
+
         cases = (
-            ("missing options", None, "option-1", False),
-            ("unknown option", json.dumps(valid_option_row(option_id="option-1")) + "\n", "missing", True),
+            ("missing snapshot option", remove_snapshot_option),
+            ("option mismatch", mismatch_selected_option),
         )
-        for label, option_rows, selected_id, write_options_after_start in cases:
+        for label, mutate_manifest in cases:
             with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
-                if option_rows is not None and not write_options_after_start:
-                    decisions = root / "knowledge" / "wiki" / "70_decisions"
-                    decisions.mkdir(parents=True)
-                    (decisions / "research_option_cards.jsonl").write_text(option_rows, encoding="utf-8")
                 orchestrator = WorkflowOrchestrator(self.paths(root))
-                started = orchestrator.start("Power Pool", selected_id, "2026-07-12T00:00:00Z")
-                if option_rows is not None and write_options_after_start:
-                    decisions = root / "knowledge" / "wiki" / "70_decisions"
-                    decisions.mkdir(parents=True)
-                    (decisions / "research_option_cards.jsonl").write_text(option_rows, encoding="utf-8")
+                started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+                manifest_path = Path(started["run_dir"]) / "run_manifest.json"
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest_path.write_text(json.dumps(mutate_manifest(manifest), indent=2), encoding="utf-8")
                 orchestrator.continue_once("2026-07-12T00:01:00Z")
 
                 summary = orchestrator.continue_once("2026-07-12T00:02:00Z")

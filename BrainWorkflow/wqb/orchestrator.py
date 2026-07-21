@@ -142,14 +142,13 @@ class WorkflowOrchestrator:
             "created_at": str(created_at),
             "knowledge_root": str(self.paths.knowledge_root),
         }
-        if selected_scope is not None or self.paths.knowledge_root.exists():
-            snapshot = create_start_snapshot(
-                self.paths.knowledge_root,
-                str(selected_option_id),
-                selected_scope,
-            )
-            manifest["selected_scope"] = dict(snapshot["selected_scope"])
-            manifest["start_snapshot"] = snapshot
+        snapshot = create_start_snapshot(
+            self.paths.knowledge_root,
+            str(selected_option_id),
+            selected_scope,
+        )
+        manifest["selected_scope"] = dict(snapshot["selected_scope"])
+        manifest["start_snapshot"] = snapshot
         run_dir.mkdir(parents=True, exist_ok=False)
         (run_dir / "run_manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
