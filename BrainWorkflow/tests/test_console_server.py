@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -118,8 +119,9 @@ class ConsoleServerTests(unittest.TestCase):
             paths = make_paths(root)
             artifact = paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
             artifact.parent.mkdir(parents=True)
+            fresh_date = date.today().isoformat()
             artifact.write_text(
-                json.dumps({"dataset_id": "fundamental3", "field_id": "cash_field", "field_type": "MATRIX", "region": "USA", "delay": 1, "universe": "TOP3000", "source_quality": "platform_raw_capture", "coverage_status": "measured_raw", "compatible_template_ids": ["matrix_ts_zscore_rank"]}) + "\n",
+                json.dumps({"dataset_id": "fundamental3", "field_id": "cash_field", "field_type": "MATRIX", "region": "USA", "delay": 1, "universe": "TOP3000", "semantic_tags": ["cash"], "coverage": 1.0, "source_updated_at": fresh_date, "source_quality": "platform_raw_capture", "coverage_status": "measured_raw", "compatible_template_ids": ["matrix_ts_zscore_rank"]}) + "\n",
                 encoding="utf-8",
             )
             maintenance = paths.knowledge_root / "wiki" / "80_maintenance"
@@ -127,7 +129,7 @@ class ConsoleServerTests(unittest.TestCase):
             (maintenance / "freshness_manifest.json").write_text(
                 json.dumps(
                     [
-                        {"name": name, "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7}
+                        {"name": name, "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": fresh_date, "max_age_days": 7}
                         for name in ("data_ledger", "template_library", "benchmark_rules", "activity_snapshot", "operator_catalog", "research_option_cards")
                     ]
                 ),
@@ -439,7 +441,17 @@ class ConsoleServerTests(unittest.TestCase):
         """Input: console paths, option, ledger rows. Output: none. Write valid freshness and start artifacts."""
         ledger = paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
         ledger.parent.mkdir(parents=True, exist_ok=True)
-        rows = [{"field_type": "MATRIX", "semantic_tags": ["cash"], **row} for row in ledger_rows]
+        fresh_date = date.today().isoformat()
+        rows = [
+            {
+                "field_type": "MATRIX",
+                "semantic_tags": ["cash"],
+                "coverage": 1.0,
+                "source_updated_at": fresh_date,
+                **row,
+            }
+            for row in ledger_rows
+        ]
         ledger.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
         template_path = paths.knowledge_root / "wiki" / "30_templates" / "template_library.jsonl"
         template_path.parent.mkdir(parents=True, exist_ok=True)
@@ -449,7 +461,7 @@ class ConsoleServerTests(unittest.TestCase):
         maintenance.mkdir(parents=True, exist_ok=True)
         (maintenance / "freshness_manifest.json").write_text(
             json.dumps([
-                {"name": name, "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7}
+                {"name": name, "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": fresh_date, "max_age_days": 7}
                 for name in ("data_ledger", "template_library", "benchmark_rules", "activity_snapshot", "operator_catalog", "research_option_cards")
             ]),
             encoding="utf-8",
@@ -471,6 +483,29 @@ class ConsoleServerTests(unittest.TestCase):
             paths = make_paths(Path(tmp))
             base = {"dataset_id": "fundamental3", "field_id": "cash_field", "region": "USA", "delay": 1, "universe": "TOP3000", "compatible_template_ids": ["matrix_ts_zscore_rank"]}
             for invalid in ({**base, "coverage_status": "measured_raw"}, {**base, "source_quality": "unknown", "coverage_status": "measured_raw"}, {**base, "source_quality": "platform_raw_capture", "coverage_status": "unknown"}):
+                self._write_start_fixture(paths, {"title": "Power Pool"}, [invalid])
+                with self.assertRaisesRegex(ValueError, "data coverage"):
+                    build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
+
+    def test_build_action_command_requires_positive_coverage_and_fresh_source_date(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            base = {
+                "dataset_id": "fundamental3",
+                "field_id": "cash_field",
+                "region": "USA",
+                "delay": 1,
+                "universe": "TOP3000",
+                "source_quality": "platform_raw_capture",
+                "coverage_status": "measured_raw",
+                "compatible_template_ids": ["matrix_ts_zscore_rank"],
+            }
+            stale_date = (date.today() - timedelta(days=30)).isoformat()
+            for invalid in (
+                {**base, "coverage": 0.0, "source_updated_at": date.today().isoformat()},
+                {**base, "source_updated_at": ""},
+                {**base, "source_updated_at": stale_date},
+            ):
                 self._write_start_fixture(paths, {"title": "Power Pool"}, [invalid])
                 with self.assertRaisesRegex(ValueError, "data coverage"):
                     build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})

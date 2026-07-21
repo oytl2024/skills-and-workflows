@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 import re
 from typing import Any
@@ -10,6 +10,7 @@ from wqb.data_ledger import data_ledger_record_from_dict, load_data_ledger
 from wqb.option_cards import option_card_from_row, read_option_card_jsonl
 from wqb.principle_model import OptionCard
 from wqb.research_scheduler import build_research_schedule, research_schedule_to_dict, write_research_schedule
+from wqb.run_readiness import evaluate_run_readiness
 from wqb.template_library import load_template_library, select_templates_for_data, template_record_from_dict
 
 
@@ -146,6 +147,39 @@ def _row_matches_scope(row: dict[str, Any], scope: dict[str, Any]) -> bool:
         return False
 
 
+def _require_start_snapshot_readiness(knowledge: Path, scope: dict[str, Any]) -> None:
+    """Input: knowledge root and scope. Output: none. Enforce strict readiness before binding a snapshot."""
+    report = evaluate_run_readiness(
+        knowledge,
+        mode="research",
+        batch_size=30,
+        live_api_enabled=True,
+        region=str(scope["region"]),
+        delay=int(scope["delay"]),
+        universe=str(scope["universe"]),
+    )
+    if report.blocked:
+        codes = ", ".join(issue.code for issue in report.issues if issue.level == "block") or "blocked"
+        raise ValueError(f"start snapshot readiness blocked: {codes}")
+
+
+def _row_has_positive_coverage(row: dict[str, Any]) -> bool:
+    """Input: ledger row. Output: bool. Validate measured row coverage is positive."""
+    try:
+        return float(row.get("coverage", 0.0)) > 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _row_has_source_date(row: dict[str, Any]) -> bool:
+    """Input: ledger row. Output: bool. Validate raw-source date shape for immutable snapshots."""
+    try:
+        date.fromisoformat(str(row.get("source_updated_at", "")))
+    except ValueError:
+        return False
+    return True
+
+
 def _validate_start_artifact_rows(
     option: dict[str, Any],
     scope: dict[str, Any],
@@ -165,6 +199,10 @@ def _validate_start_artifact_rows(
             raise ValueError("start snapshot data ledger row does not match selected scope")
         if row.get("source_quality") != "platform_raw_capture" or row.get("coverage_status") != "measured_raw":
             raise ValueError("start snapshot data ledger rows must be measured platform coverage")
+        if not _row_has_positive_coverage(row):
+            raise ValueError("start snapshot data ledger rows must have positive measured coverage")
+        if not _row_has_source_date(row):
+            raise ValueError("start snapshot data ledger rows must include source_updated_at")
         row_template_ids = row.get("compatible_template_ids")
         if not isinstance(row_template_ids, list) or not row_template_ids:
             raise ValueError("start snapshot data ledger rows must include compatible template IDs")
@@ -203,6 +241,7 @@ def create_start_snapshot(
         scope = _validate_scope({"region": region, "delay": delay, "universe": universe})
     else:
         scope = _validate_scope(selected_scope)
+    _require_start_snapshot_readiness(knowledge, scope)
     ledger_rows = [
         row
         for row in _read_jsonl_objects(knowledge / "wiki" / "20_semantics" / "data_ledger.jsonl")
@@ -221,6 +260,8 @@ def create_start_snapshot(
         "gate_metadata": {
             "required_source_quality": "platform_raw_capture",
             "required_coverage_status": "measured_raw",
+            "required_positive_coverage": True,
+            "required_source_updated_at": True,
         },
     }
 

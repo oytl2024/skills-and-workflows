@@ -140,12 +140,42 @@ def _data_coverage_summary(knowledge_root: Path) -> dict[str, Any]:
     }
 
 
+def _data_ledger_max_age_days(knowledge_root: Path) -> int | None:
+    """Input: knowledge root. Output: optional max age. Read scoped data-ledger freshness policy."""
+    manifest = knowledge_root / "wiki" / "80_maintenance" / "freshness_manifest.json"
+    try:
+        records = load_freshness_manifest(manifest, strict=True)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    for record in records:
+        if record.name == "data_ledger":
+            return int(record.max_age_days)
+    return None
+
+
+def _row_is_startable(row: dict[str, Any], current: date, max_age_days: int | None) -> bool:
+    """Input: data ledger row and freshness policy. Output: bool. Filter selectable measured scopes."""
+    if max_age_days is None or max_age_days <= 0:
+        return False
+    if row.get("source_quality") != "platform_raw_capture" or row.get("coverage_status") != "measured_raw":
+        return False
+    try:
+        if float(row.get("coverage", 0.0)) <= 0.0:
+            return False
+        source_date = date.fromisoformat(str(row.get("source_updated_at", "")))
+    except (TypeError, ValueError):
+        return False
+    return (current - source_date).days <= max_age_days
+
+
 def _startable_scopes(knowledge_root: Path) -> list[dict[str, Any]]:
     """Input: knowledge root. Output: concrete scope rows. Read measured ledger scopes suitable for console selection."""
     rows = _read_jsonl(knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl")
     scopes: set[tuple[str, int, str]] = set()
+    current = date.today()
+    max_age_days = _data_ledger_max_age_days(knowledge_root)
     for row in rows:
-        if row.get("source_quality") != "platform_raw_capture" or row.get("coverage_status") != "measured_raw":
+        if not _row_is_startable(row, current, max_age_days):
             continue
         if "available_scopes" in row:
             exact_scopes = row.get("available_scopes")

@@ -2,6 +2,7 @@ import csv
 import json
 import tempfile
 import unittest
+from datetime import date
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -79,6 +80,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         )
         ledger = knowledge / "wiki" / "20_semantics" / "data_ledger.jsonl"
         ledger.parent.mkdir(parents=True, exist_ok=True)
+        fresh_date = date.today().isoformat()
         default_ledger_rows = [
             {
                 "dataset_id": "fundamental3",
@@ -100,7 +102,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 "source_paths": [],
                 "source_quality": "platform_raw_capture",
                 "coverage_status": "measured_raw",
-                "source_updated_at": "2026-07-16",
+                "source_updated_at": fresh_date,
                 "available_scopes": [{"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}],
                 "compatible_template_ids": ["matrix_ts_zscore_rank"],
             }
@@ -130,6 +132,15 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         ]
         templates.write_text(
             "".join(json.dumps(row) + "\n" for row in (template_rows or default_template_rows)),
+            encoding="utf-8",
+        )
+        maintenance = knowledge / "wiki" / "80_maintenance"
+        maintenance.mkdir(parents=True, exist_ok=True)
+        (maintenance / "freshness_manifest.json").write_text(
+            json.dumps([
+                {"name": name, "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": fresh_date, "max_age_days": 7}
+                for name in ("data_ledger", "template_library", "benchmark_rules", "activity_snapshot")
+            ]),
             encoding="utf-8",
         )
 
@@ -199,6 +210,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self, root: Path
     ) -> tuple[WorkflowOrchestrator, dict[str, object]]:
         """Input: temp root Path. Output: orchestrator and run summary. Create one queued candidate."""
+        self.write_start_artifacts(root, [valid_option_row(option_id="option-1")])
         orchestrator = WorkflowOrchestrator(self.paths(root))
         started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
         candidate = {
@@ -241,6 +253,18 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(state.objective, "Power Pool")
         self.assertEqual(active["run_id"], result["run_id"])
 
+    def test_start_rejects_new_run_when_knowledge_exists_without_option_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "knowledge").mkdir()
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+
+            with self.assertRaisesRegex(ValueError, "research option cards"):
+                orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+
+            run_dirs = [path for path in (root / "runs").glob("*") if path.is_dir()]
+            self.assertEqual(run_dirs, [])
+
     def test_selected_scope_is_persisted_and_drives_schedule_for_generic_option_card(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -258,12 +282,14 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             )
             ledger = knowledge / "wiki" / "20_semantics" / "data_ledger.jsonl"
             ledger.parent.mkdir(parents=True)
+            fresh_date = date.today().isoformat()
             ledger.write_text(json.dumps({
                 "dataset_id": "fundamental3", "dataset_name": "Fundamentals", "field_id": "cash_field", "field_type": "MATRIX",
                 "region": "USA", "delay": 1, "universe": "TOP3000", "semantic_tags": ["cash"], "coverage": 1.0,
                 "alpha_count": 0, "user_count": 0, "simulation_usage_count": 0, "submitted_usage_count": 0,
                 "last_used_at": "", "best_result_label": "unexplored", "correlation_risk": "low", "source_paths": [],
                 "source_quality": "platform_raw_capture", "coverage_status": "measured_raw",
+                "source_updated_at": fresh_date,
                 "compatible_template_ids": ["matrix_ts_zscore_rank"],
                 "available_scopes": [
                     {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"},
@@ -276,6 +302,15 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 "template_id": "matrix_ts_zscore_rank", "status": "discovery_ready", "required_field_types": ["MATRIX"],
                 "compatible_regions": ["USA"], "compatible_delays": [1], "compatible_universes": ["TOP3000"],
             }) + "\n", encoding="utf-8")
+            maintenance = knowledge / "wiki" / "80_maintenance"
+            maintenance.mkdir(parents=True)
+            (maintenance / "freshness_manifest.json").write_text(
+                json.dumps([
+                    {"name": name, "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": fresh_date, "max_age_days": 7}
+                    for name in ("data_ledger", "template_library", "benchmark_rules", "activity_snapshot")
+                ]),
+                encoding="utf-8",
+            )
             orchestrator = WorkflowOrchestrator(self.paths(root))
 
             started = orchestrator.start(
@@ -1281,6 +1316,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             ):
                 orchestrator.sync_research_record("2026-07-12T00:03:00Z")
 
+            self.write_start_artifacts(root, [valid_option_row(option_id="option-2")])
             next_started = orchestrator.start("Next objective", "option-2", "2026-07-12T00:04:00Z")
             warning_state = load_run_state(Path(str(started["run_dir"])) / "run_state.json")
 

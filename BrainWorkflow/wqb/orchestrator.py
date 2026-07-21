@@ -142,10 +142,7 @@ class WorkflowOrchestrator:
             "created_at": str(created_at),
             "knowledge_root": str(self.paths.knowledge_root),
         }
-        option_artifacts_exist = (
-            self.paths.knowledge_root / "wiki" / "70_decisions" / "research_option_cards.jsonl"
-        ).exists()
-        if selected_scope is not None or option_artifacts_exist:
+        if selected_scope is not None or self.paths.knowledge_root.exists():
             snapshot = create_start_snapshot(
                 self.paths.knowledge_root,
                 str(selected_option_id),

@@ -15,6 +15,7 @@ from wqb.console_proposals import create_proposal_from_form
 from wqb.console_state import ConsolePaths, default_console_paths, load_console_state
 from wqb.data_ledger import DataLedgerRecord
 from wqb.option_cards import fallback_option_id, normalize_option_card_row, normalize_option_card_rows
+from wqb.run_readiness import evaluate_run_readiness
 from wqb.template_library import load_template_library, select_templates_for_data
 
 
@@ -310,6 +311,22 @@ def _ledger_record(row: dict[str, Any], scope: dict[str, Any]) -> DataLedgerReco
     )
 
 
+def _require_scoped_readiness(paths: ConsolePaths, scope: dict[str, Any]) -> None:
+    """Input: console paths and scope. Output: none. Reuse strict research readiness before starting."""
+    report = evaluate_run_readiness(
+        paths.knowledge_root,
+        mode="research",
+        batch_size=30,
+        live_api_enabled=True,
+        region=str(scope["region"]),
+        delay=int(scope["delay"]),
+        universe=str(scope["universe"]),
+    )
+    if report.blocked:
+        codes = ", ".join(issue.code for issue in report.issues if issue.level == "block") or "blocked"
+        raise ValueError(f"data coverage readiness blocked for selected scope: {codes}")
+
+
 def _validate_option_data_coverage(paths: ConsolePaths, option: dict[str, Any], scope: dict[str, Any]) -> None:
     """Input: console paths, selected option, selected scope. Output: none. Require certified data and real templates."""
     ledger_path = paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
@@ -336,6 +353,7 @@ def _validate_option_data_coverage(paths: ConsolePaths, option: dict[str, Any], 
         selected = select_templates_for_data(templates, _ledger_record(row, scope), incentive, len(templates), **scope)
         if not set(str(item) for item in compatible_ids) & {template.template_id for template in selected}:
             raise ValueError("data coverage ledger for the selected scope has no compatible templates in the template library")
+    _require_scoped_readiness(paths, scope)
 
 
 def build_action_command(action: str, paths: ConsolePaths, form: dict[str, Any] | None = None) -> list[str]:

@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 
 from wqb.console_state import ConsolePaths, _active_workflow_summary, _startable_scopes, load_console_state
@@ -15,6 +16,8 @@ class ConsoleStateTests(unittest.TestCase):
             ledger.write_text(json.dumps({
                 "source_quality": "platform_raw_capture",
                 "coverage_status": "measured_raw",
+                "coverage": 1.0,
+                "source_updated_at": date.today().isoformat(),
                 "available_regions": ["USA", "EUR"],
                 "available_delays": [0, 1],
                 "available_universes": ["TOP500", "TOP3000"],
@@ -23,6 +26,15 @@ class ConsoleStateTests(unittest.TestCase):
                     {"instrument_type": "EQUITY", "region": "EUR", "delay": 0, "universe": "TOP500"},
                 ],
             }) + "\n", encoding="utf-8")
+            maintenance = root / "wiki" / "80_maintenance"
+            maintenance.mkdir(parents=True)
+            (maintenance / "freshness_manifest.json").write_text(
+                json.dumps([
+                    {"name": name, "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": date.today().isoformat(), "max_age_days": 7}
+                    for name in ("data_ledger", "template_library", "benchmark_rules", "activity_snapshot")
+                ]),
+                encoding="utf-8",
+            )
 
             scopes = _startable_scopes(root)
 
@@ -30,6 +42,42 @@ class ConsoleStateTests(unittest.TestCase):
             {"region": "EUR", "delay": 0, "universe": "TOP500"},
             {"region": "USA", "delay": 1, "universe": "TOP3000"},
         ])
+
+    def test_startable_scopes_excludes_zero_missing_and_stale_source_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger.parent.mkdir(parents=True)
+            fresh = date.today().isoformat()
+            stale = (date.today() - timedelta(days=30)).isoformat()
+            base = {
+                "source_quality": "platform_raw_capture",
+                "coverage_status": "measured_raw",
+                "region": "USA",
+                "delay": 1,
+                "universe": "TOP3000",
+            }
+            rows = [
+                {**base, "field_id": "good", "coverage": 1.0, "source_updated_at": fresh},
+                {**base, "field_id": "zero", "coverage": 0.0, "source_updated_at": fresh, "region": "EUR"},
+                {**base, "field_id": "missing_date", "coverage": 1.0, "source_updated_at": "", "region": "GLB"},
+                {**base, "field_id": "stale", "coverage": 1.0, "source_updated_at": stale, "region": "ASI"},
+            ]
+            ledger.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+            maintenance = root / "wiki" / "80_maintenance"
+            maintenance.mkdir(parents=True)
+            (maintenance / "freshness_manifest.json").write_text(
+                json.dumps([
+                    {"name": name, "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": fresh, "max_age_days": 7}
+                    for name in ("data_ledger", "template_library", "benchmark_rules", "activity_snapshot")
+                ]),
+                encoding="utf-8",
+            )
+
+            scopes = _startable_scopes(root)
+
+        self.assertEqual(scopes, [{"region": "USA", "delay": 1, "universe": "TOP3000"}])
+
     def test_active_workflow_discovery_recovers_missing_pointer_without_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
