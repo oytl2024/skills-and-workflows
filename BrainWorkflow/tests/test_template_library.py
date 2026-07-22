@@ -9,6 +9,9 @@ from wqb.template_library import (
     load_template_library,
     score_template_for_data,
     select_templates_for_data,
+    template_matrix_ready,
+    template_matrix_summary,
+    template_record_from_dict,
     template_record_to_dict,
     write_template_library_markdown,
 )
@@ -37,6 +40,37 @@ def sample_data() -> DataLedgerRecord:
 
 
 class TemplateLibraryTest(unittest.TestCase):
+    def test_template_record_loads_matrix_fields_with_backward_compatibility(self):
+        legacy = template_record_from_dict(
+            {
+                "template_id": "matrix_fast_delta_rank",
+                "hypothesis": "Fresh changes capture underreaction.",
+                "skeleton": "rank(ts_delta({field}, 1))",
+                "required_field_types": ["MATRIX"],
+                "compatible_semantic_tags": ["event"],
+                "operator_tags": ["time_series_surprise"],
+                "status": "seed",
+                "correlation_risk": "low",
+                "repair_levers": ["window_3"],
+                "source_paths": ["wiki/30_templates/template_families.md"],
+            }
+        )
+        matrix = template_record_from_dict(
+            template_record_to_dict(legacy)
+            | {
+                "data_semantics": ["fast_d1", "event"],
+                "economic_hypothesis": "Fresh event data is incorporated gradually.",
+                "operator_composition": ["ts_delta", "rank"],
+                "abandon_conditions": ["three_batches_no_signal"],
+                "benchmark_rule_ids": ["near_miss_stable_pnl"],
+                "template_family": "event_surprise",
+            }
+        )
+
+        self.assertFalse(template_matrix_ready(legacy))
+        self.assertTrue(template_matrix_ready(matrix))
+        self.assertEqual(template_matrix_summary([legacy, matrix])["matrix_ready_count"], 1)
+
     def test_load_template_library_round_trips_jsonl(self):
         row = {
             "template_id": "event_fast_delta_rank",
