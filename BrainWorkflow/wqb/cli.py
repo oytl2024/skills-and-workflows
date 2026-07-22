@@ -3285,6 +3285,7 @@ def parse_args() -> argparse.Namespace:
             "plan-research-options",
             "capture-platform-data-fields",
             "compile-data-ledger",
+            "compile-operator-semantics",
             "knowledge-contract-check",
             "knowledge-health-check",
             "readiness-check",
@@ -3674,6 +3675,48 @@ def main() -> None:
     elif args.command == "compile-data-ledger":
         result = compile_data_ledger_command(args.knowledge_root, capture_dir=args.capture_dir or None)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "compile-operator-semantics":
+        from wqb.operator_semantics import OperatorSemanticRecord, write_operator_semantics_jsonl, write_operator_semantics_markdown
+
+        generated = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        root = Path(args.knowledge_root)
+        records = [
+            OperatorSemanticRecord(
+                operator="rank",
+                family="cross_sectional_normalizer",
+                workflow_uses=["normalize_cross_section", "reduce_scale_dependency"],
+                compatible_field_types=["MATRIX"],
+                template_tags=["cross_sectional_normalizer"],
+                risk_tags=["crowded_when_used_on_price_volume_only"],
+                repair_levers=["group_rank", "group_neutralize"],
+                source_paths=["wiki/20_semantics/operator_catalog_official.md"],
+            ),
+            OperatorSemanticRecord(
+                operator="ts_delta",
+                family="time_series_change",
+                workflow_uses=["capture_recent_change", "event_surprise"],
+                compatible_field_types=["MATRIX"],
+                template_tags=["time_series_surprise", "event"],
+                risk_tags=["turnover_inflation"],
+                repair_levers=["increase_window", "add_decay"],
+                source_paths=["wiki/20_semantics/operator_catalog_official.md"],
+            ),
+            OperatorSemanticRecord(
+                operator="vec_avg",
+                family="vector_to_matrix",
+                workflow_uses=["summarize_vector_values"],
+                compatible_field_types=["VECTOR"],
+                template_tags=["event_value", "vector_to_matrix"],
+                risk_tags=["invalid_raw_vector_use"],
+                repair_levers=["replace_vec_count_with_vec_avg"],
+                source_paths=["wiki/20_semantics/operators.md"],
+            ),
+        ]
+        jsonl_path = root / "wiki" / "20_semantics" / "operator_semantics.jsonl"
+        md_path = root / "wiki" / "20_semantics" / "operator_semantics.md"
+        write_operator_semantics_jsonl(jsonl_path, records)
+        write_operator_semantics_markdown(md_path, records, generated)
+        print(json.dumps({"record_count": len(records), "jsonl_path": str(jsonl_path), "markdown_path": str(md_path)}, ensure_ascii=False, indent=2))
     elif args.command == "knowledge-contract-check":
         from wqb.knowledge_contracts import validate_raw_metadata, validate_wiki_metadata
 

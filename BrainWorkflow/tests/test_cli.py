@@ -785,6 +785,22 @@ class CliTests(unittest.TestCase):
         self.assertEqual(command.call_args.args[0], "knowledge")
         self.assertEqual(json.loads(output.getvalue())["record_count"], 3)
 
+    def test_compile_operator_semantics_writes_local_ledger_without_live_api(self):
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("sys.argv", ["wqb", "compile-operator-semantics", "--knowledge-root", str(root)]), redirect_stdout(output):
+                main()
+
+            result = json.loads(output.getvalue())
+            jsonl_path = root / "wiki" / "20_semantics" / "operator_semantics.jsonl"
+            markdown_path = root / "wiki" / "20_semantics" / "operator_semantics.md"
+            self.assertEqual(result["record_count"], 3)
+            self.assertEqual(Path(result["jsonl_path"]), jsonl_path)
+            self.assertEqual(Path(result["markdown_path"]), markdown_path)
+            self.assertTrue(jsonl_path.exists())
+            self.assertIn("vec_avg", markdown_path.read_text(encoding="utf-8"))
+
     def test_launch_console_parse_and_dispatch(self):
         output = io.StringIO()
         with patch("sys.argv", ["wqb", "launch-console", "--console-host", "127.0.0.1", "--console-port", "0", "--no-open-browser"]), patch(
