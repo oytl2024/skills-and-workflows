@@ -49,27 +49,36 @@ def plan_research_options(
     generated_at: str,
     max_options: int = 5,
     live_api_enabled: bool = False,
+    snapshot: IncentiveSnapshot | None = None,
 ) -> dict[str, Any]:
-    """Input: knowledge root, timestamp, limit, live API flag. Output: planner rows. Build non-live option cards with semantic contract inputs."""
+    """Input: knowledge root, timestamp, limit, live API flag, snapshot. Output: planner rows. Build durable option rows with semantic contract inputs."""
     root = Path(knowledge_root)
-    snapshot = IncentiveSnapshot(
-        generated_at=generated_at,
-        account={},
-        activities=[],
-        competitions=[],
-        power_pool_boards=[],
-        rule_pages={},
-        evidence=[
-            SourceEvidence(
-                "knowledge",
-                str(root),
-                "Knowledge contract inputs",
-                generated_at,
-                stale=not live_api_enabled,
-            )
-        ],
-        refresh_errors=[],
-    )
+    if snapshot is None:
+        snapshot = IncentiveSnapshot(
+            generated_at=generated_at,
+            account={},
+            activities=[],
+            competitions=[],
+            power_pool_boards=[],
+            rule_pages={},
+            evidence=[
+                SourceEvidence(
+                    "knowledge",
+                    str(root),
+                    "Knowledge contract inputs",
+                    generated_at,
+                    stale=True,
+                    note="No live incentive snapshot was supplied.",
+                )
+            ],
+            refresh_errors=[
+                {
+                    "path": "incentive_snapshot",
+                    "error": "SnapshotUnavailable",
+                    "message": "No live incentive snapshot was supplied.",
+                }
+            ],
+        )
     contract_inputs = _planner_contract_inputs(root)
     options = []
     for card in generate_research_options(snapshot, max_options=max_options):

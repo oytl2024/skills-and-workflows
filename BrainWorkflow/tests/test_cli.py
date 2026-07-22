@@ -432,14 +432,60 @@ class CliTests(unittest.TestCase):
             pass
 
         with tempfile.TemporaryDirectory() as tmp:
+            knowledge_root = Path(tmp) / "knowledge"
+            write_ready_knowledge_artifacts(knowledge_root)
+            semantics = knowledge_root / "wiki" / "20_semantics"
+            benchmarks = knowledge_root / "wiki" / "50_benchmarks"
+            (semantics / "operator_semantics.jsonl").write_text(
+                json.dumps(
+                    {
+                        "operator": "rank",
+                        "family": "cross_sectional",
+                        "workflow_uses": ["discovery"],
+                        "compatible_field_types": ["MATRIX"],
+                        "template_tags": ["power_pool"],
+                        "risk_tags": [],
+                        "repair_levers": [],
+                        "source_paths": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (benchmarks / "benchmark_rules.jsonl").write_text(
+                json.dumps(
+                    {
+                        "rule_id": "test_rule",
+                        "issue_types": ["correlation"],
+                        "description": "Test rule.",
+                        "promotion_condition": "Test condition.",
+                        "action": "Test action.",
+                        "evidence_paths": [],
+                        "consumed_by": ["research_planner"],
+                        "risk": "low",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             with patch("wqb.cli.build_client", return_value=FakeClient()), patch(
                 "wqb.cli.refresh_incentive_snapshot", return_value=snapshot
             ):
-                result = plan_research_options({"request_timeout_seconds": 1}, max_options=3, output_dir=tmp)
+                result = plan_research_options(
+                    {"request_timeout_seconds": 1, "knowledge_root": str(knowledge_root)},
+                    max_options=3,
+                    output_dir=tmp,
+                )
 
             self.assertGreaterEqual(result["option_count"], 1)
             self.assertTrue(Path(result["jsonl_path"]).exists())
             self.assertTrue(Path(result["markdown_path"]).exists())
+            row = json.loads(Path(result["jsonl_path"]).read_text(encoding="utf-8").splitlines()[0])
+            self.assertIn("data_authority", row)
+            self.assertEqual(row["operator_semantic_count"], 1)
+            self.assertIn("template_matrix_ready_count", row)
+            self.assertEqual(row["benchmark_rule_count"], 1)
+            self.assertIn("maintenance_blockers", row)
 
     def test_plan_research_options_main_requires_live_api_flag(self):
         with patch("sys.argv", ["wqb", "plan-research-options"]):

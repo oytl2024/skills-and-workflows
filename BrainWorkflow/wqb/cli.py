@@ -40,7 +40,7 @@ from wqb.optimizer import actions_for_check_summary
 from wqb.orchestrator import OrchestratorPaths, WorkflowOrchestrator
 from wqb.principle_model import OptionCard, ScoreBreakdown, SourceEvidence
 from wqb.recorder import RunRecorder
-from wqb.research_planner import generate_research_options
+from wqb.research_planner import plan_research_options as build_research_option_rows
 from wqb.research_scheduler import build_research_schedule, research_schedule_to_dict, write_research_schedule
 from wqb.research_workflow import build_parallel_stage_plan, cap_simulation_count, precheck_expression
 from wqb.rule_refresh import refresh_incentive_snapshot
@@ -117,15 +117,22 @@ def plan_research_options(config: dict[str, Any], max_options: int, output_dir: 
     generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     client = build_client(config)
     snapshot = refresh_incentive_snapshot(client, generated_at=generated_at)
-    cards = generate_research_options(snapshot, max_options=max_options)
-    jsonl_path, markdown_path = write_option_cards(Path(output_dir), cards, generated_at)
+    planner_result = build_research_option_rows(
+        knowledge_root=config.get("knowledge_root", default_knowledge_root()),
+        generated_at=generated_at,
+        max_options=max_options,
+        live_api_enabled=True,
+        snapshot=snapshot,
+    )
+    option_rows = planner_result["options"]
+    jsonl_path, markdown_path = write_option_cards(Path(output_dir), option_rows, generated_at)
     return {
         "generated_at": generated_at,
-        "option_count": len(cards),
+        "option_count": len(option_rows),
         "jsonl_path": str(jsonl_path),
         "markdown_path": str(markdown_path),
         "refresh_error_count": len(snapshot.refresh_errors),
-        "options": [card.title for card in cards],
+        "options": [str(row["title"]) for row in option_rows],
     }
 
 
