@@ -6,6 +6,7 @@ from pathlib import Path
 from wqb.workflow_proposals import (
     WorkflowChangeProposal,
     load_workflow_proposals,
+    normalize_proposal_status,
     proposal_from_issue,
     update_workflow_proposal_decision,
     workflow_change_proposal_to_dict,
@@ -114,6 +115,30 @@ class WorkflowProposalsTest(unittest.TestCase):
         self.assertEqual(rows[0]["status"], "accepted_for_implementation")
         self.assertEqual(rows[0]["user_decision"], "Implement readiness guard.")
         self.assertEqual(rows[0]["current_behavior"], "Cache rows can appear in planner inputs.")
+
+    def test_update_workflow_proposal_decision_loads_persisted_null_supersedes(self):
+        proposal = proposal_from_issue(
+            {"issue_type": "manual_review", "summary": "Review persisted null metadata."},
+            "2026-07-22T00:00:00Z",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            persisted = workflow_change_proposal_to_dict(proposal)
+            persisted["supersedes"] = None
+            (output_dir / "workflow_change_proposals.jsonl").write_text(json.dumps(persisted) + "\n", encoding="utf-8")
+
+            update_workflow_proposal_decision(output_dir, proposal.proposal_id, "deferred", "Need more evidence.")
+            rows = load_workflow_proposals(output_dir)
+
+        self.assertEqual(rows[0]["supersedes"], None)
+        self.assertEqual(rows[0]["status"], "deferred")
+
+    def test_normalize_proposal_status_maps_legacy_accepted(self):
+        self.assertEqual(normalize_proposal_status("accepted"), "accepted_for_implementation")
+
+    def test_normalize_proposal_status_rejects_invalid_value(self):
+        with self.assertRaisesRegex(ValueError, "unsupported proposal status"):
+            normalize_proposal_status("revise")
 
 
 if __name__ == "__main__":

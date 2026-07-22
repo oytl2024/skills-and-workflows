@@ -17,6 +17,16 @@ from wqb.data_ledger import DataLedgerRecord
 from wqb.option_cards import fallback_option_id, normalize_option_card_row, normalize_option_card_rows
 from wqb.run_readiness import evaluate_run_readiness
 from wqb.template_library import load_template_library, select_templates_for_data
+from wqb.workflow_proposals import update_workflow_proposal_decision
+
+
+PROPOSAL_DECISION_STATUSES = (
+    "accepted_for_wiki",
+    "accepted_for_implementation",
+    "accepted_as_experiment",
+    "rejected",
+    "deferred",
+)
 
 
 def _fallback_option_id(index: int) -> str:
@@ -174,10 +184,28 @@ def render_dashboard(state: dict[str, Any]) -> str:
     return _html_page("Workflow Console", body)
 
 
+def _render_proposal_decision_form(proposal: dict[str, Any]) -> str:
+    """Input: proposal row. Output: HTML form. Render lifecycle controls for one persisted proposal."""
+    proposal_id = escape(str(proposal.get("proposal_id", "")))
+    current_status = str(proposal.get("status", ""))
+    options = "".join(
+        f'<option value="{status}"{" selected" if status == current_status else ""}>{status}</option>'
+        for status in PROPOSAL_DECISION_STATUSES
+    )
+    return (
+        '<form method="post" action="/proposals/decision">'
+        f'<input type="hidden" name="proposal_id" value="{proposal_id}">'
+        f'<select name="status">{options}</select>'
+        '<textarea name="user_decision" placeholder="decision rationale"></textarea>'
+        '<button>Update decision</button></form>'
+    )
+
+
 def render_proposals(proposals: list[dict[str, Any]]) -> str:
     """Input: proposal rows. Output: HTML. Render proposal inbox and creation form."""
     rows = "".join(
-        f"<li><code>{escape(str(row.get('proposal_id', '')))}</code> {escape(str(row.get('status', '')))} {escape(str(row.get('title', '')))}</li>"
+        f"<li><code>{escape(str(row.get('proposal_id', '')))}</code> {escape(str(row.get('status', '')))} {escape(str(row.get('title', '')))}"
+        f"{_render_proposal_decision_form(row)}</li>"
         for row in proposals
     ) or "<li>No proposals.</li>"
     body = f"""
@@ -198,13 +226,6 @@ def render_proposals(proposals: list[dict[str, Any]]) -> str:
 <option value="console">console</option>
 <option value="orchestrator">orchestrator</option>
 <option value="knowledge_compile">knowledge_compile</option>
-</select>
-<select name="status">
-<option value="accepted_for_wiki">accepted_for_wiki</option>
-<option value="accepted_for_implementation">accepted_for_implementation</option>
-<option value="accepted_as_experiment">accepted_as_experiment</option>
-<option value="rejected">rejected</option>
-<option value="deferred">deferred</option>
 </select>
 <button>Create Proposal</button>
 </form></section>
@@ -423,6 +444,23 @@ def create_console_proposal(paths: ConsolePaths, form: dict[str, Any]) -> Any:
         return completed
 
 
+def update_console_proposal_decision(paths: ConsolePaths, form: dict[str, Any]) -> Any:
+    """Input: console paths and decision form. Output: ConsoleJob. Persist one proposal lifecycle decision."""
+    proposal_id = str(form.get("proposal_id", "")).strip()
+    status = str(form.get("status", "")).strip()
+    user_decision = str(form.get("user_decision", ""))
+    job = create_job(paths.job_root, "update-proposal-decision", ["internal:update-proposal-decision"], paths.workflow_root, {"form": dict(form)})
+    try:
+        update_workflow_proposal_decision(paths.knowledge_root / "wiki" / "70_decisions", proposal_id, status, user_decision)
+        completed = finish_job(job, "completed", exit_code=0, error="")
+        record_console_job_context(paths, completed, next_command="open workflow proposal inbox")
+        return completed
+    except Exception as error:
+        completed = finish_job(job, "failed", exit_code=1, error=str(error))
+        record_console_job_context(paths, completed, next_command="open workflow proposal inbox")
+        return completed
+
+
 class ConsoleRequestHandler(BaseHTTPRequestHandler):
     def _send_html(self, html: str, status: int = 200) -> None:
         """Input: HTML and status. Output: none. Send one HTML response."""
@@ -459,6 +497,10 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
             if parsed.path == "/proposals/create":
                 completed = create_console_proposal(paths, form)
                 self._send_html(f"<html><body>Proposal job {escape(completed.status)}. <a href='/proposals'>Back</a></body></html>")
+                return
+            if parsed.path == "/proposals/decision":
+                completed = update_console_proposal_decision(paths, form)
+                self._send_html(f"<html><body>Decision job {escape(completed.status)}. <a href='/proposals'>Back</a></body></html>")
                 return
             if parsed.path == "/actions/run":
                 completed = run_console_action(paths, form)

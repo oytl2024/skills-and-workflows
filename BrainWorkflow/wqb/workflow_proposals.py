@@ -170,7 +170,7 @@ def _proposal_from_dict(row: dict[str, Any]) -> WorkflowChangeProposal:
         current_behavior=str(row.get("current_behavior", "")),
         expected_impact=str(row.get("expected_impact", "")),
         applied_at=str(row.get("applied_at", "")),
-        supersedes=[str(item) for item in row.get("supersedes", []) if str(item)],
+        supersedes=[str(item) for item in (row.get("supersedes") or []) if str(item)],
     )
 
 

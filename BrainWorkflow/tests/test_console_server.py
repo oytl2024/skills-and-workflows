@@ -5,9 +5,10 @@ from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from wqb.console_server import build_action_command, create_console_proposal, make_console_server, render_dashboard, render_proposals, run_console_action
+from wqb.console_server import build_action_command, create_console_proposal, make_console_server, render_dashboard, render_proposals, run_console_action, update_console_proposal_decision
 from wqb.console_state import ConsolePaths
 from wqb.data_ledger_compile import compile_data_ledger_from_raw
+from wqb.workflow_proposals import load_workflow_proposals
 
 
 def make_paths(root: Path) -> ConsolePaths:
@@ -106,14 +107,16 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn("120", html)
 
     def test_render_proposals_uses_select_controls_for_structured_fields(self):
-        html = render_proposals([])
+        html = render_proposals([{"proposal_id": "proposal-1", "title": "Lifecycle review", "status": "proposed"}])
 
         self.assertIn("<select name=\"issue_type\"", html)
         self.assertIn("<select name=\"affected_modules\"", html)
         self.assertIn("template_innovation", html)
         self.assertIn("data_coverage", html)
-        self.assertIn("accepted_for_implementation", html)
-        self.assertIn("accepted_as_experiment", html)
+        decision_form = html.split('action="/proposals/decision"', 1)[1]
+        self.assertIn('name="proposal_id" value="proposal-1"', decision_form)
+        self.assertIn('option value="accepted_for_implementation"', decision_form)
+        self.assertIn('option value="accepted_as_experiment"', decision_form)
 
     def test_second_fallback_option_survives_invalid_jsonl_line(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -571,6 +574,27 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertEqual(completed.status, "completed")
         self.assertTrue(proposal_exists)
         self.assertEqual(len(jobs), 1)
+
+    def test_update_console_proposal_decision_persists_lifecycle_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            proposal_job = create_console_proposal(paths, {"summary": "Improve novelty.", "issue_type": "template_innovation"})
+            proposal = load_workflow_proposals(paths.knowledge_root / "wiki" / "70_decisions")[0]
+
+            completed = update_console_proposal_decision(
+                paths,
+                {
+                    "proposal_id": proposal["proposal_id"],
+                    "status": "accepted_as_experiment",
+                    "user_decision": "Run an isolated experiment.",
+                },
+            )
+            rows = load_workflow_proposals(paths.knowledge_root / "wiki" / "70_decisions")
+
+        self.assertEqual(proposal_job.status, "completed")
+        self.assertEqual(completed.status, "completed")
+        self.assertEqual(rows[0]["status"], "accepted_as_experiment")
 
     def test_make_console_server_constructs_local_server(self):
         with tempfile.TemporaryDirectory() as tmp:
