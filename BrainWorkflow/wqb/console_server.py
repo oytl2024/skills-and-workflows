@@ -64,6 +64,59 @@ def _badge(label: str, value: Any, state: str = "neutral") -> str:
     return f"<span class='badge badge-{escape(state)}'><strong>{escape(label)}</strong> {escape(str(value))}</span>"
 
 
+def _render_data_authority(authority: dict[str, Any]) -> str:
+    """Input: authority summary. Output: HTML. Render data ledger provenance."""
+    ready = "yes" if authority.get("authoritative_ready") else "no"
+    return (
+        "<div class='ledger-strip'>"
+        + _badge("authoritative measured", authority.get("authoritative_measured_count", 0), "ready" if ready == "yes" else "warn")
+        + _badge("seed/cache", authority.get("seed_cache_count", 0), "warn")
+        + _badge("unclassified", authority.get("unclassified_count", 0), "warn")
+        + _badge("ready", ready, "ready" if ready == "yes" else "blocked")
+        + "</div>"
+    )
+
+
+def _render_knowledge_contracts(contracts: dict[str, Any]) -> str:
+    """Input: contract health summary. Output: HTML. Render vault contract health."""
+    return (
+        "<div class='ledger-strip'>"
+        + _badge("issues", contracts.get("issue_count", 0), "warn" if contracts.get("issue_count") else "ready")
+        + _badge("legacy paths", contracts.get("legacy_count", 0), "warn" if contracts.get("legacy_count") else "ready")
+        + "</div>"
+    )
+
+
+def _option_blockers(cards: list[dict[str, Any]]) -> str:
+    """Input: option cards. Output: HTML. Render maintenance blockers attached to options."""
+    blockers = []
+    for card in cards:
+        blockers.extend(str(item) for item in card.get("maintenance_blockers", []) if str(item))
+    if not blockers:
+        return "<div class='empty'>No option maintenance blockers.</div>"
+    return "<ul>" + "".join(f"<li>{escape(item)}</li>" for item in blockers[:6]) + "</ul>"
+
+
+def _render_semantic_ledgers(coverage: dict[str, Any]) -> str:
+    """Input: data coverage summary. Output: HTML. Render compiled semantic ledger coverage."""
+    return (
+        "<div class='ledger-strip'>"
+        + _badge("data fields", coverage.get("field_count", 0))
+        + _badge("scopes", coverage.get("scope_count", 0))
+        + _badge("data sets", coverage.get("data_set_count", 0))
+        + "</div>"
+    )
+
+
+def _render_proposal_lifecycle(counts: dict[str, Any]) -> str:
+    """Input: proposal-status counts. Output: HTML. Render persisted proposal lifecycle counts."""
+    if not counts:
+        return "<div class='empty'>No workflow proposals.</div>"
+    return "<div class='ledger-strip'>" + "".join(
+        _badge(str(status), count) for status, count in sorted(counts.items())
+    ) + "</div>"
+
+
 def _render_option_controls(cards: list[dict[str, Any]]) -> str:
     """Input: option card rows. Output: HTML. Render selectable research option cards."""
     if not cards:
@@ -112,7 +165,8 @@ def render_dashboard(state: dict[str, Any]) -> str:
     readiness = state.get("readiness", {})
     freshness = state.get("freshness", {})
     data_coverage = state.get("data_coverage", {})
-    cards = _normalized_option_rows([card for card in state.get("option_cards", []) if isinstance(card, dict)])
+    option_rows = [card for card in state.get("option_cards", []) if isinstance(card, dict)]
+    cards = _normalized_option_rows(option_rows)
     scopes = [scope for scope in state.get("startable_scopes", []) if isinstance(scope, dict)]
     jobs = state.get("jobs", [])
     active = state.get("active_workflow", {})
@@ -178,6 +232,11 @@ def render_dashboard(state: dict[str, Any]) -> str:
 <section><h2>Workflow Progress</h2>{workflow_progress}</section>
 <section><h2>Knowledge Maintenance</h2>{knowledge_forms}</section>
 <section><h2>Data Coverage</h2>{data_coverage_panel}</section>
+<section><h2>Data Authority</h2>{_render_data_authority(state.get("data_authority", {}))}</section>
+<section><h2>Knowledge Contracts</h2>{_render_knowledge_contracts(state.get("knowledge_contracts", {}))}</section>
+<section><h2>Semantic Ledgers</h2>{_render_semantic_ledgers(data_coverage)}</section>
+<section><h2>Proposal Lifecycle</h2>{_render_proposal_lifecycle(state.get("proposal_counts", {}))}</section>
+<section><h2>Option Blockers</h2>{_option_blockers(option_rows)}</section>
 <section class="wide"><h2>Recent Jobs</h2><ul>{job_items}</ul></section>
 </div>
 """

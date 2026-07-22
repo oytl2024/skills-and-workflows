@@ -36,6 +36,32 @@ def valid_option(**overrides):
 
 
 class ConsoleServerTests(unittest.TestCase):
+    def test_render_dashboard_labels_cache_data_as_not_authoritative(self):
+        state = {
+            "readiness": {"exists": True, "passed": False},
+            "freshness": {"valid": True, "stale_count": 0, "missing_count": 0},
+            "data_coverage": {"field_count": 14, "scope_count": 1, "data_set_count": 4, "error_count": 0, "status": "completed"},
+            "data_authority": {"record_count": 14, "authoritative_measured_count": 0, "seed_cache_count": 14, "unclassified_count": 0, "authoritative_ready": False},
+            "knowledge_contracts": {"issue_count": 2, "legacy_count": 1, "issues": []},
+            "option_cards": [{"option_id": "option-1", "title": "Power Pool", "maintenance_blockers": ["Authoritative data ledger is missing."]}],
+            "startable_scopes": [],
+            "jobs": [],
+            "active_workflow": {"exists": False},
+            "approved_queue": [],
+            "queue_diagnostics": [],
+            "workflow_events": [],
+            "proposal_counts": {"accepted_for_implementation": 1},
+            "schedule": {"preview": ""},
+        }
+
+        html = render_dashboard(state)
+
+        self.assertIn("Data Authority", html)
+        self.assertIn("seed/cache", html)
+        self.assertIn("authoritative measured", html)
+        self.assertIn("Knowledge Contracts", html)
+        self.assertIn("Authoritative data ledger is missing", html)
+
     def test_render_dashboard_exposes_research_progress_and_knowledge_controls(self):
         state = {
             "readiness": {"exists": True, "passed": True, "blocked": False},

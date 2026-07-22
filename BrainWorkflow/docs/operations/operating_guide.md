@@ -119,6 +119,12 @@ The normal UI path is:
 
 Do not type option IDs manually in normal operation. The console maps the selected card to `workflow-start`.
 
+## Contract Status In The Console
+
+The console distinguishes `seed/cache` data from `authoritative measured` data. Research starts should use authoritative measured data for the selected exact scope. If the console shows only seed/cache rows, run platform data-field maintenance before research.
+
+The Knowledge Contracts panel reports legacy raw paths and missing raw/wiki metadata. These are maintenance issues, not alpha simulation failures.
+
 ## Candidate Gate And Submission Records
 
 The Orchestrator owns durable candidate state:
