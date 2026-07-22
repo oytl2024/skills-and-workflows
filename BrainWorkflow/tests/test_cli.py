@@ -14,6 +14,7 @@ from uuid import uuid4
 import requests
 
 from wqb.expression import expression_hash
+from wqb.knowledge_contracts import SourceIndexRow, update_source_index
 from wqb.principle_model import OptionCard, ScoreBreakdown, SourceEvidence
 from wqb.cli import (
     authenticate_for_run,
@@ -673,6 +674,19 @@ class CliTests(unittest.TestCase):
             raw_path = root / "raw" / "platform" / "learn" / "2026-07-22" / "operators.md"
             raw_path.parent.mkdir(parents=True)
             raw_path.write_text("---\nsource_type: platform_api\n---\n# Operators\n", encoding="utf-8")
+            source_index = update_source_index(
+                root,
+                [
+                    SourceIndexRow(
+                        path="raw/platform/learn/2026-07-22/operators.md",
+                        source_family="learn",
+                        source_type="platform_api",
+                        contents="operator capture",
+                        update_check="compare operators",
+                        compiled_targets=[],
+                    )
+                ],
+            )
 
             with patch("sys.argv", ["wqb", "knowledge-contract-check", "--knowledge-root", str(root)]), redirect_stdout(output):
                 main()
@@ -680,6 +694,7 @@ class CliTests(unittest.TestCase):
         result = json.loads(output.getvalue())
         self.assertGreater(result["issue_count"], 0)
         self.assertIn("missing source_family", [item["issue"] for item in result["issues"]])
+        self.assertNotIn(str(source_index), [item["path"] for item in result["issues"]])
 
     def test_schedule_research_main_requires_option_json(self):
         with patch("sys.argv", ["wqb", "schedule-research"]):

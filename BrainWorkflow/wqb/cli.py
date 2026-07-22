@@ -3678,8 +3678,11 @@ def main() -> None:
         from wqb.knowledge_contracts import validate_raw_metadata, validate_wiki_metadata
 
         root = Path(args.knowledge_root)
+        source_index = root / "raw" / "source_index.md"
         issues = []
         for path in sorted((root / "raw").rglob("*.md")):
+            if path == source_index:
+                continue
             for issue in validate_raw_metadata(path):
                 issues.append({"path": str(path), "issue": issue})
         for path in sorted((root / "wiki").rglob("*.md")):

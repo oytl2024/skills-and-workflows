@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-import json
 from pathlib import Path
 from typing import Any
 
@@ -103,7 +102,7 @@ def parse_markdown_front_matter(text: str) -> tuple[dict[str, Any], str]:
     """Input: Markdown text. Output: metadata and body. Parse a small YAML-style front matter block."""
     if not text.startswith("---\n"):
         return {}, text
-    lines = text.splitlines()
+    lines = text.splitlines(keepends=True)
     end_index = None
     for index, line in enumerate(lines[1:], start=1):
         if line.strip() == "---":
@@ -124,10 +123,7 @@ def parse_markdown_front_matter(text: str) -> tuple[dict[str, Any], str]:
                 metadata[current_key] = _coerce_scalar(value)
             else:
                 metadata[current_key] = []
-    body = "\n".join(lines[end_index + 1 :])
-    if body:
-        body += "\n"
-    return metadata, body
+    return metadata, "".join(lines[end_index + 1 :])
 
 
 def render_front_matter(metadata: dict[str, Any]) -> str:

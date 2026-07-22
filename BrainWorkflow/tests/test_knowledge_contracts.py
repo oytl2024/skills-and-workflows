@@ -27,6 +27,13 @@ class KnowledgeContractTests(unittest.TestCase):
         self.assertEqual(metadata["compiled_targets"], ["wiki/20_semantics/data_ledger.md"])
         self.assertIn("# Body", rendered)
 
+    def test_parse_markdown_front_matter_preserves_body_without_trailing_newline(self):
+        text = "---\nsource_type: platform_api\n---\n# Body"
+
+        _, body = parse_markdown_front_matter(text)
+
+        self.assertEqual(body, "# Body")
+
     def test_validate_raw_metadata_reports_missing_required_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "knowledge" / "raw" / "platform" / "learn" / "2026-07-22" / "operators.md"
