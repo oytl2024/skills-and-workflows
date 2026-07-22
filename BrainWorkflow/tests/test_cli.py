@@ -666,6 +666,21 @@ class CliTests(unittest.TestCase):
         self.assertEqual(schedule_args.option_index, 2)
         self.assertIsNone(schedule_without_index.option_index)
 
+    def test_knowledge_contract_check_main_reports_contract_issues_without_simulation(self):
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            raw_path = root / "raw" / "platform" / "learn" / "2026-07-22" / "operators.md"
+            raw_path.parent.mkdir(parents=True)
+            raw_path.write_text("---\nsource_type: platform_api\n---\n# Operators\n", encoding="utf-8")
+
+            with patch("sys.argv", ["wqb", "knowledge-contract-check", "--knowledge-root", str(root)]), redirect_stdout(output):
+                main()
+
+        result = json.loads(output.getvalue())
+        self.assertGreater(result["issue_count"], 0)
+        self.assertIn("missing source_family", [item["issue"] for item in result["issues"]])
+
     def test_schedule_research_main_requires_option_json(self):
         with patch("sys.argv", ["wqb", "schedule-research"]):
             with self.assertRaisesRegex(SystemExit, "--option-json is required"):

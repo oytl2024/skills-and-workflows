@@ -3285,6 +3285,7 @@ def parse_args() -> argparse.Namespace:
             "plan-research-options",
             "capture-platform-data-fields",
             "compile-data-ledger",
+            "knowledge-contract-check",
             "knowledge-health-check",
             "readiness-check",
             "launch-workflow",
@@ -3673,6 +3674,20 @@ def main() -> None:
     elif args.command == "compile-data-ledger":
         result = compile_data_ledger_command(args.knowledge_root, capture_dir=args.capture_dir or None)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "knowledge-contract-check":
+        from wqb.knowledge_contracts import validate_raw_metadata, validate_wiki_metadata
+
+        root = Path(args.knowledge_root)
+        issues = []
+        for path in sorted((root / "raw").rglob("*.md")):
+            for issue in validate_raw_metadata(path):
+                issues.append({"path": str(path), "issue": issue})
+        for path in sorted((root / "wiki").rglob("*.md")):
+            for issue in validate_wiki_metadata(path):
+                issues.append({"path": str(path), "issue": issue})
+        print(json.dumps({"issue_count": len(issues), "issues": issues}, ensure_ascii=False, indent=2))
+        if issues and args.readiness_mode in {"research", "submit-candidate"}:
+            raise SystemExit(1)
     elif args.command == "knowledge-health-check":
         result = knowledge_health_check(
             args.knowledge_root,
