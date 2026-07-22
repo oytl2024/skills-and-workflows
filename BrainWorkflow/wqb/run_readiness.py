@@ -151,19 +151,6 @@ def _validate_scope_artifacts(
                 )
             )
             return
-        uncertified = [record for record in selected_data if not is_authoritative_data_record(record)]
-        if uncertified:
-            authority = summarize_data_ledger_authority(selected_data)
-            issues.append(
-                _issue(
-                    level,
-                    "cache_only_data_ledger",
-                    f"Selected scope {region} D{int(delay)} {universe} has {authority['seed_cache_count']} seed/cache records and {authority['authoritative_measured_count']} authoritative measured records.",
-                    ledger_path,
-                    "Run capture-platform-data-fields and compile-data-ledger before research scheduling.",
-                )
-            )
-            return
         if data_ledger_max_age_days is None or data_ledger_max_age_days <= 0:
             issues.append(
                 _issue(
@@ -179,11 +166,12 @@ def _validate_scope_artifacts(
             record for record in selected_data if _record_source_date(record) is None
         ]
         if invalid_freshness:
+            authority = summarize_data_ledger_authority(selected_data, root)
             issues.append(
                 _issue(
                     level,
-                    "invalid_scope_data_freshness",
-                    f"Compatible data ledger records for {region} D{int(delay)} {universe} are missing valid per-record source dates.",
+                    "cache_only_data_ledger",
+                    f"Selected scope {region} D{int(delay)} {universe} has {authority['seed_cache_count']} seed/cache records and {authority['authoritative_measured_count']} authoritative measured records; source dates are invalid.",
                     ledger_path,
                     "Refresh platform raw data fields and compile ledger rows with source_updated_at.",
                 )
@@ -202,6 +190,19 @@ def _validate_scope_artifacts(
                     f"Compatible data ledger records for {region} D{int(delay)} {universe} are stale for the selected exact scope.",
                     ledger_path,
                     "Refresh platform raw data fields for this exact scope before research.",
+                )
+            )
+            return
+        uncertified = [record for record in selected_data if not is_authoritative_data_record(record, root)]
+        if uncertified:
+            authority = summarize_data_ledger_authority(selected_data, root)
+            issues.append(
+                _issue(
+                    level,
+                    "cache_only_data_ledger",
+                    f"Selected scope {region} D{int(delay)} {universe} has {authority['seed_cache_count']} seed/cache records and {authority['authoritative_measured_count']} authoritative measured records.",
+                    ledger_path,
+                    "Run capture-platform-data-fields and compile-data-ledger before research scheduling.",
                 )
             )
             return

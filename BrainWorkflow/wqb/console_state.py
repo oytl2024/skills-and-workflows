@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from wqb.benchmark_rules import load_active_benchmark_rules
 from wqb.data_ledger import load_data_ledger, summarize_data_ledger_authority
 from wqb.knowledge_freshness import (
     evaluate_freshness,
@@ -15,6 +16,9 @@ from wqb.knowledge_freshness import (
     load_freshness_manifest,
 )
 from wqb.research_record import load_research_record
+from wqb.operator_semantics import load_operator_semantics
+from wqb.template_library import load_template_library, template_matrix_summary
+from wqb.workflow_proposals import load_workflow_proposals
 from wqb.workflow_events import read_workflow_events
 from wqb.workflow_paths import resolve_project_root, resolve_run_root
 from wqb.workflow_state import diagnose_state_consistency, discover_active_workflow
@@ -149,7 +153,7 @@ def _data_authority_summary(knowledge_root: Path) -> dict[str, Any]:
     """Input: knowledge root. Output: data authority summary. Summarize ledger provenance for dashboard."""
     ledger_path = knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
     try:
-        return summarize_data_ledger_authority(load_data_ledger(ledger_path))
+        return summarize_data_ledger_authority(load_data_ledger(ledger_path), knowledge_root)
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return {
             "record_count": 0,
@@ -158,6 +162,27 @@ def _data_authority_summary(knowledge_root: Path) -> dict[str, Any]:
             "unclassified_count": 0,
             "authoritative_ready": False,
         }
+
+
+def _semantic_ledger_summary(knowledge_root: Path) -> dict[str, Any]:
+    """Input: knowledge root. Output: semantic summary. Count operator, matrix-ready template, and active rule records."""
+    try:
+        operators = load_operator_semantics(
+            knowledge_root / "wiki" / "20_semantics" / "operator_semantics.jsonl"
+        )
+        templates = load_template_library(
+            knowledge_root / "wiki" / "30_templates" / "template_library.jsonl"
+        )
+        rules = load_active_benchmark_rules(knowledge_root, fallback_to_defaults=False)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        operators, templates, rules = [], [], []
+    matrix_ready = template_matrix_summary(templates)["matrix_ready_count"]
+    return {
+        "operator_semantic_count": len(operators),
+        "matrix_ready_template_count": matrix_ready,
+        "active_benchmark_rule_count": len(rules),
+        "ready": bool(operators) and matrix_ready > 0 and bool(rules),
+    }
 
 
 def _data_ledger_max_age_days(knowledge_root: Path) -> int | None:
@@ -339,7 +364,7 @@ def _research_record_summary(run_dir: Path | None) -> dict[str, Any]:
 def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
     """Input: console paths. Output: JSON-safe state dict. Aggregate dashboard data."""
     decisions = paths.knowledge_root / "wiki" / "70_decisions"
-    proposals = _read_jsonl(decisions / "workflow_change_proposals.jsonl")
+    proposals = load_workflow_proposals(decisions)
     proposal_counts = Counter(str(row.get("status", "unclassified")) for row in proposals)
     active_workflow, active_run_dir = _active_workflow_summary(paths.runs_root)
     workflow_events = [] if active_run_dir is None else [event.__dict__ for event in read_workflow_events(active_run_dir)]
@@ -350,6 +375,7 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
         "knowledge_contracts": evaluate_knowledge_contract_health(paths.knowledge_root),
         "data_coverage": _data_coverage_summary(paths.knowledge_root),
         "data_authority": _data_authority_summary(paths.knowledge_root),
+        "semantic_ledgers": _semantic_ledger_summary(paths.knowledge_root),
         "startable_scopes": _startable_scopes(paths.knowledge_root),
         "option_cards": _read_jsonl(decisions / "research_option_cards.jsonl"),
         "schedule": _schedule_summary(paths.knowledge_root),

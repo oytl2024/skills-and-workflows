@@ -2,7 +2,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from wqb.benchmark_rules import load_benchmark_rules
+from wqb.benchmark_rules import load_active_benchmark_rules, rules_for_consumer
 from wqb.data_ledger import load_data_ledger, summarize_data_ledger_authority
 from wqb.operator_semantics import load_operator_semantics
 from wqb.principle_model import (
@@ -30,8 +30,9 @@ def _planner_contract_inputs(knowledge_root: Path) -> dict[str, Any]:
     data_records = load_data_ledger(knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl")
     template_records = load_template_library(knowledge_root / "wiki" / "30_templates" / "template_library.jsonl")
     operators = load_operator_semantics(knowledge_root / "wiki" / "20_semantics" / "operator_semantics.jsonl")
-    benchmark_rules = load_benchmark_rules(knowledge_root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl")
-    data_authority = summarize_data_ledger_authority(data_records)
+    benchmark_rules = load_active_benchmark_rules(knowledge_root, fallback_to_defaults=False)
+    planner_rules = rules_for_consumer(benchmark_rules, "research_planner")
+    data_authority = summarize_data_ledger_authority(data_records, knowledge_root)
     blockers = []
     if not data_authority.get("authoritative_measured_count"):
         blockers.append("Authoritative data ledger is missing or has no measured platform rows.")
@@ -40,6 +41,8 @@ def _planner_contract_inputs(knowledge_root: Path) -> dict[str, Any]:
         "operator_semantic_count": len(operators),
         "template_matrix_ready_count": template_matrix_summary(template_records)["matrix_ready_count"],
         "benchmark_rule_count": len(benchmark_rules),
+        "benchmark_rule_ids": [rule.rule_id for rule in planner_rules],
+        "benchmark_actions": [rule.action for rule in planner_rules],
         "maintenance_blockers": blockers,
     }
 

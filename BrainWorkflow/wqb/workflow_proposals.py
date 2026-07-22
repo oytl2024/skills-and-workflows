@@ -58,9 +58,14 @@ def workflow_change_proposal_to_dict(proposal: WorkflowChangeProposal) -> dict[s
     return asdict(proposal)
 
 
-def _rule_text(issue_type: str, summary: str) -> tuple[str, str, str]:
-    """Input: issue type and summary. Output: rule, benefit, risk. Map repeated issue to proposal text."""
-    matched_rules = rules_for_issue_type(default_benchmark_rules(), issue_type)
+def _rule_text(
+    issue_type: str,
+    summary: str,
+    benchmark_rules: list[Any] | None = None,
+) -> tuple[str, str, str]:
+    """Input: issue, summary, optional active rules. Output: rule, benefit, risk. Apply benchmark authority."""
+    active_rules = default_benchmark_rules() if benchmark_rules is None else benchmark_rules
+    matched_rules = rules_for_issue_type(active_rules, issue_type)
     if matched_rules:
         rule = matched_rules[0]
         return (
@@ -94,13 +99,17 @@ def _rule_text(issue_type: str, summary: str) -> tuple[str, str, str]:
     )
 
 
-def proposal_from_issue(issue: dict[str, Any], generated_at: str) -> WorkflowChangeProposal:
-    """Input: issue dict and timestamp. Output: proposal. Convert one research issue into a reviewable rule proposal."""
+def proposal_from_issue(
+    issue: dict[str, Any],
+    generated_at: str,
+    benchmark_rules: list[Any] | None = None,
+) -> WorkflowChangeProposal:
+    """Input: issue, timestamp, optional active rules. Output: proposal. Convert an issue using rule authority."""
     issue_type = str(issue.get("issue_type", "manual_review"))
     summary = str(issue.get("summary", "Unclassified workflow issue."))
     evidence_paths = [str(item) for item in issue.get("evidence_paths", []) if str(item)]
     affected_modules = [str(item) for item in issue.get("affected_modules", []) if str(item)]
-    proposed_rule_change, expected_benefit, risk = _rule_text(issue_type, summary)
+    proposed_rule_change, expected_benefit, risk = _rule_text(issue_type, summary, benchmark_rules)
     identity = json.dumps(
         {"issue_type": issue_type, "summary": summary, "evidence_paths": evidence_paths},
         ensure_ascii=False,
@@ -165,7 +174,11 @@ def _proposal_from_dict(row: dict[str, Any]) -> WorkflowChangeProposal:
         required_code_changes=[str(item) for item in row.get("required_code_changes", []) if str(item)],
         required_knowledge_updates=[str(item) for item in row.get("required_knowledge_updates", []) if str(item)],
         user_decision_options=[str(item) for item in row.get("user_decision_options", []) if str(item)],
-        status=str(row.get("status", "proposed")),
+        status=(
+            normalize_proposal_status(str(row.get("status", "proposed")))
+            if str(row.get("status", "proposed")).strip().lower() in {*PROPOSAL_STATUSES, "accepted"}
+            else str(row.get("status", "proposed"))
+        ),
         user_decision=str(row.get("user_decision", "")),
         current_behavior=str(row.get("current_behavior", "")),
         expected_impact=str(row.get("expected_impact", "")),
@@ -182,12 +195,9 @@ def write_workflow_proposals(output_dir: Path, proposals: list[WorkflowChangePro
     rows: list[dict[str, Any]] = []
     row_indexes: dict[str, int] = {}
     if jsonl_path.exists():
-        for line in jsonl_path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                row = json.loads(line)
-                if isinstance(row, dict):
-                    row_indexes[str(row.get("proposal_id", ""))] = len(rows)
-                    rows.append(row)
+        for row in load_workflow_proposals(output_dir):
+            row_indexes[str(row.get("proposal_id", ""))] = len(rows)
+            rows.append(row)
     for proposal in proposals:
         incoming = workflow_change_proposal_to_dict(proposal)
         proposal_id = proposal.proposal_id
@@ -223,6 +233,9 @@ def load_workflow_proposals(output_dir: str | Path) -> list[dict[str, Any]]:
             continue
         row = json.loads(line)
         if isinstance(row, dict):
+            status = str(row.get("status", "proposed"))
+            if status.strip().lower() in {*PROPOSAL_STATUSES, "accepted"}:
+                row["status"] = normalize_proposal_status(status)
             rows.append(row)
     return rows
 

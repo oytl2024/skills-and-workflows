@@ -106,6 +106,16 @@ Then check knowledge health:
 python -m wqb.cli knowledge-health-check --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
 ```
 
+Research readiness treats a compiled data-ledger row as authoritative only when its
+canonical raw capture contains the matching field and scope, the scope outcome and
+manifest are certified complete, and the source date is valid. The health command
+also reports wiki metadata, `compiled_from` backlinks, source-index coverage, and
+orphan raw sources alongside the existing freshness results.
+
+`compile-operator-semantics` merges canonical operator captures and missing defaults
+with the existing reviewed ledger by operator ID. Reviewed records take precedence
+and are not discarded by recompilation.
+
 `cache-metadata` remains a targeted exploration command. It is not the authoritative data scheduling ledger.
 
 ## Console Research Selection

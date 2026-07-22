@@ -6,6 +6,7 @@ from typing import Any
 
 from wqb.knowledge_contracts import (
     canonical_source_family,
+    parse_markdown_front_matter,
     validate_raw_metadata,
     validate_wiki_metadata,
 )
@@ -44,6 +45,28 @@ class KnowledgeHealthIssue:
     path: str
     message: str
     action: str
+
+
+def _vault_relative(path: Path, root: Path) -> str:
+    """Input: vault path and root. Output: POSIX relative path. Normalize contract references."""
+    return path.resolve().relative_to(root.resolve()).as_posix()
+
+
+def _resolve_vault_reference(root: Path, value: str) -> Path | None:
+    """Input: vault root and metadata reference. Output: resolved vault path or none. Reject external backlinks."""
+    candidate = Path(str(value).replace("\\", "/"))
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+    else:
+        parts = candidate.parts
+        if parts and parts[0].lower() == root.name.lower():
+            candidate = Path(*parts[1:])
+        resolved = (root / candidate).resolve()
+    try:
+        resolved.relative_to(root.resolve())
+    except ValueError:
+        return None
+    return resolved
 
 
 def _record_from_dict(row: dict[str, Any]) -> KnowledgeFreshnessRecord:
@@ -128,7 +151,41 @@ def evaluate_knowledge_contract_health(knowledge_root: str | Path) -> dict[str, 
     legacy_count = 0
     raw_root = root / "raw"
     wiki_root = root / "wiki"
-    for path in sorted(raw_root.rglob("*.md")) if raw_root.exists() else []:
+    source_index = raw_root / "source_index.md"
+    raw_paths = [
+        path
+        for path in (sorted(raw_root.rglob("*.md")) if raw_root.exists() else [])
+        if path != source_index
+    ]
+    wiki_references: set[str] = set()
+    for path in sorted(wiki_root.rglob("*.md")) if wiki_root.exists() else []:
+        metadata, _ = parse_markdown_front_matter(path.read_text(encoding="utf-8"))
+        compiled_from = metadata.get("compiled_from", [])
+        if isinstance(compiled_from, list):
+            for value in compiled_from:
+                resolved = _resolve_vault_reference(root, str(value))
+                if resolved is None or not resolved.is_file():
+                    issues.append(
+                        KnowledgeHealthIssue(
+                            code="wiki_backlink_missing",
+                            path=str(path),
+                            message=f"compiled_from target does not exist: {value}",
+                            action="Restore the canonical raw source or correct the compiled_from backlink.",
+                        )
+                    )
+                    continue
+                wiki_references.add(_vault_relative(resolved, root))
+        for issue in validate_wiki_metadata(path):
+            issues.append(
+                KnowledgeHealthIssue(
+                    code="wiki_metadata_missing",
+                    path=str(path),
+                    message=issue,
+                    action="Add compiled_from, trust, stale policy, update trigger, and consumed_by metadata.",
+                )
+            )
+    index_text = source_index.read_text(encoding="utf-8") if source_index.exists() else ""
+    for path in raw_paths:
         family = canonical_source_family(path, root)
         if family == "legacy":
             legacy_count += 1
@@ -149,19 +206,31 @@ def evaluate_knowledge_contract_health(knowledge_root: str | Path) -> dict[str, 
                     action="Add raw source metadata or mark the source as migration-only.",
                 )
             )
-    for path in sorted(wiki_root.rglob("*.md")) if wiki_root.exists() else []:
-        for issue in validate_wiki_metadata(path):
+        relative = _vault_relative(path, root)
+        indexed = relative in index_text
+        if not indexed:
             issues.append(
                 KnowledgeHealthIssue(
-                    code="wiki_metadata_missing",
+                    code="source_index_coverage_missing",
                     path=str(path),
-                    message=issue,
-                    action="Add compiled_from, trust, update trigger, and consumed_by metadata.",
+                    message="Canonical raw source is missing from raw/source_index.md.",
+                    action="Regenerate the source index with this canonical raw source.",
+                )
+            )
+        if not indexed and relative not in wiki_references:
+            issues.append(
+                KnowledgeHealthIssue(
+                    code="orphan_raw_source",
+                    path=str(path),
+                    message="Canonical raw source is not referenced by wiki compiled_from metadata or the source index.",
+                    action="Index the raw source and compile it into a wiki target, or mark it as migration-only.",
                 )
             )
     return {
         "issue_count": len(issues),
         "legacy_count": legacy_count,
+        "raw_source_count": len(raw_paths),
+        "wiki_page_count": len(list(wiki_root.rglob("*.md"))) if wiki_root.exists() else 0,
         "issues": [asdict(issue) for issue in issues],
     }
 

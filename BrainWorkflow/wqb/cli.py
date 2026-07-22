@@ -153,7 +153,7 @@ def knowledge_health_check(
     output_path: str | Path,
     today_value: str | None = None,
 ) -> dict[str, Any]:
-    """Input: knowledge root, manifest path, output path, date string. Output: summary dict. Check compiled knowledge freshness."""
+    """Input: knowledge root, manifest path, output path, date string. Output: summary dict. Check freshness and contracts."""
     root = Path(knowledge_root)
     manifest = Path(manifest_path)
     if not manifest.is_absolute():
@@ -165,10 +165,26 @@ def knowledge_health_check(
     records = load_freshness_manifest(manifest, strict=True)
     statuses = evaluate_freshness(records, current, artifact_root=root)
     report = write_freshness_report(output, statuses, datetime.now(timezone.utc).replace(microsecond=0).isoformat())
+    from wqb.knowledge_freshness import evaluate_knowledge_contract_health
+
+    contract_health = evaluate_knowledge_contract_health(root)
+    contract_lines = ["", "## Knowledge Contract Health", "", f"Issue count: `{contract_health['issue_count']}`", ""]
+    if contract_health["issues"]:
+        contract_lines.extend(["| Code | Path | Message |", "| --- | --- | --- |"])
+        contract_lines.extend(
+            f"| {issue['code']} | `{issue['path']}` | {issue['message']} |"
+            for issue in contract_health["issues"]
+        )
+    else:
+        contract_lines.append("No contract issues found.")
+    with report.open("a", encoding="utf-8") as handle:
+        handle.write("\n".join(contract_lines) + "\n")
     return {
         "record_count": len(statuses),
         "stale_count": len([status for status in statuses if status.stale]),
         "missing_count": len([status for status in statuses if not status.artifact_exists]),
+        "contract_issue_count": contract_health["issue_count"],
+        "contract_health": contract_health,
         "report_path": str(report),
     }
 
@@ -3683,63 +3699,20 @@ def main() -> None:
         result = compile_data_ledger_command(args.knowledge_root, capture_dir=args.capture_dir or None)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "compile-operator-semantics":
-        from wqb.operator_semantics import OperatorSemanticRecord, write_operator_semantics_jsonl, write_operator_semantics_markdown
+        from wqb.operator_semantics import compile_operator_semantics
 
         generated = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-        root = Path(args.knowledge_root)
-        records = [
-            OperatorSemanticRecord(
-                operator="rank",
-                family="cross_sectional_normalizer",
-                workflow_uses=["normalize_cross_section", "reduce_scale_dependency"],
-                compatible_field_types=["MATRIX"],
-                template_tags=["cross_sectional_normalizer"],
-                risk_tags=["crowded_when_used_on_price_volume_only"],
-                repair_levers=["group_rank", "group_neutralize"],
-                source_paths=["wiki/20_semantics/operator_catalog_official.md"],
-            ),
-            OperatorSemanticRecord(
-                operator="ts_delta",
-                family="time_series_change",
-                workflow_uses=["capture_recent_change", "event_surprise"],
-                compatible_field_types=["MATRIX"],
-                template_tags=["time_series_surprise", "event"],
-                risk_tags=["turnover_inflation"],
-                repair_levers=["increase_window", "add_decay"],
-                source_paths=["wiki/20_semantics/operator_catalog_official.md"],
-            ),
-            OperatorSemanticRecord(
-                operator="vec_avg",
-                family="vector_to_matrix",
-                workflow_uses=["summarize_vector_values"],
-                compatible_field_types=["VECTOR"],
-                template_tags=["event_value", "vector_to_matrix"],
-                risk_tags=["invalid_raw_vector_use"],
-                repair_levers=["replace_vec_count_with_vec_avg"],
-                source_paths=["wiki/20_semantics/operators.md"],
-            ),
-        ]
-        jsonl_path = root / "wiki" / "20_semantics" / "operator_semantics.jsonl"
-        md_path = root / "wiki" / "20_semantics" / "operator_semantics.md"
-        write_operator_semantics_jsonl(jsonl_path, records)
-        write_operator_semantics_markdown(md_path, records, generated)
-        print(json.dumps({"record_count": len(records), "jsonl_path": str(jsonl_path), "markdown_path": str(md_path)}, ensure_ascii=False, indent=2))
+        result = compile_operator_semantics(args.knowledge_root, generated)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "knowledge-contract-check":
-        from wqb.knowledge_contracts import validate_raw_metadata, validate_wiki_metadata
+        from wqb.knowledge_freshness import evaluate_knowledge_contract_health
 
         root = Path(args.knowledge_root)
-        source_index = root / "raw" / "source_index.md"
-        issues = []
-        for path in sorted((root / "raw").rglob("*.md")):
-            if path == source_index:
-                continue
-            for issue in validate_raw_metadata(path):
-                issues.append({"path": str(path), "issue": issue})
-        for path in sorted((root / "wiki").rglob("*.md")):
-            for issue in validate_wiki_metadata(path):
-                issues.append({"path": str(path), "issue": issue})
-        print(json.dumps({"issue_count": len(issues), "issues": issues}, ensure_ascii=False, indent=2))
-        if issues and args.readiness_mode in {"research", "submit-candidate"}:
+        result = evaluate_knowledge_contract_health(root)
+        output_result = dict(result)
+        output_result["issues"] = [dict(issue, issue=issue["message"]) for issue in result["issues"]]
+        print(json.dumps(output_result, ensure_ascii=False, indent=2))
+        if result["issues"] and args.readiness_mode in {"research", "submit-candidate"}:
             raise SystemExit(1)
     elif args.command == "knowledge-health-check":
         result = knowledge_health_check(

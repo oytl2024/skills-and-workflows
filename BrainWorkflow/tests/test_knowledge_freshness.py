@@ -14,6 +14,65 @@ from wqb.knowledge_freshness import (
 
 
 class KnowledgeFreshnessTest(unittest.TestCase):
+    def test_contract_health_accepts_indexed_raw_and_resolved_wiki_backlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            raw = root / "raw" / "platform" / "learn" / "2026-07-22" / "operators.md"
+            raw.parent.mkdir(parents=True)
+            raw.write_text(
+                "---\nsource_type: platform_api\nsource_family: learn\nsource_path: /operators\n"
+                "captured_at: 2026-07-22T00:00:00Z\ncapture_tool: test\nrecord_count: 1\n"
+                "content_hash: abc\nupdate_check: compare operators\ncompiled_targets:\n"
+                "  - wiki/20_semantics/operators.md\n---\n# Operators\n",
+                encoding="utf-8",
+            )
+            index = root / "raw" / "source_index.md"
+            index.parent.mkdir(parents=True, exist_ok=True)
+            index.write_text("# Raw Source Index\n\n## `raw/platform/learn/2026-07-22/operators.md`\n", encoding="utf-8")
+            wiki = root / "wiki" / "20_semantics" / "operators.md"
+            wiki.parent.mkdir(parents=True)
+            wiki.write_text(
+                "---\ncompiled_from:\n  - raw/platform/learn/2026-07-22/operators.md\n"
+                "compiled_at: 2026-07-22\ntrust_level: working_rule\nstale_after_days: 14\n"
+                "update_trigger: operator catalog changed\nconsumed_by:\n  - research_planner\n---\n# Operators\n",
+                encoding="utf-8",
+            )
+
+            report = evaluate_knowledge_contract_health(root)
+
+        self.assertEqual(report["issue_count"], 0)
+
+    def test_contract_health_reports_broken_backlink_index_gap_and_orphan_raw(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            raw = root / "raw" / "platform" / "learn" / "2026-07-22" / "orphan.md"
+            raw.parent.mkdir(parents=True)
+            raw.write_text(
+                "---\nsource_type: platform_api\nsource_family: learn\nsource_path: /orphan\n"
+                "captured_at: 2026-07-22T00:00:00Z\ncapture_tool: test\nrecord_count: 1\n"
+                "content_hash: abc\nupdate_check: compare\ncompiled_targets:\n  - wiki/20_semantics/operators.md\n"
+                "---\n# Orphan\n",
+                encoding="utf-8",
+            )
+            index = root / "raw" / "source_index.md"
+            index.parent.mkdir(parents=True, exist_ok=True)
+            index.write_text("# Raw Source Index\n", encoding="utf-8")
+            wiki = root / "wiki" / "20_semantics" / "operators.md"
+            wiki.parent.mkdir(parents=True)
+            wiki.write_text(
+                "---\ncompiled_from:\n  - raw/platform/learn/2026-07-22/missing.md\n"
+                "compiled_at: 2026-07-22\ntrust_level: working_rule\nstale_after_days: 14\n"
+                "update_trigger: changed\nconsumed_by:\n  - research_planner\n---\n# Operators\n",
+                encoding="utf-8",
+            )
+
+            report = evaluate_knowledge_contract_health(root)
+
+        codes = {issue["code"] for issue in report["issues"]}
+        self.assertIn("wiki_backlink_missing", codes)
+        self.assertIn("source_index_coverage_missing", codes)
+        self.assertIn("orphan_raw_source", codes)
+
     def test_load_freshness_manifest(self):
         row = {
             "name": "data_ledger",

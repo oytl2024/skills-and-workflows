@@ -70,6 +70,21 @@ class RunReadinessTests(unittest.TestCase):
 
     def create_scope_ready_artifacts(self, root: Path) -> None:
         self.create_minimal_artifacts(root)
+        scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+        capture = root / "raw" / "platform" / "data_fields" / "2026-07-10"
+        capture.mkdir(parents=True)
+        (capture / "data_fields.jsonl").write_text(
+            json.dumps({"scope": scope, "data_set": {"id": "news12"}, "field": {"id": "news_field"}}) + "\n",
+            encoding="utf-8",
+        )
+        (capture / "scopes.jsonl").write_text(
+            json.dumps({"scope": scope, "status": "completed", "certification_status": "complete"}) + "\n",
+            encoding="utf-8",
+        )
+        (capture / "manifest.json").write_text(
+            json.dumps({"generated_at": "2026-07-10T00:00:00Z", "certification_status": "complete", "requested_matrix": [scope]}),
+            encoding="utf-8",
+        )
         (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(
             json.dumps(
                 {
@@ -89,7 +104,8 @@ class RunReadinessTests(unittest.TestCase):
                     "last_used_at": "",
                     "best_result_label": "unexplored",
                     "correlation_risk": "low",
-                    "source_paths": [],
+                    "source_paths": ["raw/platform/data_fields/2026-07-10/data_fields.jsonl"],
+                    "available_scopes": [scope],
                     "source_quality": "platform_raw_capture",
                     "coverage_status": "measured_raw",
                     "source_updated_at": "2026-07-10",
@@ -301,6 +317,10 @@ class RunReadinessTests(unittest.TestCase):
             row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8"))
             row["source_updated_at"] = "2026-07-08"
             (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+            capture_manifest = root / "raw" / "platform" / "data_fields" / "2026-07-10" / "manifest.json"
+            payload = json.loads(capture_manifest.read_text(encoding="utf-8"))
+            payload["generated_at"] = "2026-07-08T00:00:00Z"
+            capture_manifest.write_text(json.dumps(payload), encoding="utf-8")
 
             report = evaluate_run_readiness(
                 root,
@@ -369,3 +389,26 @@ class RunReadinessTests(unittest.TestCase):
 
         self.assertEqual(payload["mode"], "plan-only")
         self.assertIn("# Run Readiness Report", markdown)
+
+    def test_research_blocks_self_declared_measured_row_without_raw_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.create_scope_ready_artifacts(root)
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-10"
+            for path in capture.iterdir():
+                path.unlink()
+            capture.rmdir()
+
+            report = evaluate_run_readiness(
+                root,
+                mode="research",
+                batch_size=30,
+                live_api_enabled=True,
+                region="USA",
+                universe="TOP3000",
+                delay=1,
+                today_value="2026-07-10",
+            )
+
+        self.assertTrue(report.blocked)
+        self.assertIn("cache_only_data_ledger", {issue.code for issue in report.issues})

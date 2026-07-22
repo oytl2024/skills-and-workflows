@@ -4,6 +4,7 @@ from pathlib import Path
 
 from wqb.operator_semantics import (
     OperatorSemanticRecord,
+    compile_operator_semantics,
     load_operator_semantics,
     operator_semantic_record_from_dict,
     score_operator_for_template,
@@ -13,6 +14,36 @@ from wqb.operator_semantics import (
 
 
 class OperatorSemanticsTests(unittest.TestCase):
+    def test_compile_preserves_curated_records_and_adds_missing_canonical_operators(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            output = root / "wiki" / "20_semantics" / "operator_semantics.jsonl"
+            output.parent.mkdir(parents=True)
+            curated = OperatorSemanticRecord(
+                operator="rank",
+                family="reviewed_family",
+                workflow_uses=["reviewed_use"],
+                compatible_field_types=["MATRIX"],
+                template_tags=["reviewed"],
+                risk_tags=[],
+                repair_levers=[],
+                source_paths=["raw/community/advisor_notes/rank.md"],
+            )
+            write_operator_semantics_jsonl(output, [curated])
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-22"
+            capture.mkdir(parents=True)
+            (capture / "operators.json").write_text(
+                '{"generated_at":"2026-07-22T00:00:00Z","operators":[{"name":"rank"},{"name":"group_rank"}]}',
+                encoding="utf-8",
+            )
+
+            summary = compile_operator_semantics(root, generated_at="2026-07-22T01:00:00Z")
+            records = {record.operator: record for record in load_operator_semantics(output)}
+
+        self.assertEqual(summary["record_count"], len(records))
+        self.assertEqual(records["rank"].family, "reviewed_family")
+        self.assertIn("group_rank", records)
+
     def test_operator_semantic_record_loads_workflow_use_and_risk(self):
         record = operator_semantic_record_from_dict(
             {

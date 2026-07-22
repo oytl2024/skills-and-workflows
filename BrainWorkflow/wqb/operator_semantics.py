@@ -23,6 +23,42 @@ class OperatorSemanticRecord:
     source_paths: list[str]
 
 
+def default_operator_semantics() -> list[OperatorSemanticRecord]:
+    """Input: none. Output: default records. Seed missing workflow semantics without replacing reviewed rows."""
+    return [
+        OperatorSemanticRecord(
+            operator="rank",
+            family="cross_sectional_normalizer",
+            workflow_uses=["normalize_cross_section", "reduce_scale_dependency"],
+            compatible_field_types=["MATRIX"],
+            template_tags=["cross_sectional_normalizer"],
+            risk_tags=["crowded_when_used_on_price_volume_only"],
+            repair_levers=["group_rank", "group_neutralize"],
+            source_paths=["wiki/20_semantics/operator_catalog_official.md"],
+        ),
+        OperatorSemanticRecord(
+            operator="ts_delta",
+            family="time_series_change",
+            workflow_uses=["capture_recent_change", "event_surprise"],
+            compatible_field_types=["MATRIX"],
+            template_tags=["time_series_surprise", "event"],
+            risk_tags=["turnover_inflation"],
+            repair_levers=["increase_window", "add_decay"],
+            source_paths=["wiki/20_semantics/operator_catalog_official.md"],
+        ),
+        OperatorSemanticRecord(
+            operator="vec_avg",
+            family="vector_to_matrix",
+            workflow_uses=["summarize_vector_values"],
+            compatible_field_types=["VECTOR"],
+            template_tags=["event_value", "vector_to_matrix"],
+            risk_tags=["invalid_raw_vector_use"],
+            repair_levers=["replace_vec_count_with_vec_avg"],
+            source_paths=["wiki/20_semantics/operators.md"],
+        ),
+    ]
+
+
 def normalize_string_list(value: Any, *, uppercase: bool = False) -> list[str]:
     """Input: None, string, or list value. Output: normalized string list. Preserve scalar strings as one item."""
     if value is None:
@@ -112,3 +148,63 @@ def score_operator_for_template(record: OperatorSemanticRecord, field_type: str,
     score += len(shared) * TAG_MATCH_BONUS
     score -= len(record.risk_tags) * RISK_PENALTY
     return round(score, 4)
+
+
+def _canonical_operator_rows(knowledge_root: Path) -> list[tuple[dict[str, Any], str]]:
+    """Input: vault root. Output: operator rows and source paths. Read canonical structured operator captures."""
+    capture_root = knowledge_root / "raw" / "platform" / "data_fields"
+    rows: list[tuple[dict[str, Any], str]] = []
+    for path in sorted(capture_root.glob("*/operators.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        operators = payload.get("operators", []) if isinstance(payload, dict) else []
+        if not isinstance(operators, list):
+            continue
+        source_path = path.relative_to(knowledge_root).as_posix()
+        rows.extend((row, source_path) for row in operators if isinstance(row, dict))
+    return rows
+
+
+def _record_from_canonical_operator(row: dict[str, Any], source_path: str) -> OperatorSemanticRecord | None:
+    """Input: canonical operator row and path. Output: semantic record or none. Compile conservative source semantics."""
+    operator = str(row.get("name", row.get("operator", row.get("id", "")))).strip()
+    if not operator:
+        return None
+    return OperatorSemanticRecord(
+        operator=operator,
+        family=str(row.get("category", row.get("family", "unclassified"))) or "unclassified",
+        workflow_uses=normalize_string_list(row.get("workflow_uses")),
+        compatible_field_types=normalize_string_list(row.get("compatible_field_types"), uppercase=True),
+        template_tags=normalize_string_list(row.get("template_tags")),
+        risk_tags=normalize_string_list(row.get("risk_tags")),
+        repair_levers=normalize_string_list(row.get("repair_levers")),
+        source_paths=[source_path],
+    )
+
+
+def compile_operator_semantics(
+    knowledge_root: str | Path, generated_at: str
+) -> dict[str, Any]:
+    """Input: vault root and timestamp. Output: compile summary. Merge canonical operators, seeds, and reviewed records."""
+    root = Path(knowledge_root)
+    jsonl_path = root / "wiki" / "20_semantics" / "operator_semantics.jsonl"
+    markdown_path = root / "wiki" / "20_semantics" / "operator_semantics.md"
+    by_operator = {record.operator: record for record in default_operator_semantics()}
+    for row, source_path in _canonical_operator_rows(root):
+        record = _record_from_canonical_operator(row, source_path)
+        if record is not None and record.operator not in by_operator:
+            by_operator[record.operator] = record
+    reviewed = load_operator_semantics(jsonl_path)
+    for record in reviewed:
+        by_operator[record.operator] = record
+    records = list(by_operator.values())
+    write_operator_semantics_jsonl(jsonl_path, records)
+    write_operator_semantics_markdown(markdown_path, records, generated_at)
+    return {
+        "record_count": len(records),
+        "reviewed_record_count": len(reviewed),
+        "jsonl_path": str(jsonl_path),
+        "markdown_path": str(markdown_path),
+    }

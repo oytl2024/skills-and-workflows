@@ -43,6 +43,7 @@ class ConsoleServerTests(unittest.TestCase):
             "data_coverage": {"field_count": 14, "scope_count": 1, "data_set_count": 4, "error_count": 0, "status": "completed"},
             "data_authority": {"record_count": 14, "authoritative_measured_count": 0, "seed_cache_count": 14, "unclassified_count": 0, "authoritative_ready": False},
             "knowledge_contracts": {"issue_count": 2, "legacy_count": 1, "issues": []},
+            "semantic_ledgers": {"operator_semantic_count": 9, "matrix_ready_template_count": 4, "active_benchmark_rule_count": 3, "ready": True},
             "option_cards": [{"option_id": "option-1", "title": "Power Pool", "maintenance_blockers": ["Authoritative data ledger is missing."]}],
             "startable_scopes": [],
             "jobs": [],
@@ -60,6 +61,9 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn("seed/cache", html)
         self.assertIn("authoritative measured", html)
         self.assertIn("Knowledge Contracts", html)
+        self.assertIn("operator semantics</strong> 9", html)
+        self.assertIn("matrix-ready templates", html)
+        self.assertIn("active benchmark rules", html)
         self.assertIn("Authoritative data ledger is missing", html)
 
     def test_render_dashboard_exposes_research_progress_and_knowledge_controls(self):
@@ -175,6 +179,15 @@ class ConsoleServerTests(unittest.TestCase):
             template = paths.knowledge_root / "wiki" / "30_templates" / "template_library.jsonl"
             template.parent.mkdir(parents=True)
             template.write_text(json.dumps({"template_id": "matrix_ts_zscore_rank", "status": "discovery_ready", "required_field_types": ["MATRIX"]}) + "\n", encoding="utf-8")
+            self._write_start_fixture(
+                paths,
+                {"title": "First objective"},
+                [{"dataset_id": "fundamental3", "field_id": "cash_field", "region": "USA", "delay": 1, "universe": "TOP3000", "source_quality": "platform_raw_capture", "coverage_status": "measured_raw", "compatible_template_ids": ["matrix_ts_zscore_rank"]}],
+            )
+            (decisions / "research_option_cards.jsonl").write_text(
+                json.dumps(valid_option(title="First objective")) + "\n\nnot-json\n" + json.dumps(valid_option(title="Second objective")) + "\n",
+                encoding="utf-8",
+            )
             html = render_dashboard({"option_cards": [valid_option(title="First objective"), valid_option(title="Second objective")]})
             command = build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-2", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
@@ -473,17 +486,41 @@ class ConsoleServerTests(unittest.TestCase):
         ledger = paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
         ledger.parent.mkdir(parents=True, exist_ok=True)
         fresh_date = date.today().isoformat()
+        source_path = f"raw/platform/data_fields/{fresh_date}/data_fields.jsonl"
         rows = [
             {
                 "field_type": "MATRIX",
                 "semantic_tags": ["cash"],
                 "coverage": 1.0,
                 "source_updated_at": fresh_date,
+                "source_paths": [source_path],
                 **row,
             }
             for row in ledger_rows
         ]
         ledger.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        scope_rows = []
+        raw_rows = []
+        for row in rows:
+            exact_scopes = row.get("available_scopes")
+            if not isinstance(exact_scopes, list):
+                exact_scopes = [{"instrument_type": "EQUITY", "region": row.get("region"), "delay": row.get("delay"), "universe": row.get("universe")}]
+            for scope in exact_scopes:
+                if not isinstance(scope, dict):
+                    continue
+                scope_rows.append(scope)
+                raw_rows.append({"scope": scope, "data_set": {"id": row.get("dataset_id")}, "field": {"id": row.get("field_id")}})
+        capture = paths.knowledge_root / "raw" / "platform" / "data_fields" / fresh_date
+        capture.mkdir(parents=True, exist_ok=True)
+        (capture / "data_fields.jsonl").write_text("".join(json.dumps(row) + "\n" for row in raw_rows), encoding="utf-8")
+        (capture / "scopes.jsonl").write_text(
+            "".join(json.dumps({"scope": scope, "status": "completed", "certification_status": "complete"}) + "\n" for scope in scope_rows),
+            encoding="utf-8",
+        )
+        (capture / "manifest.json").write_text(
+            json.dumps({"generated_at": f"{fresh_date}T00:00:00Z", "certification_status": "complete", "requested_matrix": scope_rows}),
+            encoding="utf-8",
+        )
         template_path = paths.knowledge_root / "wiki" / "30_templates" / "template_library.jsonl"
         template_path.parent.mkdir(parents=True, exist_ok=True)
         template_row = template if template is not None else {"template_id": "matrix_ts_zscore_rank", "status": "discovery_ready", "required_field_types": ["MATRIX"], "compatible_regions": ["USA"], "compatible_delays": [1], "compatible_universes": ["TOP3000"]}

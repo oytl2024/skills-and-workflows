@@ -80,6 +80,21 @@ def write_ready_knowledge_artifacts(root: Path) -> None:
     (root / "wiki" / "50_benchmarks").mkdir(parents=True, exist_ok=True)
     (root / "wiki" / "10_foundations").mkdir(parents=True, exist_ok=True)
     (root / "wiki" / "80_maintenance").mkdir(parents=True, exist_ok=True)
+    scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+    capture = root / "raw" / "platform" / "data_fields" / fresh_date
+    capture.mkdir(parents=True, exist_ok=True)
+    (capture / "data_fields.jsonl").write_text(
+        json.dumps({"scope": scope, "data_set": {"id": "news12"}, "field": {"id": "news_field"}}) + "\n",
+        encoding="utf-8",
+    )
+    (capture / "scopes.jsonl").write_text(
+        json.dumps({"scope": scope, "status": "completed", "certification_status": "complete"}) + "\n",
+        encoding="utf-8",
+    )
+    (capture / "manifest.json").write_text(
+        json.dumps({"generated_at": f"{fresh_date}T00:00:00Z", "certification_status": "complete", "requested_matrix": [scope]}),
+        encoding="utf-8",
+    )
     (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(
         json.dumps(
             {
@@ -99,13 +114,14 @@ def write_ready_knowledge_artifacts(root: Path) -> None:
                 "last_used_at": "",
                 "best_result_label": "unexplored",
                 "correlation_risk": "low",
-                "source_paths": [],
+                "source_paths": [f"raw/platform/data_fields/{fresh_date}/data_fields.jsonl"],
                 "source_quality": "platform_raw_capture",
                 "coverage_status": "measured_raw",
                 "source_updated_at": fresh_date,
                 "available_regions": ["USA"],
                 "available_delays": [1],
                 "available_universes": ["TOP3000"],
+                "available_scopes": [scope],
             }
         )
         + "\n",
@@ -530,10 +546,13 @@ class CliTests(unittest.TestCase):
             result = knowledge_health_check(root, manifest, report, today_value="2026-07-10")
 
             self.assertTrue(Path(result["report_path"]).exists())
-            self.assertIn("missing", report.read_text(encoding="utf-8"))
+            report_text = report.read_text(encoding="utf-8")
+            self.assertIn("missing", report_text)
+            self.assertIn("Knowledge Contract Health", report_text)
 
         self.assertEqual(result["stale_count"], 4)
         self.assertEqual(result["missing_count"], 4)
+        self.assertEqual(result["contract_issue_count"], 0)
 
     def test_knowledge_health_check_rejects_partial_manifest(self):
         from wqb.cli import knowledge_health_check
@@ -592,13 +611,19 @@ class CliTests(unittest.TestCase):
                         "last_used_at": "2026-07-09",
                         "best_result_label": "repairable_signal",
                         "correlation_risk": "medium",
-                        "source_paths": ["raw"],
+                        "source_paths": [f"raw/platform/data_fields/{date.today().isoformat()}/data_fields.jsonl"],
                         "source_quality": "platform_raw_capture",
                         "coverage_status": "measured_raw",
                         "source_updated_at": date.today().isoformat(),
+                        "available_scopes": [{"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}],
                     }
                 )
                 + "\n",
+                encoding="utf-8",
+            )
+            capture_fields = root / "raw" / "platform" / "data_fields" / date.today().isoformat() / "data_fields.jsonl"
+            capture_fields.write_text(
+                json.dumps({"scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}, "data_set": {"id": "news12"}, "field": {"id": "news12_sentiment_fast_d1"}}) + "\n",
                 encoding="utf-8",
             )
             (template_dir / "template_library.jsonl").write_text(
@@ -655,7 +680,7 @@ class CliTests(unittest.TestCase):
             ledger_dir.mkdir(parents=True, exist_ok=True)
             template_dir.mkdir(parents=True, exist_ok=True)
             (ledger_dir / "data_ledger.jsonl").write_text(
-                json.dumps({"dataset_id": "news12", "dataset_name": "News", "field_id": "news_field", "field_type": "MATRIX", "region": "USA", "delay": 1, "universe": "TOP3000", "semantic_tags": ["power_pool"], "coverage": 0.8, "alpha_count": 0, "user_count": 0, "simulation_usage_count": 0, "submitted_usage_count": 0, "last_used_at": "", "best_result_label": "unexplored", "correlation_risk": "low", "source_paths": [], "source_quality": "platform_raw_capture", "coverage_status": "measured_raw", "source_updated_at": date.today().isoformat()}) + "\n",
+                json.dumps({"dataset_id": "news12", "dataset_name": "News", "field_id": "news_field", "field_type": "MATRIX", "region": "USA", "delay": 1, "universe": "TOP3000", "semantic_tags": ["power_pool"], "coverage": 0.8, "alpha_count": 0, "user_count": 0, "simulation_usage_count": 0, "submitted_usage_count": 0, "last_used_at": "", "best_result_label": "unexplored", "correlation_risk": "low", "source_paths": [f"raw/platform/data_fields/{date.today().isoformat()}/data_fields.jsonl"], "source_quality": "platform_raw_capture", "coverage_status": "measured_raw", "source_updated_at": date.today().isoformat(), "available_scopes": [{"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}]}) + "\n",
                 encoding="utf-8",
             )
             (template_dir / "template_library.jsonl").write_text(

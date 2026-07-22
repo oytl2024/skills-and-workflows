@@ -97,13 +97,15 @@ def _option_blockers(cards: list[dict[str, Any]]) -> str:
     return "<ul>" + "".join(f"<li>{escape(item)}</li>" for item in blockers[:6]) + "</ul>"
 
 
-def _render_semantic_ledgers(coverage: dict[str, Any]) -> str:
-    """Input: data coverage summary. Output: HTML. Render compiled semantic ledger coverage."""
+def _render_semantic_ledgers(summary: dict[str, Any]) -> str:
+    """Input: semantic summary. Output: HTML. Render operator, template, and benchmark authority."""
+    ready = bool(summary.get("ready"))
     return (
         "<div class='ledger-strip'>"
-        + _badge("data fields", coverage.get("field_count", 0))
-        + _badge("scopes", coverage.get("scope_count", 0))
-        + _badge("data sets", coverage.get("data_set_count", 0))
+        + _badge("operator semantics", summary.get("operator_semantic_count", 0), "ready" if ready else "warn")
+        + _badge("matrix-ready templates", summary.get("matrix_ready_template_count", 0), "ready" if ready else "warn")
+        + _badge("active benchmark rules", summary.get("active_benchmark_rule_count", 0), "ready" if ready else "warn")
+        + _badge("ready", "yes" if ready else "no", "ready" if ready else "blocked")
         + "</div>"
     )
 
@@ -234,7 +236,7 @@ def render_dashboard(state: dict[str, Any]) -> str:
 <section><h2>Data Coverage</h2>{data_coverage_panel}</section>
 <section><h2>Data Authority</h2>{_render_data_authority(state.get("data_authority", {}))}</section>
 <section><h2>Knowledge Contracts</h2>{_render_knowledge_contracts(state.get("knowledge_contracts", {}))}</section>
-<section><h2>Semantic Ledgers</h2>{_render_semantic_ledgers(data_coverage)}</section>
+<section><h2>Semantic Ledgers</h2>{_render_semantic_ledgers(state.get("semantic_ledgers", {}))}</section>
 <section><h2>Proposal Lifecycle</h2>{_render_proposal_lifecycle(state.get("proposal_counts", {}))}</section>
 <section><h2>Option Blockers</h2>{_option_blockers(option_rows)}</section>
 <section class="wide"><h2>Recent Jobs</h2><ul>{job_items}</ul></section>

@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
+from wqb.benchmark_rules import BenchmarkRule, default_benchmark_rules, rules_for_issue_type
+
 
 BENCHMARK_REVIEW_DAYS = 3
 SIGNAL_SHARPE_FLOOR = 0.9
@@ -90,8 +92,10 @@ def pnl_signal_observed(alpha_record: dict[str, Any]) -> bool:
     return any(keyword in text for keyword in PNL_SIGNAL_KEYWORDS)
 
 
-def benchmark_alpha_record(alpha_record: dict[str, Any]) -> AlphaBenchmarkResult:
-    """Input: alpha record. Output: benchmark result. Classify hard pass, repairable signal, or discard."""
+def benchmark_alpha_record(
+    alpha_record: dict[str, Any], benchmark_rules: list[BenchmarkRule] | None = None
+) -> AlphaBenchmarkResult:
+    """Input: alpha record and optional active rules. Output: benchmark result. Apply persisted promotion authority."""
     metrics = alpha_record.get("metrics") if isinstance(alpha_record.get("metrics"), dict) else {}
     failed = check_name_set(alpha_record, "failed")
     pending = check_name_set(alpha_record, "pending")
@@ -156,9 +160,12 @@ def benchmark_alpha_record(alpha_record: dict[str, Any]) -> AlphaBenchmarkResult
         score += 0.1
         reasons.append("repairable_turnover")
 
-    if pnl_signal_observed(alpha_record):
+    active_rules = default_benchmark_rules() if benchmark_rules is None else benchmark_rules
+    pnl_rules = rules_for_issue_type(active_rules, "pnl_signal")
+    if pnl_signal_observed(alpha_record) and pnl_rules:
         score += 0.25
         reasons.append("pnl_shape_signal")
+        reasons.extend(f"benchmark_rule:{rule.rule_id}" for rule in pnl_rules)
 
     if checks_to_repair:
         score += 0.1

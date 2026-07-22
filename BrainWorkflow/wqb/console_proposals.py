@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from wqb.benchmark_rules import load_active_benchmark_rules
 from wqb.workflow_proposals import WorkflowChangeProposal, proposal_from_issue, write_workflow_proposals
 
 
@@ -31,6 +32,12 @@ def create_proposal_from_form(
         "evidence_paths": _split_lines_or_commas(form.get("evidence_paths", "")),
         "affected_modules": _split_lines_or_commas(form.get("affected_modules", "")),
     }
-    proposal = proposal_from_issue(issue, generated)
-    write_workflow_proposals(Path(output_dir), [proposal])
+    destination = Path(output_dir)
+    knowledge_root = destination.parents[1] if len(destination.parents) > 1 else destination
+    proposal = proposal_from_issue(
+        issue,
+        generated,
+        benchmark_rules=load_active_benchmark_rules(knowledge_root),
+    )
+    write_workflow_proposals(destination, [proposal])
     return proposal

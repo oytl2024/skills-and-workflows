@@ -20,6 +20,54 @@ def make_paths(root: Path) -> ConsolePaths:
 
 
 class ConsoleStateTests(unittest.TestCase):
+    def test_console_state_summarizes_semantic_ledgers_and_normalizes_legacy_proposals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            semantics = paths.knowledge_root / "wiki" / "20_semantics"
+            templates = paths.knowledge_root / "wiki" / "30_templates"
+            benchmarks = paths.knowledge_root / "wiki" / "50_benchmarks"
+            decisions = paths.knowledge_root / "wiki" / "70_decisions"
+            for directory in (semantics, templates, benchmarks, decisions):
+                directory.mkdir(parents=True, exist_ok=True)
+            (semantics / "operator_semantics.jsonl").write_text(
+                json.dumps({"operator": "rank", "family": "normalizer"}) + "\n",
+                encoding="utf-8",
+            )
+            (templates / "template_library.jsonl").write_text(
+                json.dumps(
+                    {
+                        "template_id": "ready",
+                        "hypothesis": "h",
+                        "repair_levers": ["window"],
+                        "data_semantics": ["event"],
+                        "economic_hypothesis": "h",
+                        "operator_composition": ["rank"],
+                        "abandon_conditions": ["no_signal"],
+                        "template_family": "event",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (benchmarks / "benchmark_rules.jsonl").write_text(
+                json.dumps({"rule_id": "active", "issue_types": ["near_miss"], "action": "repair"}) + "\n",
+                encoding="utf-8",
+            )
+            (decisions / "workflow_change_proposals.jsonl").write_text(
+                json.dumps({"proposal_id": "legacy", "status": "accepted"}) + "\n",
+                encoding="utf-8",
+            )
+
+            state = load_console_state(paths)
+
+        self.assertEqual(state["semantic_ledgers"]["operator_semantic_count"], 1)
+        self.assertEqual(state["semantic_ledgers"]["matrix_ready_template_count"], 1)
+        self.assertEqual(state["semantic_ledgers"]["active_benchmark_rule_count"], 1)
+        self.assertTrue(state["semantic_ledgers"]["ready"])
+        self.assertEqual(state["proposal_counts"], {"accepted_for_implementation": 1})
+        self.assertEqual(state["proposals"][0]["status"], "accepted_for_implementation")
+
     def test_console_state_includes_knowledge_contract_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

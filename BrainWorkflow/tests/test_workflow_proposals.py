@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from wqb.benchmark_rules import BenchmarkRule
 from wqb.workflow_proposals import (
     WorkflowChangeProposal,
     load_workflow_proposals,
@@ -15,6 +16,39 @@ from wqb.workflow_proposals import (
 
 
 class WorkflowProposalsTest(unittest.TestCase):
+    def test_proposal_uses_injected_persisted_benchmark_rule(self):
+        persisted = BenchmarkRule(
+            rule_id="curated_prod_corr",
+            issue_types=["prod_correlation"],
+            description="Curated production-correlation response.",
+            promotion_condition="Production correlation fails.",
+            action="Use the curated novelty action.",
+            evidence_paths=["wiki/50_benchmarks/curated.md"],
+            consumed_by=["workflow_proposals"],
+            risk="curated risk",
+        )
+
+        proposal = proposal_from_issue(
+            {"issue_type": "prod_correlation", "summary": "Correlation failed."},
+            "2026-07-22T00:00:00Z",
+            benchmark_rules=[persisted],
+        )
+
+        self.assertEqual(proposal.proposed_rule_change, "Use the curated novelty action.")
+        self.assertIn("curated_prod_corr", proposal.expected_benefit)
+
+    def test_load_normalizes_legacy_accepted_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            (output_dir / "workflow_change_proposals.jsonl").write_text(
+                json.dumps({"proposal_id": "legacy", "status": "accepted"}) + "\n",
+                encoding="utf-8",
+            )
+
+            rows = load_workflow_proposals(output_dir)
+
+        self.assertEqual(rows[0]["status"], "accepted_for_implementation")
+
     def test_proposal_from_correlation_issue(self):
         issue = {
             "issue_type": "prod_correlation",
@@ -81,7 +115,7 @@ class WorkflowProposalsTest(unittest.TestCase):
             rows = [json.loads(line) for line in jsonl_path.read_text(encoding="utf-8").splitlines()]
 
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["status"], "accepted")
+        self.assertEqual(rows[0]["status"], "accepted_for_implementation")
         self.assertEqual(rows[0]["user_decision"], "accept")
 
     def test_update_workflow_proposal_decision_accepts_spec_b_lifecycle_statuses(self):

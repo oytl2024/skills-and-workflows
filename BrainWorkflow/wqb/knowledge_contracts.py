@@ -49,6 +49,7 @@ WIKI_REQUIRED_FIELDS = (
     "compiled_from",
     "compiled_at",
     "trust_level",
+    "stale_after_days",
     "update_trigger",
     "consumed_by",
 )
@@ -74,6 +75,7 @@ class WikiPageMetadata:
     compiled_from: list[str]
     compiled_at: str
     trust_level: str
+    stale_after_days: int
     update_trigger: str
     consumed_by: list[str]
 
@@ -192,6 +194,13 @@ def validate_wiki_metadata(path: Path) -> list[str]:
         value = metadata.get(list_field, [])
         if value and not isinstance(value, list):
             issues.append(f"{list_field} must be a list")
+    stale_after_days = metadata.get("stale_after_days")
+    if stale_after_days not in (None, ""):
+        try:
+            if int(stale_after_days) <= 0:
+                issues.append("stale_after_days must be positive")
+        except (TypeError, ValueError):
+            issues.append("stale_after_days must be a positive integer")
     return issues
 
 

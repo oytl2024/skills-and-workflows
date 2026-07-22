@@ -279,6 +279,6 @@ def workflow_action_for_platform_issue(message: str) -> dict[str, str]:
     }
 
 
-def is_near_miss(alpha_record: dict[str, Any]) -> bool:
-    """Input: alpha record dict. Output: bool. Detect good-core Alphas suitable for Repair stage."""
-    return benchmark_alpha_record(alpha_record).label == "repairable_signal"
+def is_near_miss(alpha_record: dict[str, Any], benchmark_rules: list[Any] | None = None) -> bool:
+    """Input: alpha record and optional active rules. Output: bool. Apply rulebook authority to Repair promotion."""
+    return benchmark_alpha_record(alpha_record, benchmark_rules=benchmark_rules).label == "repairable_signal"

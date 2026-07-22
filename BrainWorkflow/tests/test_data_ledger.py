@@ -18,6 +18,60 @@ from wqb.data_ledger import (
 
 
 class DataLedgerTest(unittest.TestCase):
+    def test_authority_requires_certified_canonical_raw_capture_evidence(self):
+        scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+        record = data_ledger_record_from_dict(
+            {
+                "dataset_id": "fundamental3",
+                "field_id": "cash_field",
+                "field_type": "MATRIX",
+                "region": "USA",
+                "delay": 1,
+                "universe": "TOP3000",
+                "coverage": 1.0,
+                "source_quality": "platform_raw_capture",
+                "coverage_status": "measured_raw",
+                "source_updated_at": "2026-07-22",
+                "source_paths": ["raw/platform/data_fields/2026-07-22/data_fields.jsonl"],
+                "available_scopes": [scope],
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-22"
+            capture.mkdir(parents=True)
+            (capture / "data_fields.jsonl").write_text(
+                json.dumps(
+                    {
+                        "scope": scope,
+                        "data_set": {"id": "fundamental3"},
+                        "field": {"id": "cash_field", "type": "MATRIX"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(data_record_authority(record, root), "unclassified")
+
+            (capture / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "generated_at": "2026-07-22T08:00:00+00:00",
+                        "certification_status": "complete",
+                        "requested_matrix": [scope],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (capture / "scopes.jsonl").write_text(
+                json.dumps({"scope": scope, "status": "completed", "certification_status": "complete"}) + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(data_record_authority(record, root), "authoritative_measured")
+            self.assertTrue(is_authoritative_data_record(record, root))
+
     def test_data_record_authority_distinguishes_cache_and_measured_platform_rows(self):
         cache = DataLedgerRecord(
             dataset_id="fundamental3",

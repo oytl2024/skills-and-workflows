@@ -1,4 +1,5 @@
 from dataclasses import asdict, dataclass, field
+from datetime import date
 import json
 from pathlib import Path
 from typing import Any
@@ -108,14 +109,190 @@ def data_ledger_record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
     )
 
 
-def data_record_authority(record: DataLedgerRecord) -> str:
-    """Input: data ledger record. Output: authority label. Classify seed/cache versus measured platform rows."""
+def _scope_key(scope: dict[str, Any]) -> tuple[str, str, int, str] | None:
+    """Input: scope dict. Output: normalized scope tuple or none. Validate captured platform scope fields."""
+    try:
+        key = (
+            str(scope.get("instrument_type", "EQUITY") or "EQUITY").strip().upper(),
+            str(scope.get("region", "")).strip().upper(),
+            int(scope.get("delay")),
+            str(scope.get("universe", "")).strip().upper(),
+        )
+    except (TypeError, ValueError):
+        return None
+    return key if key[0] and key[1] and key[2] >= 0 and key[3] else None
+
+
+def _record_scope_keys(record: DataLedgerRecord) -> set[tuple[str, str, int, str]]:
+    """Input: ledger record. Output: exact scope tuples. Normalize current and legacy scope metadata."""
+    keys = {
+        key
+        for scope in record.available_scopes or []
+        if isinstance(scope, dict) and (key := _scope_key(scope)) is not None
+    }
+    if keys:
+        return keys
+    key = _scope_key(
+        {
+            "instrument_type": record.instrument_type or "EQUITY",
+            "region": record.region,
+            "delay": record.delay,
+            "universe": record.universe,
+        }
+    )
+    return {key} if key is not None else set()
+
+
+def _valid_source_date(value: str) -> date | None:
+    """Input: source date string. Output: parsed date or none. Reject malformed provenance dates."""
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _canonical_capture_path(knowledge_root: Path, source_path: str) -> Path | None:
+    """Input: vault root and source path. Output: canonical capture path or none. Resolve only raw data-field evidence."""
+    candidate = Path(str(source_path).replace("\\", "/"))
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+    else:
+        parts = candidate.parts
+        if parts and parts[0].lower() == knowledge_root.name.lower():
+            candidate = Path(*parts[1:])
+        resolved = (knowledge_root / candidate).resolve()
+    root = knowledge_root.resolve()
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError:
+        return None
+    expected = ("raw", "platform", "data_fields")
+    if tuple(part.lower() for part in relative.parts[:3]) != expected:
+        return None
+    if resolved.name != "data_fields.jsonl" or len(relative.parts) < 5:
+        return None
+    return resolved
+
+
+def _latest_scope_outcomes(capture_dir: Path) -> dict[tuple[str, str, int, str], dict[str, Any]]:
+    """Input: capture directory. Output: latest outcome by scope. Read append-only capture certification rows."""
+    outcomes: dict[tuple[str, str, int, str], dict[str, Any]] = {}
+    path = capture_dir / "scopes.jsonl"
+    if not path.exists():
+        return outcomes
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return outcomes
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or not isinstance(row.get("scope"), dict):
+            continue
+        key = _scope_key(row["scope"])
+        if key is not None:
+            outcomes[key] = row
+    return outcomes
+
+
+def _manifest_certifies_scopes(
+    manifest: dict[str, Any],
+    outcomes: dict[tuple[str, str, int, str], dict[str, Any]],
+    required_scopes: set[tuple[str, str, int, str]],
+) -> bool:
+    """Input: manifest, outcomes, required scopes. Output: bool. Validate manifest and exact-scope certification."""
+    if manifest.get("certification_status") != "complete" or not required_scopes:
+        return False
+    requested = manifest.get("requested_matrix")
+    if isinstance(requested, list):
+        requested_keys = {
+            key for item in requested if isinstance(item, dict) and (key := _scope_key(item)) is not None
+        }
+        if not required_scopes.issubset(requested_keys):
+            return False
+    return all(
+        (outcome := outcomes.get(key)) is not None
+        and outcome.get("status") == "completed"
+        and outcome.get("certification_status") == "complete"
+        for key in required_scopes
+    )
+
+
+def _raw_rows_cover_record(path: Path, record: DataLedgerRecord, required_scopes: set[tuple[str, str, int, str]]) -> bool:
+    """Input: raw JSONL path, record, scopes. Output: bool. Confirm raw rows contain the field in every certified scope."""
+    covered: set[tuple[str, str, int, str]] = set()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(row, dict):
+            return False
+        field = row.get("field") if isinstance(row.get("field"), dict) else {}
+        data_set = row.get("data_set") if isinstance(row.get("data_set"), dict) else {}
+        scope = row.get("scope") if isinstance(row.get("scope"), dict) else {}
+        key = _scope_key(scope)
+        if (
+            key in required_scopes
+            and str(field.get("id", "")) == record.field_id
+            and str(data_set.get("id", "")) == record.dataset_id
+        ):
+            covered.add(key)
+    return required_scopes.issubset(covered)
+
+
+def _has_authoritative_capture_evidence(record: DataLedgerRecord, knowledge_root: Path) -> bool:
+    """Input: ledger record and vault root. Output: bool. Validate canonical raw rows, manifest, scope, and source date."""
+    source_date = _valid_source_date(record.source_updated_at)
+    required_scopes = _record_scope_keys(record)
+    if source_date is None or not required_scopes:
+        return False
+    remaining = set(required_scopes)
+    for source_path in record.source_paths:
+        raw_path = _canonical_capture_path(knowledge_root, source_path)
+        if raw_path is None or not raw_path.exists():
+            continue
+        capture_dir = raw_path.parent
+        try:
+            manifest = json.loads((capture_dir / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(manifest, dict):
+            continue
+        generated_at = str(manifest.get("generated_at", ""))
+        if len(generated_at) < 10 or _valid_source_date(generated_at[:10]) != source_date:
+            continue
+        outcomes = _latest_scope_outcomes(capture_dir)
+        certified = {
+            key
+            for key in remaining
+            if _manifest_certifies_scopes(manifest, outcomes, {key})
+            and _raw_rows_cover_record(raw_path, record, {key})
+        }
+        remaining -= certified
+    return not remaining
+
+
+def data_record_authority(record: DataLedgerRecord, knowledge_root: str | Path | None = None) -> str:
+    """Input: data ledger record and optional vault root. Output: authority label. Validate measured provenance."""
     if (
         record.source_quality == "platform_raw_capture"
         and record.coverage_status == "measured_raw"
-        and bool(record.source_updated_at)
+        and _valid_source_date(record.source_updated_at) is not None
     ):
-        return "authoritative_measured"
+        if knowledge_root is None or _has_authoritative_capture_evidence(record, Path(knowledge_root)):
+            return "authoritative_measured"
+        return "unclassified"
     if record.source_quality in {"platform_metadata_cache", "schema_seed", "bootstrap_seed"}:
         return "seed_cache"
     if record.coverage_status in {"measured_cache", "schema_seeded", "partial"}:
@@ -123,16 +300,18 @@ def data_record_authority(record: DataLedgerRecord) -> str:
     return "unclassified"
 
 
-def is_authoritative_data_record(record: DataLedgerRecord) -> bool:
-    """Input: data ledger record. Output: bool. Test whether the row is measured platform evidence."""
-    return data_record_authority(record) == "authoritative_measured"
+def is_authoritative_data_record(record: DataLedgerRecord, knowledge_root: str | Path | None = None) -> bool:
+    """Input: data ledger record and optional vault root. Output: bool. Test measured platform authority."""
+    return data_record_authority(record, knowledge_root) == "authoritative_measured"
 
 
-def summarize_data_ledger_authority(records: list[DataLedgerRecord]) -> dict[str, Any]:
-    """Input: data ledger records. Output: summary dict. Count authority classes for UI and readiness."""
+def summarize_data_ledger_authority(
+    records: list[DataLedgerRecord], knowledge_root: str | Path | None = None
+) -> dict[str, Any]:
+    """Input: data ledger records and optional vault root. Output: summary dict. Count validated authority classes."""
     counts = {"authoritative_measured": 0, "seed_cache": 0, "unclassified": 0}
     for record in records:
-        authority = data_record_authority(record)
+        authority = data_record_authority(record, knowledge_root)
         counts[authority] = counts.get(authority, 0) + 1
     return {
         "record_count": len(records),

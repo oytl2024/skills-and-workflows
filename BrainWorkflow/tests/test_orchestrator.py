@@ -111,8 +111,37 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 "compatible_template_ids": ["matrix_ts_zscore_rank"],
             }
         ]
+        source_path = f"raw/platform/data_fields/{fresh_date}/data_fields.jsonl"
+        selected_ledger_rows = [
+            {**row, "source_paths": row.get("source_paths") or [source_path]}
+            for row in (ledger_rows or default_ledger_rows)
+        ]
         ledger.write_text(
-            "".join(json.dumps(row) + "\n" for row in (ledger_rows or default_ledger_rows)),
+            "".join(json.dumps(row) + "\n" for row in selected_ledger_rows),
+            encoding="utf-8",
+        )
+        capture = knowledge / "raw" / "platform" / "data_fields" / fresh_date
+        capture.mkdir(parents=True, exist_ok=True)
+        scope_rows = []
+        raw_rows = []
+        for row in selected_ledger_rows:
+            exact_scopes = row.get("available_scopes")
+            if not isinstance(exact_scopes, list):
+                exact_scopes = [{"instrument_type": "EQUITY", "region": row.get("region"), "delay": row.get("delay"), "universe": row.get("universe")}]
+            for scope in exact_scopes:
+                if not isinstance(scope, dict):
+                    continue
+                scope_rows.append(scope)
+                raw_rows.append({"scope": scope, "data_set": {"id": row.get("dataset_id")}, "field": {"id": row.get("field_id")}})
+        (capture / "data_fields.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in raw_rows), encoding="utf-8"
+        )
+        (capture / "scopes.jsonl").write_text(
+            "".join(json.dumps({"scope": scope, "status": "completed", "certification_status": "complete"}) + "\n" for scope in scope_rows),
+            encoding="utf-8",
+        )
+        (capture / "manifest.json").write_text(
+            json.dumps({"generated_at": f"{fresh_date}T00:00:00Z", "certification_status": "complete", "requested_matrix": scope_rows}),
             encoding="utf-8",
         )
         templates = knowledge / "wiki" / "30_templates" / "template_library.jsonl"
@@ -327,7 +356,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 "dataset_id": "fundamental3", "dataset_name": "Fundamentals", "field_id": "cash_field", "field_type": "MATRIX",
                 "region": "USA", "delay": 1, "universe": "TOP3000", "semantic_tags": ["cash"], "coverage": 1.0,
                 "alpha_count": 0, "user_count": 0, "simulation_usage_count": 0, "submitted_usage_count": 0,
-                "last_used_at": "", "best_result_label": "unexplored", "correlation_risk": "low", "source_paths": [],
+                "last_used_at": "", "best_result_label": "unexplored", "correlation_risk": "low", "source_paths": [f"raw/platform/data_fields/{fresh_date}/data_fields.jsonl"],
                 "source_quality": "platform_raw_capture", "coverage_status": "measured_raw",
                 "source_updated_at": fresh_date,
                 "compatible_template_ids": ["matrix_ts_zscore_rank"],
@@ -336,6 +365,24 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                     {"instrument_type": "EQUITY", "region": "EUR", "delay": 0, "universe": "TOP500"},
                 ],
             }) + "\n", encoding="utf-8")
+            capture = knowledge / "raw" / "platform" / "data_fields" / fresh_date
+            capture.mkdir(parents=True)
+            scopes = [
+                {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"},
+                {"instrument_type": "EQUITY", "region": "EUR", "delay": 0, "universe": "TOP500"},
+            ]
+            (capture / "data_fields.jsonl").write_text(
+                "".join(json.dumps({"scope": scope, "data_set": {"id": "fundamental3"}, "field": {"id": "cash_field"}}) + "\n" for scope in scopes),
+                encoding="utf-8",
+            )
+            (capture / "scopes.jsonl").write_text(
+                "".join(json.dumps({"scope": scope, "status": "completed", "certification_status": "complete"}) + "\n" for scope in scopes),
+                encoding="utf-8",
+            )
+            (capture / "manifest.json").write_text(
+                json.dumps({"generated_at": f"{fresh_date}T00:00:00Z", "certification_status": "complete", "requested_matrix": scopes}),
+                encoding="utf-8",
+            )
             templates = knowledge / "wiki" / "30_templates" / "template_library.jsonl"
             templates.parent.mkdir(parents=True)
             templates.write_text(json.dumps({

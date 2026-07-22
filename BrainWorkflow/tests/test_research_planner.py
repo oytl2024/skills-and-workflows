@@ -112,6 +112,8 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertIn("operator_semantic_count", option)
         self.assertIn("template_matrix_ready_count", option)
         self.assertIn("benchmark_rule_count", option)
+        self.assertEqual(option["benchmark_rule_ids"], ["seed_rule"])
+        self.assertEqual(option["benchmark_actions"], ["Seed action."])
         self.assertIn("maintenance_blockers", option)
         self.assertIn("authoritative data ledger", " ".join(option["maintenance_blockers"]).lower())
         self.assertTrue(all(item["stale"] for item in option["evidence"]))

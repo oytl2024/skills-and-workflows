@@ -57,6 +57,7 @@ class KnowledgeContractTests(unittest.TestCase):
         self.assertIn("missing compiled_from", issues)
         self.assertIn("missing consumed_by", issues)
         self.assertIn("missing update_trigger", issues)
+        self.assertIn("missing stale_after_days", issues)
 
     def test_canonical_source_family_identifies_legacy_and_canonical_paths(self):
         with tempfile.TemporaryDirectory() as tmp:

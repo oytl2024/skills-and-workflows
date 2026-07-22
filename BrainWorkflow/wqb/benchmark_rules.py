@@ -70,6 +70,17 @@ def load_benchmark_rules(path: Path) -> list[BenchmarkRule]:
     return [benchmark_rule_from_dict(json.loads(line)) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def load_active_benchmark_rules(
+    knowledge_root: str | Path, fallback_to_defaults: bool = True
+) -> list[BenchmarkRule]:
+    """Input: vault root and fallback flag. Output: active rules. Prefer the persisted benchmark rulebook."""
+    path = Path(knowledge_root) / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+    rules = load_benchmark_rules(path)
+    if rules or not fallback_to_defaults:
+        return rules
+    return default_benchmark_rules()
+
+
 def write_benchmark_rules_jsonl(path: Path, rules: list[BenchmarkRule]) -> Path:
     """Input: path and rules. Output: path. Write deterministic benchmark JSONL."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,3 +118,9 @@ def rules_for_issue_type(rules: list[BenchmarkRule], issue_type: str) -> list[Be
     """Input: rules and issue type. Output: matching rules. Find active rules for a failure class."""
     normalized = issue_type.lower()
     return [rule for rule in rules if normalized in {item.lower() for item in rule.issue_types}]
+
+
+def rules_for_consumer(rules: list[BenchmarkRule], consumer: str) -> list[BenchmarkRule]:
+    """Input: rules and consumer name. Output: applicable rules. Select active authority for one workflow component."""
+    normalized = consumer.lower()
+    return [rule for rule in rules if normalized in {item.lower() for item in rule.consumed_by}]
