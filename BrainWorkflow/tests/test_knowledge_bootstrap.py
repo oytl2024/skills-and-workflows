@@ -76,6 +76,32 @@ class KnowledgeBootstrapTests(unittest.TestCase):
             self.assertEqual(summary.data_ledger_count, 1)
             self.assertEqual(summary.template_count, 1)
 
+    def test_bootstrap_preserves_existing_compiled_ledger_and_templates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            seed_root = Path(tmp) / "seed"
+            self.create_seed_files(seed_root)
+            ledger_jsonl = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger_md = root / "wiki" / "20_semantics" / "data_ledger.md"
+            template_jsonl = root / "wiki" / "30_templates" / "template_library.jsonl"
+            template_md = root / "wiki" / "30_templates" / "template_library.md"
+            existing = {
+                ledger_jsonl: '{"field_id":"authoritative_field","source_quality":"platform_api"}\n',
+                ledger_md: "# Authoritative Data Ledger\n",
+                template_jsonl: '{"template_id":"curated_template","status":"submit_proven"}\n',
+                template_md: "# Curated Template Library\n",
+            }
+            for path, content in existing.items():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+
+            summary = bootstrap_knowledge(root, seed_root, generated_at="2026-07-10T00:00:00Z")
+
+            preserved = {path: path.read_text(encoding="utf-8") for path in existing}
+
+        self.assertEqual(preserved, existing)
+        self.assertTrue(any("preserved" in warning.lower() for warning in summary.warnings))
+
     def test_bootstrap_marks_seed_rows_as_schema_seed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"

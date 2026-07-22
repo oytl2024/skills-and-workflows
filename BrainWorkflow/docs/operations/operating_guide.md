@@ -70,15 +70,23 @@ python -m wqb.cli compile-research-records --knowledge-root 'C:\Users\oytl\Deskt
 
 2. **Platform-material refresh before new research.** When the user asks to update platform Learn/docs/operators/activities/forum raw material, update the raw source layer first, then run knowledge maintenance before starting research. Research startup consumes the newly compiled wiki, ledger, template, and manifest artifacts rather than raw captures directly.
 
-Manual maintenance loop:
+`bootstrap-knowledge` is an initialization scaffold command. Run it only for a new vault or to recreate missing scaffold files; it preserves existing compiled ledger and template artifacts and does not compile refreshed platform data.
+
+Initial scaffold command:
 
 ```powershell
 python -m wqb.cli bootstrap-knowledge --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
+```
+
+Routine maintenance loop:
+
+```powershell
+python -m wqb.cli compile-research-records --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
 python -m wqb.cli knowledge-health-check --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
 python -m wqb.cli readiness-check --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --readiness-mode maintenance
 ```
 
-Use this after a research session, after platform rule/activity changes, or on a scheduled maintenance day.
+Use the routine loop after a research session or on a scheduled maintenance day. After platform data-field capture, run `compile-data-ledger` before the health and readiness checks below.
 
 ## Platform Data Field Maintenance
 

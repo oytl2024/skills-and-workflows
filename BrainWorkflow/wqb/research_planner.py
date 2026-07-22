@@ -2,7 +2,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from wqb.benchmark_rules import load_active_benchmark_rules, rules_for_consumer
+from wqb.benchmark_rules import BenchmarkRule, load_active_benchmark_rules, rules_for_consumer
 from wqb.data_ledger import load_data_ledger, summarize_data_ledger_authority
 from wqb.operator_semantics import load_operator_semantics
 from wqb.principle_model import (
@@ -47,6 +47,23 @@ def _planner_contract_inputs(knowledge_root: Path) -> dict[str, Any]:
     }
 
 
+def _apply_planner_rule_annotations(option: dict[str, Any], rules: list[BenchmarkRule]) -> dict[str, Any]:
+    """Input: option row and planner rules. Output: annotated option row. Apply persisted rules to option risk."""
+    if option.get("primary_incentive") == "knowledge_refresh" or not rules:
+        return option
+    annotations = [
+        f"Active benchmark rule {rule.rule_id}: {rule.action} Rule risk: {rule.risk}"
+        for rule in rules
+        if rule.action or rule.risk
+    ]
+    if annotations:
+        option["correlation_risk"] = " ".join([str(option.get("correlation_risk", "")).strip(), *annotations]).strip()
+        score = option.get("score")
+        if isinstance(score, dict):
+            score["reasons"] = [*score.get("reasons", []), *annotations]
+    return option
+
+
 def plan_research_options(
     knowledge_root: str | Path,
     generated_at: str,
@@ -83,11 +100,12 @@ def plan_research_options(
             ],
         )
     contract_inputs = _planner_contract_inputs(root)
+    planner_rules = rules_for_consumer(load_active_benchmark_rules(root, fallback_to_defaults=False), "research_planner")
     options = []
     for card in generate_research_options(snapshot, max_options=max_options):
         option = option_card_to_dict(card)
         option.update(contract_inputs)
-        options.append(option)
+        options.append(_apply_planner_rule_annotations(option, planner_rules))
     return {
         "generated_at": generated_at,
         "option_count": len(options),

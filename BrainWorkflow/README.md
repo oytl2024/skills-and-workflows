@@ -104,7 +104,7 @@ Example foundation files live under `docs/knowledge/`:
 
 The startup layer separates maintenance from research execution:
 
-- `bootstrap-knowledge` materializes Data Ledger, Template Library, Freshness Manifest, and bootstrap reports into the shared Obsidian vault.
+- `bootstrap-knowledge` creates missing initial Data Ledger, Template Library, Freshness Manifest, and bootstrap report scaffolds in a new or incomplete vault. It preserves existing compiled artifacts and is not a post-refresh compile command.
 - `compile-research-records` compiles raw research records from completed runs into `wiki/40_experiments/research_record_compile.md`.
 - `readiness-check` validates required artifacts, parseability, freshness, batch size, live API permission, and submit confirmation.
 - `launch-workflow` writes a run manifest, readiness report, and subagent handoff packets before research execution. In strict research or submit-candidate modes, blocked readiness writes only a blocked readiness report and does not create a run manifest or handoffs.
@@ -119,6 +119,8 @@ python -m wqb.cli readiness-check --knowledge-root C:\Users\oytl\Desktop\pyproje
 python -m wqb.cli launch-workflow --workflow-objective current-incentives --workflow-mode plan-only
 ```
 
+Run `bootstrap-knowledge` only when initializing or recovering missing vault structure. After platform data-field refreshes, use `compile-data-ledger`; after research sessions, use `compile-research-records`.
+
 ## Workflow Console
 
 The local console is a small standard-library browser UI for operating the existing CLI and Orchestrator without relying on a long chat context.
@@ -132,4 +134,4 @@ It shows readiness, freshness, research options, current workflow state, job his
 Knowledge maintenance is deliberately split:
 
 - Compile research records after research sessions with `compile-research-records`.
-- Compile refreshed platform material with `bootstrap-knowledge` and verify with `knowledge-health-check` before starting research.
+- Compile refreshed platform data with `compile-data-ledger`, then verify with `knowledge-health-check` before starting research.

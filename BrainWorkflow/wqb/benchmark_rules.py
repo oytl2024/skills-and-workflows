@@ -75,9 +75,10 @@ def load_active_benchmark_rules(
 ) -> list[BenchmarkRule]:
     """Input: vault root and fallback flag. Output: active rules. Prefer the persisted benchmark rulebook."""
     path = Path(knowledge_root) / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
-    rules = load_benchmark_rules(path)
-    if rules or not fallback_to_defaults:
-        return rules
+    if path.exists():
+        return load_benchmark_rules(path)
+    if not fallback_to_defaults:
+        return []
     return default_benchmark_rules()
 
 

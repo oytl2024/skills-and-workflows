@@ -1,5 +1,6 @@
 import re
 from dataclasses import dataclass, field as dataclass_field
+from pathlib import Path
 from typing import Any, Iterable
 
 from wqb.benchmark import REPAIRABLE_CHECKS, benchmark_alpha_record
@@ -279,6 +280,14 @@ def workflow_action_for_platform_issue(message: str) -> dict[str, str]:
     }
 
 
-def is_near_miss(alpha_record: dict[str, Any], benchmark_rules: list[Any] | None = None) -> bool:
-    """Input: alpha record and optional active rules. Output: bool. Apply rulebook authority to Repair promotion."""
-    return benchmark_alpha_record(alpha_record, benchmark_rules=benchmark_rules).label == "repairable_signal"
+def is_near_miss(
+    alpha_record: dict[str, Any],
+    benchmark_rules: list[Any] | None = None,
+    knowledge_root: str | Path | None = None,
+) -> bool:
+    """Input: alpha record, rules, optional vault root. Output: bool. Apply rulebook authority to Repair promotion."""
+    return benchmark_alpha_record(
+        alpha_record,
+        benchmark_rules=benchmark_rules,
+        knowledge_root=knowledge_root,
+    ).label == "repairable_signal"

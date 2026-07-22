@@ -18,6 +18,7 @@ from wqb.knowledge_contracts import SourceIndexRow, update_source_index
 from wqb.principle_model import OptionCard, ScoreBreakdown, SourceEvidence
 from wqb.cli import (
     authenticate_for_run,
+    benchmark_fields_for_record,
     cache_metadata,
     config_overrides_from_args,
     complete_in_flight_simulations,
@@ -164,6 +165,38 @@ def write_ready_knowledge_artifacts(root: Path) -> None:
 
 
 class CliTests(unittest.TestCase):
+    def test_benchmark_fields_use_persisted_rulebook(self):
+        from wqb.benchmark_rules import BenchmarkRule, write_benchmark_rules_jsonl
+
+        record = {
+            "hard_pass": False,
+            "metrics": {"sharpe": 0.7, "fitness": 0.1, "returns": 0.1, "turnover": 0.2},
+            "failed": ["LOW_SHARPE"],
+            "pending": [],
+            "signal_note": "stable pnl",
+        }
+        promotion = BenchmarkRule(
+            rule_id="cli_persisted_promotion",
+            issue_types=["pnl_signal"],
+            description="Promote stable PnL.",
+            promotion_condition="Stable PnL is observed.",
+            action="Send the candidate to repair.",
+            evidence_paths=[],
+            consumed_by=["candidate_gate"],
+            risk="May promote a fragile signal.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            path = root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+            write_benchmark_rules_jsonl(path, [])
+            before = benchmark_fields_for_record(record, knowledge_root=root)
+
+            write_benchmark_rules_jsonl(path, [promotion])
+            after = benchmark_fields_for_record(record, knowledge_root=root)
+
+        self.assertEqual(before["benchmark_label"], "weak_discard")
+        self.assertEqual(after["benchmark_label"], "repairable_signal")
+
     def test_launch_workflow_writes_manifest_readiness_and_handoffs(self):
         from wqb.cli import launch_workflow
 

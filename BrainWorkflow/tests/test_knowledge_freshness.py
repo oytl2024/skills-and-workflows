@@ -73,6 +73,26 @@ class KnowledgeFreshnessTest(unittest.TestCase):
         self.assertIn("source_index_coverage_missing", codes)
         self.assertIn("orphan_raw_source", codes)
 
+    def test_contract_health_rejects_wiki_to_wiki_compiled_from_backlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            upstream = root / "wiki" / "20_semantics" / "upstream.md"
+            upstream.parent.mkdir(parents=True)
+            upstream.write_text("# Upstream wiki page\n", encoding="utf-8")
+            compiled = root / "wiki" / "30_templates" / "compiled.md"
+            compiled.parent.mkdir(parents=True)
+            compiled.write_text(
+                "---\ncompiled_from:\n  - wiki/20_semantics/upstream.md\n"
+                "compiled_at: 2026-07-22\ntrust_level: working_rule\nstale_after_days: 14\n"
+                "update_trigger: upstream changed\nconsumed_by:\n  - research_planner\n---\n# Compiled\n",
+                encoding="utf-8",
+            )
+
+            report = evaluate_knowledge_contract_health(root)
+
+        codes = {issue["code"] for issue in report["issues"]}
+        self.assertIn("wiki_backlink_not_raw", codes)
+
     def test_load_freshness_manifest(self):
         row = {
             "name": "data_ledger",

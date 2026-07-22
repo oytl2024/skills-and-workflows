@@ -1,5 +1,8 @@
+import tempfile
 import unittest
+from pathlib import Path
 
+from wqb.benchmark_rules import BenchmarkRule, write_benchmark_rules_jsonl
 from wqb.research_workflow import (
     build_parallel_stage_plan,
     cap_simulation_count,
@@ -56,6 +59,35 @@ class ResearchWorkflowTests(unittest.TestCase):
         }
 
         self.assertTrue(is_near_miss(stable_signal))
+
+    def test_near_miss_uses_persisted_candidate_gate_rules(self):
+        stable_signal = {
+            "metrics": {"sharpe": 0.7, "fitness": 0.1, "returns": 0.1, "turnover": 0.2},
+            "failed": ["LOW_SHARPE"],
+            "pending": [],
+            "signal_note": "stable pnl",
+        }
+        promotion = BenchmarkRule(
+            rule_id="persisted_near_miss",
+            issue_types=["pnl_signal"],
+            description="Promote stable PnL.",
+            promotion_condition="Stable PnL is observed.",
+            action="Send the candidate to repair.",
+            evidence_paths=[],
+            consumed_by=["candidate_gate"],
+            risk="May promote a fragile signal.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            path = root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+            write_benchmark_rules_jsonl(path, [])
+            before = is_near_miss(stable_signal, knowledge_root=root)
+
+            write_benchmark_rules_jsonl(path, [promotion])
+            after = is_near_miss(stable_signal, knowledge_root=root)
+
+        self.assertFalse(before)
+        self.assertTrue(after)
 
     def test_scout_plan_splits_new_data_work_into_parallel_tasks(self):
         tasks = build_parallel_stage_plan("scout", ["search_interest", "news21"])

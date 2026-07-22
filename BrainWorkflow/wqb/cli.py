@@ -884,8 +884,8 @@ def latest_run_dir(run_root: str | Path) -> Path | None:
     return max(run_dirs, key=lambda path: path.stat().st_mtime)
 
 
-def summarize_run_dir(run_dir: str | Path) -> dict[str, Any]:
-    """Input: run directory path. Output: status summary dict. Summarize local run artifacts."""
+def summarize_run_dir(run_dir: str | Path, knowledge_root: str | Path | None = None) -> dict[str, Any]:
+    """Input: run path and optional vault root. Output: status summary dict. Summarize with active benchmark rules."""
     recorder = RunRecorder(run_dir)
     alpha_records = recorder.read_jsonl("all_alphas.jsonl")
     action_records = recorder.read_jsonl("optimization_trace.jsonl")
@@ -909,7 +909,7 @@ def summarize_run_dir(run_dir: str | Path) -> dict[str, Any]:
         failed_counts.update(str(item) for item in record.get("failed", []))
         pending_counts.update(str(item) for item in record.get("pending", []))
         warning_counts.update(str(item) for item in record.get("warnings", []))
-        benchmark = benchmark_alpha_record(record)
+        benchmark = benchmark_alpha_record(record, knowledge_root=knowledge_root)
         benchmark_counts[benchmark.label] += 1
         if benchmark.label == "repairable_signal":
             repair_queue.append(
@@ -941,7 +941,7 @@ def summarize_run_dir(run_dir: str | Path) -> dict[str, Any]:
             terminal_hashes.add(str(expression_hash))
     for record in existing_scan_records:
         existing_scan_failed_counts.update(str(item) for item in record.get("failed", []))
-        existing_benchmark = benchmark_alpha_record(record)
+        existing_benchmark = benchmark_alpha_record(record, knowledge_root=knowledge_root)
         existing_scan_benchmark_counts[existing_benchmark.label] += 1
         if existing_benchmark.label == "repairable_signal":
             existing_repair_queue.append(
@@ -1018,7 +1018,8 @@ def status(config: dict[str, Any], run_dir: str | None = None) -> None:
     if selected_run_dir is None:
         print(json.dumps({"run_dir": None, "message": "no run directories found"}, ensure_ascii=False, indent=2))
         return
-    print(json.dumps(summarize_run_dir(selected_run_dir), ensure_ascii=False, indent=2, sort_keys=True))
+    knowledge_root = config.get("knowledge_root", default_knowledge_root())
+    print(json.dumps(summarize_run_dir(selected_run_dir, knowledge_root), ensure_ascii=False, indent=2, sort_keys=True))
 
 
 def scan_existing_alpha_candidates(
@@ -1026,8 +1027,9 @@ def scan_existing_alpha_candidates(
     recorder: RunRecorder,
     max_scan: int,
     page_limit: int = 50,
+    knowledge_root: str | Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Input: WQB client, recorder, limits. Output: hard-pass candidate rows from existing IS Alphas."""
+    """Input: client, recorder, limits, vault root. Output: hard-pass rows. Scan with active benchmark rules."""
     candidates: list[dict[str, Any]] = []
     scanned = 0
     offset = 0
@@ -1062,7 +1064,7 @@ def scan_existing_alpha_candidates(
                 "pending": [item.name for item in summary.pending],
                 "warnings": [item.name for item in summary.warnings],
             }
-            scan_record.update(benchmark_fields_for_record(scan_record))
+            scan_record.update(benchmark_fields_for_record(scan_record, knowledge_root))
             recorder.append_jsonl("existing_alpha_scan.jsonl", scan_record)
             if summary.hard_pass:
                 candidate = {
@@ -1085,9 +1087,11 @@ def scan_existing_alpha_candidates(
     return candidates
 
 
-def benchmark_fields_for_record(alpha_record: dict[str, Any]) -> dict[str, Any]:
-    """Input: alpha record. Output: benchmark fields. Attach workflow classification to a record."""
-    benchmark = benchmark_alpha_record(alpha_record)
+def benchmark_fields_for_record(
+    alpha_record: dict[str, Any], knowledge_root: str | Path | None = None
+) -> dict[str, Any]:
+    """Input: alpha record and optional vault root. Output: benchmark fields. Apply active gate classification."""
+    benchmark = benchmark_alpha_record(alpha_record, knowledge_root=knowledge_root)
     return {
         "benchmark_label": benchmark.label,
         "signal_score": benchmark.score,
@@ -1102,8 +1106,9 @@ def inspect_existing_alpha(
     recorder: RunRecorder,
     alpha_id: str,
     signal_note: str = "",
+    knowledge_root: str | Path | None = None,
 ):
-    """Input: client, recorder, alpha id, note. Output: check summary. Inspect an existing Alpha without resim."""
+    """Input: client, recorder, alpha id, note, vault root. Output: summary. Inspect with active benchmark rules."""
     summary = fetch_check_summary(client, alpha_id)
     record = {
         "alpha_id": alpha_id,
@@ -1117,7 +1122,7 @@ def inspect_existing_alpha(
     }
     if signal_note:
         record["signal_note"] = signal_note
-    record.update(benchmark_fields_for_record(record))
+    record.update(benchmark_fields_for_record(record, knowledge_root))
     recorder.append_jsonl("all_alphas.jsonl", record)
     if summary.hard_pass:
         recorder.write_candidates(
@@ -1145,7 +1150,13 @@ def inspect_alpha(config: dict[str, Any], alpha_id: str, run_dir: str | None = N
         print(json.dumps({"run_dir": str(selected_run_dir), "status": "auth_recoverable_error"}, ensure_ascii=False))
         return
     try:
-        summary = inspect_existing_alpha(client, recorder, alpha_id, signal_note=signal_note)
+        summary = inspect_existing_alpha(
+            client,
+            recorder,
+            alpha_id,
+            signal_note=signal_note,
+            knowledge_root=config.get("knowledge_root", default_knowledge_root()),
+        )
     except requests.exceptions.RequestException as err:
         record_recoverable_network_error(recorder, "inspect_alpha", err, {"alpha_id": alpha_id})
         print(json.dumps({"run_dir": str(selected_run_dir), "status": "recoverable_error"}, ensure_ascii=False))
@@ -1792,8 +1803,9 @@ def run_expression_file_batch(
     multi_chunk_sleep_seconds: float = DEFAULT_MULTI_CHUNK_SLEEP_SECONDS,
     novelty_reference_records: list[dict[str, Any]] | None = None,
     min_novelty_score: int | None = None,
+    knowledge_root: str | Path | None = None,
 ) -> list[Any]:
-    """Input: client, recorder, JSONL path. Output: check summaries. Run custom expressions with cloned settings."""
+    """Input: client, recorder, JSONL path, options, vault root. Output: summaries. Run expressions with active rules."""
     items = load_expression_file_items(expression_file)
     detail_cache: dict[str, dict[str, Any]] = {}
     seen_hashes = set(seen_hashes or set())
@@ -1865,6 +1877,7 @@ def run_expression_file_batch(
         "run_expression_file",
         defer_poll=defer_poll,
         multi_chunk_sleep_seconds=multi_chunk_sleep_seconds,
+        knowledge_root=knowledge_root,
     )
 
 
@@ -2353,6 +2366,7 @@ def retry_planned_candidates(
         submit_mode,
         "retry_planned",
         defer_poll=defer_poll,
+        knowledge_root=config.get("knowledge_root", default_knowledge_root()),
     )
 
 
@@ -2366,8 +2380,9 @@ def submit_candidate_payloads(
     defer_poll: bool = False,
     multi_chunk_sleep_seconds: float = DEFAULT_MULTI_CHUNK_SLEEP_SECONDS,
     sleep_func=time.sleep,
+    knowledge_root: str | Path | None = None,
 ) -> list[Any]:
-    """Input: client, payloads, metadata, mode, stage prefix. Output: summaries. Submit and check payloads."""
+    """Input: client, payloads, mode, options, vault root. Output: summaries. Submit and classify with active rules."""
     summaries = []
     candidate_rows: list[dict[str, Any]] = []
     if submit_mode not in {"multi", "serial"}:
@@ -2442,7 +2457,7 @@ def submit_candidate_payloads(
                     "warnings": [check.name for check in summary.warnings],
                     **item,
                 }
-                record.update(benchmark_fields_for_record(record))
+                record.update(benchmark_fields_for_record(record, knowledge_root))
                 recorder.append_jsonl("all_alphas.jsonl", record)
                 if summary.hard_pass:
                     candidate_rows.append(candidate_row_from_summary(alpha_id, item, summary))
@@ -2495,7 +2510,7 @@ def submit_candidate_payloads(
             "warnings": [check.name for check in summary.warnings],
             **item,
         }
-        record.update(benchmark_fields_for_record(record))
+        record.update(benchmark_fields_for_record(record, knowledge_root))
         recorder.append_jsonl("all_alphas.jsonl", record)
         if summary.hard_pass:
             candidate_rows.append(candidate_row_from_summary(alpha_id, item, summary))
@@ -2673,7 +2688,12 @@ def scan_existing(config: dict[str, Any], max_scan: int, run_dir: str | None = N
             )
         )
         return
-    candidates = scan_existing_alpha_candidates(client, recorder, max_scan=max_scan)
+    candidates = scan_existing_alpha_candidates(
+        client,
+        recorder,
+        max_scan=max_scan,
+        knowledge_root=config.get("knowledge_root", default_knowledge_root()),
+    )
     recorder.write_markdown(
         "run_summary.md",
         f"# Existing Alpha Scan\n\nScanned up to {max_scan} IS Alphas. Candidates found: {len(candidates)}.\n",
@@ -2695,7 +2715,7 @@ def complete_in_flight(config: dict[str, Any], run_dir: str | None = None) -> No
                 {
                     "run_dir": str(selected_run_dir),
                     "completed_alpha_ids": [],
-                    "status": summarize_run_dir(selected_run_dir),
+                    "status": summarize_run_dir(selected_run_dir, config.get("knowledge_root", default_knowledge_root())),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -2708,7 +2728,7 @@ def complete_in_flight(config: dict[str, Any], run_dir: str | None = None) -> No
             {
                 "run_dir": str(selected_run_dir),
                 "completed_alpha_ids": completed_alpha_ids,
-                "status": summarize_run_dir(selected_run_dir),
+                "status": summarize_run_dir(selected_run_dir, config.get("knowledge_root", default_knowledge_root())),
             },
             ensure_ascii=False,
             indent=2,
@@ -2735,7 +2755,7 @@ def retry_planned(
         print(json.dumps({"run_dir": str(selected_run_dir), "status": "auth_recoverable_error"}, ensure_ascii=False, indent=2))
         return
     summaries = retry_planned_candidates(client, recorder, config, submit_mode=submit_mode, defer_poll=defer_poll)
-    run_status = summarize_run_dir(selected_run_dir)
+    run_status = summarize_run_dir(selected_run_dir, config.get("knowledge_root", default_knowledge_root()))
     status_label = field_batch_status_label(run_status, summaries)
     print(
         json.dumps(
@@ -2788,8 +2808,9 @@ def run_expression_file(
         multi_chunk_sleep_seconds=multi_chunk_sleep_seconds,
         novelty_reference_records=novelty_reference_records,
         min_novelty_score=min_novelty_score,
+        knowledge_root=config.get("knowledge_root", default_knowledge_root()),
     )
-    run_status = summarize_run_dir(selected_run_dir)
+    run_status = summarize_run_dir(selected_run_dir, config.get("knowledge_root", default_knowledge_root()))
     print(
         json.dumps(
             {
@@ -2857,7 +2878,7 @@ def refresh_alpha(
         raise
 
     if summary is None:
-        run_status = summarize_run_dir(run_dir)
+        run_status = summarize_run_dir(run_dir, config.get("knowledge_root", default_knowledge_root()))
         status_label = "pending_recovery" if run_status["in_flight_count"] else "simulation_error"
         recorder.write_markdown(
             "run_summary.md",
@@ -2934,7 +2955,7 @@ def refresh_alpha_batch(
             return
         raise
 
-    run_status = summarize_run_dir(run_dir)
+    run_status = summarize_run_dir(run_dir, config.get("knowledge_root", default_knowledge_root()))
     status_label = "pending_recovery" if run_status["in_flight_count"] and not summaries else "completed"
     print(
         json.dumps(
@@ -2978,7 +2999,7 @@ def repair_alpha_with_field(
         field_expression,
         blend_weights,
     )
-    run_status = summarize_run_dir(run_dir)
+    run_status = summarize_run_dir(run_dir, config.get("knowledge_root", default_knowledge_root()))
     status_label = field_batch_status_label(run_status, summaries)
     print(
         json.dumps(
@@ -3069,7 +3090,7 @@ def field_batch(
         defer_poll=defer_poll,
         multi_chunk_sleep_seconds=multi_chunk_sleep_seconds,
     )
-    run_status = summarize_run_dir(run_dir)
+    run_status = summarize_run_dir(run_dir, config.get("knowledge_root", default_knowledge_root()))
     status_label = field_batch_status_label(run_status, summaries)
     print(
         json.dumps(
@@ -3549,6 +3570,10 @@ def main() -> None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
     config = load_config(args.config, overrides=overrides)
+    if cli_flag_present(sys.argv[1:], "--knowledge-root"):
+        config["knowledge_root"] = args.knowledge_root
+    else:
+        config.setdefault("knowledge_root", str(default_knowledge_root()))
     if args.command == "dry-run":
         dry_run(config)
     elif args.command == "smoke":

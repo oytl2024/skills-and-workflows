@@ -94,7 +94,59 @@ def write_seed_knowledge(root: Path) -> None:
     )
 
 
+def visible_incentive_snapshot() -> IncentiveSnapshot:
+    """Input: none. Output: IncentiveSnapshot. Build visible planner options for rule behavior tests."""
+    return IncentiveSnapshot(
+        generated_at="2026-07-22T00:00:00+00:00",
+        account={"geniusLevel": "GOLD"},
+        activities=[],
+        competitions=[],
+        power_pool_boards=[{"value": "board", "label": "USA/D1 Power Pool"}],
+        rule_pages={"brain-genius": "signals", "osmosis-allocation-guide-consultants": "allocation"},
+        evidence=[SourceEvidence("api", "/users/self", "Account", "2026-07-22T00:00:00+00:00")],
+        refresh_errors=[],
+    )
+
+
 class ResearchPlannerTest(unittest.TestCase):
+    def test_persisted_planner_rule_changes_option_risk_annotation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            write_seed_knowledge(root)
+            rule_path = root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+            row = {
+                "rule_id": "planner_correlation_rule",
+                "issue_types": ["correlation"],
+                "description": "First persisted description.",
+                "promotion_condition": "Correlation risk is present.",
+                "action": "Require a distinct data source.",
+                "evidence_paths": [],
+                "consumed_by": ["research_planner"],
+                "risk": "May reduce option breadth.",
+            }
+            rule_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            first = plan_research_options(
+                root,
+                "2026-07-22T00:00:00+00:00",
+                max_options=5,
+                snapshot=visible_incentive_snapshot(),
+            )
+
+            row["action"] = "Prefer a new operator skeleton."
+            rule_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            second = plan_research_options(
+                root,
+                "2026-07-22T00:00:00+00:00",
+                max_options=5,
+                snapshot=visible_incentive_snapshot(),
+            )
+
+        first_risk = first["options"][0]["correlation_risk"]
+        second_risk = second["options"][0]["correlation_risk"]
+        self.assertIn("Require a distinct data source.", first_risk)
+        self.assertIn("Prefer a new operator skeleton.", second_risk)
+        self.assertNotEqual(first_risk, second_risk)
+
     def test_plan_research_options_records_semantic_inputs_and_cache_blocker(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"

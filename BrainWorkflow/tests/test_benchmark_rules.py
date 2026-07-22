@@ -6,6 +6,7 @@ from wqb.benchmark import benchmark_alpha_record
 from wqb.benchmark_rules import (
     BenchmarkRule,
     default_benchmark_rules,
+    load_active_benchmark_rules,
     load_benchmark_rules,
     rules_for_issue_type,
     write_benchmark_rules_jsonl,
@@ -14,6 +15,58 @@ from wqb.benchmark_rules import (
 
 
 class BenchmarkRulesTests(unittest.TestCase):
+    def test_gate_classification_uses_edited_persisted_rulebook(self):
+        record = {
+            "hard_pass": False,
+            "metrics": {"sharpe": 0.7, "fitness": 0.1, "returns": 0.1, "turnover": 0.2},
+            "failed": ["LOW_SHARPE"],
+            "pending": [],
+            "signal_note": "stable pnl",
+        }
+        unrelated = BenchmarkRule(
+            rule_id="unrelated_rule",
+            issue_types=["prod_correlation"],
+            description="Handle production correlation.",
+            promotion_condition="Production correlation fails.",
+            action="Require novelty.",
+            evidence_paths=[],
+            consumed_by=["candidate_gate"],
+            risk="May reject a repairable family.",
+        )
+        promotion = BenchmarkRule(
+            rule_id="persisted_pnl_promotion",
+            issue_types=["pnl_signal"],
+            description="Promote stable PnL.",
+            promotion_condition="Stable PnL is observed.",
+            action="Send the candidate to repair.",
+            evidence_paths=[],
+            consumed_by=["candidate_gate"],
+            risk="May promote a fragile signal.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            path = root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+            write_benchmark_rules_jsonl(path, [unrelated])
+            before = benchmark_alpha_record(record, knowledge_root=root)
+
+            write_benchmark_rules_jsonl(path, [promotion])
+            after = benchmark_alpha_record(record, knowledge_root=root)
+
+        self.assertEqual(before.label, "weak_discard")
+        self.assertEqual(after.label, "repairable_signal")
+        self.assertIn("benchmark_rule:persisted_pnl_promotion", after.reasons)
+
+    def test_present_empty_rulebook_does_not_restore_default_rules(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            path = root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+            path.parent.mkdir(parents=True)
+            path.write_text("", encoding="utf-8")
+
+            rules = load_active_benchmark_rules(root)
+
+        self.assertEqual(rules, [])
+
     def test_candidate_gate_uses_applicable_active_rule_for_pnl_promotion(self):
         record = {
             "hard_pass": False,

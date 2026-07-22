@@ -113,14 +113,31 @@ def load_template_library(path: Path) -> list[TemplateRecord]:
 
 def template_matrix_ready(template: TemplateRecord) -> bool:
     """Input: template record. Output: bool. Check whether template has the full matrix fields."""
+    correlation_risk = template.correlation_risk.strip().lower()
     return all(
         [
             bool(template.data_semantics),
             bool(template.economic_hypothesis),
+            bool(template.required_field_types),
+            bool(template.compatible_semantic_tags),
+            bool(template.operator_tags),
+            bool(template.compatible_regions),
+            bool(template.compatible_delays),
+            bool(template.compatible_universes),
+            bool(template.suitable_horizons),
+            bool(template.neutralization_styles),
+            bool(template.turnover_bucket),
+            bool(template.local_gates),
+            bool(template.experiment_paths),
+            bool(template.intended_direction),
+            bool(template.interpretation),
+            bool(template.decay),
             bool(template.operator_composition),
+            bool(template.source_paths),
             bool(template.repair_levers),
             bool(template.abandon_conditions),
             bool(template.template_family),
+            correlation_risk not in {"", "unknown", "unclassified", "none", "n/a", "not_applicable"},
         ]
     )
 

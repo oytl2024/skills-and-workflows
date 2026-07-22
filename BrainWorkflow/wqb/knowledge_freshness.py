@@ -174,7 +174,18 @@ def evaluate_knowledge_contract_health(knowledge_root: str | Path) -> dict[str, 
                         )
                     )
                     continue
-                wiki_references.add(_vault_relative(resolved, root))
+                relative = _vault_relative(resolved, root)
+                if not canonical_source_family(resolved, root).startswith("raw/"):
+                    issues.append(
+                        KnowledgeHealthIssue(
+                            code="wiki_backlink_not_raw",
+                            path=str(path),
+                            message=f"compiled_from target is not a canonical raw source: {value}",
+                            action="Replace the backlink with direct provenance under raw/platform, raw/community, or raw/research.",
+                        )
+                    )
+                    continue
+                wiki_references.add(relative)
         for issue in validate_wiki_metadata(path):
             issues.append(
                 KnowledgeHealthIssue(

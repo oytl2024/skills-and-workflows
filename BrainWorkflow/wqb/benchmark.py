@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any
 
-from wqb.benchmark_rules import BenchmarkRule, default_benchmark_rules, rules_for_issue_type
+from wqb.benchmark_rules import BenchmarkRule, default_benchmark_rules, load_active_benchmark_rules, rules_for_issue_type
 
 
 BENCHMARK_REVIEW_DAYS = 3
@@ -93,9 +94,11 @@ def pnl_signal_observed(alpha_record: dict[str, Any]) -> bool:
 
 
 def benchmark_alpha_record(
-    alpha_record: dict[str, Any], benchmark_rules: list[BenchmarkRule] | None = None
+    alpha_record: dict[str, Any],
+    benchmark_rules: list[BenchmarkRule] | None = None,
+    knowledge_root: str | Path | None = None,
 ) -> AlphaBenchmarkResult:
-    """Input: alpha record and optional active rules. Output: benchmark result. Apply persisted promotion authority."""
+    """Input: alpha record, rules, optional vault root. Output: benchmark result. Apply persisted promotion authority."""
     metrics = alpha_record.get("metrics") if isinstance(alpha_record.get("metrics"), dict) else {}
     failed = check_name_set(alpha_record, "failed")
     pending = check_name_set(alpha_record, "pending")
@@ -160,7 +163,12 @@ def benchmark_alpha_record(
         score += 0.1
         reasons.append("repairable_turnover")
 
-    active_rules = default_benchmark_rules() if benchmark_rules is None else benchmark_rules
+    if benchmark_rules is not None:
+        active_rules = benchmark_rules
+    elif knowledge_root is not None:
+        active_rules = load_active_benchmark_rules(knowledge_root)
+    else:
+        active_rules = default_benchmark_rules()
     pnl_rules = rules_for_issue_type(active_rules, "pnl_signal")
     if pnl_signal_observed(alpha_record) and pnl_rules:
         score += 0.25

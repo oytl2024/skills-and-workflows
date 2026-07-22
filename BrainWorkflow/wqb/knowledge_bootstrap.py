@@ -75,13 +75,39 @@ def _write_activity_snapshot(path: Path, generated_at: str) -> Path:
     return path
 
 
-def _write_manifest(path: Path, generated_at: str) -> Path:
-    """Input: manifest path and timestamp. Output: path. Write required freshness manifest."""
+def _scaffold_manifest_row(
+    name: str,
+    artifact_path: Path,
+    max_age_days: int,
+    day: str,
+    initialized_names: set[str],
+) -> dict[str, Any]:
+    """Input: artifact metadata and initialized names. Output: manifest row. Avoid certifying preserved artifacts."""
+    if name in initialized_names:
+        return {
+            "name": name,
+            "path": artifact_path.as_posix(),
+            "updated_at": day,
+            "max_age_days": max_age_days,
+            "status": "refreshed",
+        }
+    return {
+        "name": name,
+        "path": artifact_path.as_posix(),
+        "updated_at": NON_REFRESHED_BASELINE_DATE,
+        "max_age_days": max_age_days,
+        "status": "preserved",
+        "source_note": "Bootstrap preserved the existing artifact and did not certify its freshness.",
+    }
+
+
+def _write_manifest(path: Path, generated_at: str, initialized_names: set[str]) -> Path:
+    """Input: manifest path, timestamp, initialized names. Output: path. Write a conservative scaffold manifest."""
     path.parent.mkdir(parents=True, exist_ok=True)
     day = generated_at[:10]
     rows = [
-        {"name": "data_ledger", "path": str(DATA_LEDGER_JSONL).replace("\\", "/"), "updated_at": day, "max_age_days": 1, "status": "refreshed"},
-        {"name": "template_library", "path": str(TEMPLATE_LIBRARY_JSONL).replace("\\", "/"), "updated_at": day, "max_age_days": 7, "status": "refreshed"},
+        _scaffold_manifest_row("data_ledger", DATA_LEDGER_JSONL, 1, day, initialized_names),
+        _scaffold_manifest_row("template_library", TEMPLATE_LIBRARY_JSONL, 7, day, initialized_names),
         {
             "name": "benchmark_rules",
             "path": "wiki/50_benchmarks/correlation_and_novelty.md",
@@ -90,7 +116,7 @@ def _write_manifest(path: Path, generated_at: str) -> Path:
             "status": "not_refreshed",
             "source_note": "Bootstrap does not create or refresh benchmark rules.",
         },
-        {"name": "activity_snapshot", "path": str(ACTIVITY_SNAPSHOT).replace("\\", "/"), "updated_at": day, "max_age_days": 1, "status": "refreshed"},
+        _scaffold_manifest_row("activity_snapshot", ACTIVITY_SNAPSHOT, 1, day, initialized_names),
         {
             "name": "operator_catalog",
             "path": "wiki/20_semantics/operator_catalog_official.md",
@@ -118,7 +144,7 @@ def bootstrap_summary_to_dict(summary: BootstrapSummary) -> dict[str, Any]:
 
 
 def bootstrap_knowledge(knowledge_root: str | Path, seed_root: str | Path, generated_at: str | None = None) -> BootstrapSummary:
-    """Input: knowledge root and seed root. Output: summary. Materialize formal knowledge artifacts."""
+    """Input: knowledge root and seed root. Output: summary. Create only missing initial scaffold artifacts."""
     generated = generated_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     root = Path(knowledge_root)
     seed = Path(seed_root)
@@ -129,30 +155,78 @@ def bootstrap_knowledge(knowledge_root: str | Path, seed_root: str | Path, gener
         normalize_coverage=True,
     )
     template_rows = _stamp_rows(_read_jsonl(seed / "template_library.example.jsonl"), "schema_seed", "partial")
-    ledger_jsonl = _write_jsonl(root / DATA_LEDGER_JSONL, ledger_rows)
-    template_jsonl = _write_jsonl(root / TEMPLATE_LIBRARY_JSONL, template_rows)
-    ledger_md = write_data_ledger_markdown(root / DATA_LEDGER_MD, load_data_ledger(ledger_jsonl), generated)
-    template_md = write_template_library_markdown(root / TEMPLATE_LIBRARY_MD, load_template_library(template_jsonl), generated)
-    activity = _write_activity_snapshot(root / ACTIVITY_SNAPSHOT, generated)
-    manifest = _write_manifest(root / FRESHNESS_MANIFEST, generated)
+    ledger_jsonl = root / DATA_LEDGER_JSONL
+    ledger_md = root / DATA_LEDGER_MD
+    template_jsonl = root / TEMPLATE_LIBRARY_JSONL
+    template_md = root / TEMPLATE_LIBRARY_MD
+    activity = root / ACTIVITY_SNAPSHOT
+    manifest = root / FRESHNESS_MANIFEST
     report = root / BOOTSTRAP_REPORT
-    report.parent.mkdir(parents=True, exist_ok=True)
+    initialized_names: set[str] = set()
+    preserved_paths: list[str] = []
+
+    if ledger_jsonl.exists():
+        preserved_paths.append(str(ledger_jsonl))
+    else:
+        _write_jsonl(ledger_jsonl, ledger_rows)
+        initialized_names.add("data_ledger")
+    if ledger_md.exists():
+        preserved_paths.append(str(ledger_md))
+    else:
+        write_data_ledger_markdown(ledger_md, load_data_ledger(ledger_jsonl), generated)
+
+    if template_jsonl.exists():
+        preserved_paths.append(str(template_jsonl))
+    else:
+        _write_jsonl(template_jsonl, template_rows)
+        initialized_names.add("template_library")
+    if template_md.exists():
+        preserved_paths.append(str(template_md))
+    else:
+        write_template_library_markdown(template_md, load_template_library(template_jsonl), generated)
+
+    if activity.exists():
+        preserved_paths.append(str(activity))
+    else:
+        _write_activity_snapshot(activity, generated)
+        initialized_names.add("activity_snapshot")
+    if manifest.exists():
+        preserved_paths.append(str(manifest))
+    else:
+        _write_manifest(manifest, generated, initialized_names)
+
+    actual_ledger_rows = _read_jsonl(ledger_jsonl)
+    actual_template_rows = _read_jsonl(template_jsonl)
     non_refreshed = ["benchmark_rules", "operator_catalog", "research_option_cards"]
-    warnings = [
-        "Data ledger and template library are schema-seeded and partial until platform metadata refresh runs.",
-        "The following required artifacts were not refreshed by bootstrap: " + ", ".join(non_refreshed) + ".",
-    ]
+    warnings = ["The following required artifacts were not refreshed by bootstrap: " + ", ".join(non_refreshed) + "."]
+    if {"data_ledger", "template_library"} & initialized_names:
+        warnings.insert(0, "New data ledger or template library artifacts are schema-seeded and partial until platform metadata refresh runs.")
+    if report.exists():
+        preserved_paths.append(str(report))
+    if preserved_paths:
+        warnings.append("Preserved existing knowledge artifacts: " + ", ".join(preserved_paths) + ".")
     artifact_paths = [str(path) for path in [ledger_jsonl, ledger_md, template_jsonl, template_md, manifest, activity, report]]
-    report.write_text(
-        "# Knowledge Bootstrap Report\n\n"
-        f"Generated at: `{generated}`\n\n"
-        f"- Data Ledger Records: {len(ledger_rows)}\n"
-        f"- Template Records: {len(template_rows)}\n"
-        "- Source Quality: `schema_seed`\n"
-        "- Coverage Status: `partial`\n"
-        "- Manifest Status: `partial`\n"
-        "- Refreshed Artifacts: `data_ledger`, `template_library`, `activity_snapshot`\n"
-        "- Not Refreshed (stale baseline): `benchmark_rules`, `operator_catalog`, `research_option_cards`\n",
-        encoding="utf-8",
+    if not report.exists():
+        report.parent.mkdir(parents=True, exist_ok=True)
+        source_quality = "schema_seed" if {"data_ledger", "template_library"} <= initialized_names else "preserved_existing"
+        refreshed = ", ".join(sorted(initialized_names)) or "none"
+        report.write_text(
+            "# Knowledge Bootstrap Report\n\n"
+            f"Generated at: `{generated}`\n\n"
+            f"- Data Ledger Records: {len(actual_ledger_rows)}\n"
+            f"- Template Records: {len(actual_template_rows)}\n"
+            f"- Source Quality: `{source_quality}`\n"
+            "- Coverage Status: `partial`\n"
+            "- Manifest Status: `partial`\n"
+            f"- Refreshed Artifacts: `{refreshed}`\n"
+            "- Not Refreshed (stale baseline): `benchmark_rules`, `operator_catalog`, `research_option_cards`\n",
+            encoding="utf-8",
+        )
+    return BootstrapSummary(
+        generated,
+        str(root),
+        len(actual_ledger_rows),
+        len(actual_template_rows),
+        artifact_paths,
+        warnings,
     )
-    return BootstrapSummary(generated, str(root), len(ledger_rows), len(template_rows), artifact_paths, warnings)
