@@ -4,7 +4,10 @@ import unittest
 from pathlib import Path
 
 from wqb.workflow_proposals import (
+    WorkflowChangeProposal,
+    load_workflow_proposals,
     proposal_from_issue,
+    update_workflow_proposal_decision,
     workflow_change_proposal_to_dict,
     write_workflow_proposals,
 )
@@ -79,6 +82,38 @@ class WorkflowProposalsTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["status"], "accepted")
         self.assertEqual(rows[0]["user_decision"], "accept")
+
+    def test_update_workflow_proposal_decision_accepts_spec_b_lifecycle_statuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            proposal = WorkflowChangeProposal(
+                proposal_id="p1",
+                generated_at="2026-07-22T00:00:00+00:00",
+                issue_type="data_coverage",
+                title="Cache-only ledger blocked research",
+                trigger="Research readiness saw only cache rows.",
+                evidence_paths=["knowledge/wiki/20_semantics/data_ledger.jsonl"],
+                affected_modules=["run_readiness", "research_planner"],
+                proposed_rule_change="Require authoritative measured data before research.",
+                expected_benefit="Prevents false readiness.",
+                risk="May block research until capture completes.",
+                required_code_changes=["run_readiness"],
+                required_knowledge_updates=["knowledge/wiki/20_semantics/data_ledger.md"],
+                user_decision_options=["accepted_for_wiki", "accepted_for_implementation", "rejected", "deferred"],
+                status="proposed",
+                current_behavior="Cache rows can appear in planner inputs.",
+                expected_impact="Planner waits for measured data.",
+                applied_at="",
+                supersedes=[],
+            )
+            write_workflow_proposals(output_dir, [proposal])
+
+            update_workflow_proposal_decision(output_dir, "p1", "accepted_for_implementation", "Implement readiness guard.")
+            rows = load_workflow_proposals(output_dir)
+
+        self.assertEqual(rows[0]["status"], "accepted_for_implementation")
+        self.assertEqual(rows[0]["user_decision"], "Implement readiness guard.")
+        self.assertEqual(rows[0]["current_behavior"], "Cache rows can appear in planner inputs.")
 
 
 if __name__ == "__main__":

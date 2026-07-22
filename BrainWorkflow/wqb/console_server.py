@@ -199,6 +199,13 @@ def render_proposals(proposals: list[dict[str, Any]]) -> str:
 <option value="orchestrator">orchestrator</option>
 <option value="knowledge_compile">knowledge_compile</option>
 </select>
+<select name="status">
+<option value="accepted_for_wiki">accepted_for_wiki</option>
+<option value="accepted_for_implementation">accepted_for_implementation</option>
+<option value="accepted_as_experiment">accepted_as_experiment</option>
+<option value="rejected">rejected</option>
+<option value="deferred">deferred</option>
+</select>
 <button>Create Proposal</button>
 </form></section>
 """

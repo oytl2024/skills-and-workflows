@@ -37,13 +37,13 @@ class ConsoleProposalsTests(unittest.TestCase):
                 generated_at="2026-07-16T00:00:00Z",
             )
 
-            update_workflow_proposal_decision(output_dir, proposal.proposal_id, "accepted", "Approved by user.")
+            update_workflow_proposal_decision(output_dir, proposal.proposal_id, "accepted_for_implementation", "Approved by user.")
             rows = [json.loads(line) for line in (output_dir / "workflow_change_proposals.jsonl").read_text(encoding="utf-8").splitlines()]
             markdown = (output_dir / "workflow_change_proposals.md").read_text(encoding="utf-8")
 
-        self.assertEqual(rows[0]["status"], "accepted")
+        self.assertEqual(rows[0]["status"], "accepted_for_implementation")
         self.assertEqual(rows[0]["user_decision"], "Approved by user.")
-        self.assertIn("accepted", markdown)
+        self.assertIn("accepted_for_implementation", markdown)
 
 
 if __name__ == "__main__":

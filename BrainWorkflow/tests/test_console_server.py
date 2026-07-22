@@ -112,6 +112,8 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn("<select name=\"affected_modules\"", html)
         self.assertIn("template_innovation", html)
         self.assertIn("data_coverage", html)
+        self.assertIn("accepted_for_implementation", html)
+        self.assertIn("accepted_as_experiment", html)
 
     def test_second_fallback_option_survives_invalid_jsonl_line(self):
         with tempfile.TemporaryDirectory() as tmp:

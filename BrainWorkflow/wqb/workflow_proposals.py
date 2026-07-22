@@ -9,6 +9,25 @@ from wqb.benchmark_rules import default_benchmark_rules, rules_for_issue_type
 
 PROPOSAL_JSONL = "workflow_change_proposals.jsonl"
 PROPOSAL_MARKDOWN = "workflow_change_proposals.md"
+PROPOSAL_STATUSES = (
+    "proposed",
+    "rejected",
+    "accepted_for_wiki",
+    "accepted_for_implementation",
+    "accepted_as_experiment",
+    "applied",
+    "deferred",
+)
+
+
+def normalize_proposal_status(status: str) -> str:
+    """Input: status string. Output: normalized status. Validate proposal lifecycle status."""
+    normalized = str(status).strip().lower()
+    if normalized == "accepted":
+        normalized = "accepted_for_implementation"
+    if normalized not in PROPOSAL_STATUSES:
+        raise ValueError(f"unsupported proposal status: {status}")
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -28,6 +47,10 @@ class WorkflowChangeProposal:
     user_decision_options: list[str]
     status: str
     user_decision: str = ""
+    current_behavior: str = ""
+    expected_impact: str = ""
+    applied_at: str = ""
+    supersedes: list[str] | None = None
 
 
 def workflow_change_proposal_to_dict(proposal: WorkflowChangeProposal) -> dict[str, Any]:
@@ -97,8 +120,12 @@ def proposal_from_issue(issue: dict[str, Any], generated_at: str) -> WorkflowCha
         risk=risk,
         required_code_changes=affected_modules,
         required_knowledge_updates=["knowledge/wiki/50_benchmarks", "knowledge/wiki/60_workflows"],
-        user_decision_options=["accept", "reject", "revise", "defer"],
+        user_decision_options=["accepted_for_wiki", "accepted_for_implementation", "accepted_as_experiment", "rejected", "deferred"],
         status="proposed",
+        current_behavior=summary,
+        expected_impact=expected_benefit,
+        applied_at="",
+        supersedes=[],
     )
 
 
@@ -140,6 +167,10 @@ def _proposal_from_dict(row: dict[str, Any]) -> WorkflowChangeProposal:
         user_decision_options=[str(item) for item in row.get("user_decision_options", []) if str(item)],
         status=str(row.get("status", "proposed")),
         user_decision=str(row.get("user_decision", "")),
+        current_behavior=str(row.get("current_behavior", "")),
+        expected_impact=str(row.get("expected_impact", "")),
+        applied_at=str(row.get("applied_at", "")),
+        supersedes=[str(item) for item in row.get("supersedes", []) if str(item)],
     )
 
 
@@ -203,14 +234,12 @@ def update_workflow_proposal_decision(
     user_decision: str,
 ) -> tuple[Path, Path]:
     """Input: output dir, proposal id, status, decision. Output: artifact paths. Persist user decision."""
-    allowed = {"proposed", "accepted", "rejected", "revise", "deferred", "applied"}
-    if status not in allowed:
-        raise ValueError(f"unsupported proposal status: {status}")
+    normalized_status = normalize_proposal_status(status)
     rows = load_workflow_proposals(output_dir)
     matched = False
     for row in rows:
         if str(row.get("proposal_id", "")) == str(proposal_id):
-            row["status"] = status
+            row["status"] = normalized_status
             row["user_decision"] = str(user_decision)
             matched = True
             break
