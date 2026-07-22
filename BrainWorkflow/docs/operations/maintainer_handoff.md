@@ -15,6 +15,10 @@ Read these before changing behavior:
 
 If the root recovery files are unavailable, use this document plus the committed tests as the source of truth.
 
+## Spec B Knowledge Contract
+
+Before changing research scheduling, check whether planner inputs are authoritative or seed/cache. The approved Spec B design is `docs/superpowers/specs/2026-07-21-knowledge-workflow-operating-system-design.md`; implementation plan tasks live in `docs/superpowers/plans/2026-07-22-knowledge-workflow-operating-system-implementation.md`.
+
 ## Architecture Boundary
 
 Do not rewrite the existing Scout -> Seed -> Discovery -> Repair -> Submit research model casually.

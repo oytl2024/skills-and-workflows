@@ -69,6 +69,7 @@ Operational docs:
 
 - `docs/operations/operating_guide.md`: how to run research, readiness, knowledge maintenance, and console state inspection.
 - `docs/operations/maintainer_handoff.md`: how future Codex sessions should maintain and extend the project without relying on a long chat context.
+- `docs/superpowers/specs/2026-07-21-knowledge-workflow-operating-system-design.md`: canonical knowledge and workflow operating system contract.
 - Platform data-field maintenance and selectable console operation are documented in `docs/operations/operating_guide.md`.
 
 ## Current Phase
