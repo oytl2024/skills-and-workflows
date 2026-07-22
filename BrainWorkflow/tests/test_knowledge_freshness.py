@@ -6,6 +6,7 @@ from pathlib import Path
 
 from wqb.knowledge_freshness import (
     KnowledgeFreshnessRecord,
+    evaluate_knowledge_contract_health,
     evaluate_freshness,
     load_freshness_manifest,
     write_freshness_report,
@@ -131,6 +132,30 @@ class KnowledgeFreshnessTest(unittest.TestCase):
 
         self.assertIn("benchmarks", text)
         self.assertIn("stale", text)
+
+
+class KnowledgeContractHealthTests(unittest.TestCase):
+    def test_contract_health_reports_legacy_paths_and_missing_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            legacy = root / "raw" / "learn" / "old.md"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text("# Old raw source\n", encoding="utf-8")
+            canonical = root / "raw" / "platform" / "learn" / "2026-07-22" / "operators.md"
+            canonical.parent.mkdir(parents=True)
+            canonical.write_text("---\nsource_type: platform_api\n---\n# Operators\n", encoding="utf-8")
+            wiki = root / "wiki" / "20_semantics" / "operators.md"
+            wiki.parent.mkdir(parents=True)
+            wiki.write_text("---\ncompiled_at: 2026-07-22\n---\n# Operators\n", encoding="utf-8")
+
+            report = evaluate_knowledge_contract_health(root)
+
+        codes = [issue["code"] for issue in report["issues"]]
+        self.assertIn("legacy_path", codes)
+        self.assertIn("raw_metadata_missing", codes)
+        self.assertIn("wiki_metadata_missing", codes)
+        self.assertEqual(report["legacy_count"], 1)
+        self.assertGreaterEqual(report["issue_count"], 3)
 
 
 if __name__ == "__main__":

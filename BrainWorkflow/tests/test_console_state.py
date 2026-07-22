@@ -7,7 +7,32 @@ from pathlib import Path
 from wqb.console_state import ConsolePaths, _active_workflow_summary, _startable_scopes, load_console_state
 
 
+def make_paths(root: Path) -> ConsolePaths:
+    return ConsolePaths(
+        project_root=root,
+        workflow_root=root / "BrainWorkflow",
+        knowledge_root=root / "knowledge",
+        runs_root=root / "runs",
+        milestone_path=root / "milestone.md",
+        todo_path=root / "todo.md",
+        job_root=root / "runs" / "console_jobs",
+    )
+
+
 class ConsoleStateTests(unittest.TestCase):
+    def test_console_state_includes_knowledge_contract_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            legacy = paths.knowledge_root / "raw" / "learn" / "old.md"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text("# Old\n", encoding="utf-8")
+
+            state = load_console_state(paths)
+
+        self.assertIn("knowledge_contracts", state)
+        self.assertEqual(state["knowledge_contracts"]["legacy_count"], 1)
+
     def test_startable_scopes_keeps_exact_available_scope_tuples(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"

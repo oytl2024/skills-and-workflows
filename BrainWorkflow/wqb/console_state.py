@@ -8,7 +8,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest
+from wqb.knowledge_freshness import (
+    evaluate_freshness,
+    evaluate_knowledge_contract_health,
+    load_freshness_manifest,
+)
 from wqb.research_record import load_research_record
 from wqb.workflow_events import read_workflow_events
 from wqb.workflow_paths import resolve_project_root, resolve_run_root
@@ -327,6 +331,7 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
     return {
         "readiness": _latest_readiness(paths.runs_root),
         "freshness": _freshness_summary(paths.knowledge_root),
+        "knowledge_contracts": evaluate_knowledge_contract_health(paths.knowledge_root),
         "data_coverage": _data_coverage_summary(paths.knowledge_root),
         "startable_scopes": _startable_scopes(paths.knowledge_root),
         "option_cards": _read_jsonl(decisions / "research_option_cards.jsonl"),

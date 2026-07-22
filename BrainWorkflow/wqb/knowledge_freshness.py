@@ -1,8 +1,14 @@
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date
 import json
 from pathlib import Path
 from typing import Any
+
+from wqb.knowledge_contracts import (
+    canonical_source_family,
+    validate_raw_metadata,
+    validate_wiki_metadata,
+)
 
 
 REQUIRED_RESEARCH_RUN_MANIFEST_NAMES = {
@@ -30,6 +36,14 @@ class KnowledgeFreshnessStatus:
     age_days: int
     stale: bool
     artifact_exists: bool = True
+
+
+@dataclass(frozen=True)
+class KnowledgeHealthIssue:
+    code: str
+    path: str
+    message: str
+    action: str
 
 
 def _record_from_dict(row: dict[str, Any]) -> KnowledgeFreshnessRecord:
@@ -105,6 +119,51 @@ def evaluate_freshness(
             )
         )
     return statuses
+
+
+def evaluate_knowledge_contract_health(knowledge_root: str | Path) -> dict[str, Any]:
+    """Input: vault root. Output: health dict. Validate canonical raw/wiki contracts."""
+    root = Path(knowledge_root)
+    issues: list[KnowledgeHealthIssue] = []
+    legacy_count = 0
+    raw_root = root / "raw"
+    wiki_root = root / "wiki"
+    for path in sorted(raw_root.rglob("*.md")) if raw_root.exists() else []:
+        family = canonical_source_family(path, root)
+        if family == "legacy":
+            legacy_count += 1
+            issues.append(
+                KnowledgeHealthIssue(
+                    code="legacy_path",
+                    path=str(path),
+                    message="Raw source is outside the canonical raw tree.",
+                    action="Migrate the file into raw/platform, raw/community, or raw/research before using it as an active source.",
+                )
+            )
+        for issue in validate_raw_metadata(path):
+            issues.append(
+                KnowledgeHealthIssue(
+                    code="raw_metadata_missing",
+                    path=str(path),
+                    message=issue,
+                    action="Add raw source metadata or mark the source as migration-only.",
+                )
+            )
+    for path in sorted(wiki_root.rglob("*.md")) if wiki_root.exists() else []:
+        for issue in validate_wiki_metadata(path):
+            issues.append(
+                KnowledgeHealthIssue(
+                    code="wiki_metadata_missing",
+                    path=str(path),
+                    message=issue,
+                    action="Add compiled_from, trust, update trigger, and consumed_by metadata.",
+                )
+            )
+    return {
+        "issue_count": len(issues),
+        "legacy_count": legacy_count,
+        "issues": [asdict(issue) for issue in issues],
+    }
 
 
 def write_freshness_report(path: Path, statuses: list[KnowledgeFreshnessStatus], generated_at: str) -> Path:
