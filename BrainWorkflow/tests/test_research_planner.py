@@ -1,10 +1,119 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from wqb.principle_model import IncentiveSnapshot, SourceEvidence
-from wqb.research_planner import generate_research_options
+from wqb.research_planner import generate_research_options, plan_research_options
+
+
+def write_seed_knowledge(root: Path) -> None:
+    """Input: knowledge root Path. Output: none. Write seed semantic ledgers without authoritative measured data."""
+    semantics = root / "wiki" / "20_semantics"
+    templates = root / "wiki" / "30_templates"
+    benchmarks = root / "wiki" / "50_benchmarks"
+    semantics.mkdir(parents=True, exist_ok=True)
+    templates.mkdir(parents=True, exist_ok=True)
+    benchmarks.mkdir(parents=True, exist_ok=True)
+    (semantics / "data_ledger.jsonl").write_text(
+        json.dumps(
+            {
+                "dataset_id": "seed_dataset",
+                "dataset_name": "Seed Dataset",
+                "field_id": "seed_field",
+                "field_type": "MATRIX",
+                "region": "USA",
+                "delay": 1,
+                "universe": "TOP3000",
+                "semantic_tags": ["seed"],
+                "coverage": 0.0,
+                "alpha_count": 0,
+                "user_count": 0,
+                "simulation_usage_count": 0,
+                "submitted_usage_count": 0,
+                "last_used_at": "",
+                "best_result_label": "seed",
+                "correlation_risk": "unknown",
+                "source_paths": [],
+                "source_quality": "schema_seed",
+                "coverage_status": "schema_seeded",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (semantics / "operator_semantics.jsonl").write_text(
+        json.dumps(
+            {
+                "operator": "rank",
+                "family": "cross_sectional",
+                "workflow_uses": ["discovery"],
+                "compatible_field_types": ["MATRIX"],
+                "template_tags": ["seed"],
+                "risk_tags": [],
+                "repair_levers": [],
+                "source_paths": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (templates / "template_library.jsonl").write_text(
+        json.dumps(
+            {
+                "template_id": "seed_template",
+                "hypothesis": "Seed template",
+                "skeleton": "rank({field})",
+                "required_field_types": ["MATRIX"],
+                "compatible_semantic_tags": ["seed"],
+                "operator_tags": ["rank"],
+                "status": "seed",
+                "correlation_risk": "unknown",
+                "repair_levers": [],
+                "source_paths": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (benchmarks / "benchmark_rules.jsonl").write_text(
+        json.dumps(
+            {
+                "rule_id": "seed_rule",
+                "issue_types": ["seed"],
+                "description": "Seed rule.",
+                "promotion_condition": "Seed condition.",
+                "action": "Seed action.",
+                "evidence_paths": [],
+                "consumed_by": ["research_planner"],
+                "risk": "low",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 class ResearchPlannerTest(unittest.TestCase):
+    def test_plan_research_options_records_semantic_inputs_and_cache_blocker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            write_seed_knowledge(root)
+
+            result = plan_research_options(
+                knowledge_root=root,
+                generated_at="2026-07-22T00:00:00+00:00",
+                max_options=2,
+                live_api_enabled=False,
+            )
+
+        option = result["options"][0]
+        self.assertIn("data_authority", option)
+        self.assertIn("template_matrix_ready_count", option)
+        self.assertIn("benchmark_rule_count", option)
+        self.assertIn("maintenance_blockers", option)
+        self.assertIn("authoritative data ledger", " ".join(option["maintenance_blockers"]).lower())
+
     def test_generate_research_options_prioritizes_visible_incentives(self):
         snapshot = IncentiveSnapshot(
             generated_at="2026-07-09T00:00:00Z",

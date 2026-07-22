@@ -257,6 +257,31 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(state.objective, "Power Pool")
         self.assertEqual(active["run_id"], result["run_id"])
 
+    def test_start_snapshot_preserves_planner_contract_inputs(self):
+        planner_inputs = {
+            "data_authority": {"authoritative_measured_count": 1},
+            "operator_semantic_count": 3,
+            "template_matrix_ready_count": 2,
+            "benchmark_rule_count": 4,
+            "maintenance_blockers": ["Authoritative data ledger is missing or has no measured platform rows."],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_start_artifacts(
+                root,
+                [valid_option_row(option_id="option-1", **planner_inputs)],
+            )
+            started = WorkflowOrchestrator(self.paths(root)).start(
+                "Power Pool", "option-1", "2026-07-12T00:00:00Z"
+            )
+            manifest = json.loads(
+                (Path(str(started["run_dir"])) / "run_manifest.json").read_text(encoding="utf-8")
+            )
+
+        selected_option = manifest["start_snapshot"]["selected_option"]
+        for name, value in planner_inputs.items():
+            self.assertEqual(selected_option[name], value)
+
     def test_start_rejects_new_run_when_knowledge_exists_without_option_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

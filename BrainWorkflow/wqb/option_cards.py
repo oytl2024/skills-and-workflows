@@ -7,6 +7,15 @@ from typing import Any
 from wqb.principle_model import OptionCard, ScoreBreakdown, SourceEvidence, validate_option_card
 
 
+PASSTHROUGH_OPTION_FIELDS = {
+    "data_authority",
+    "operator_semantic_count",
+    "template_matrix_ready_count",
+    "benchmark_rule_count",
+    "maintenance_blockers",
+}
+
+
 def fallback_option_id(index: int) -> str:
     """Input: valid option order int. Output: str. Build the durable fallback option ID."""
     return f"option-{int(index)}"
@@ -80,7 +89,18 @@ def normalize_option_card_row(row: dict[str, Any], fallback_index: int) -> dict[
         validate_option_card(card)
     except (AttributeError, KeyError, TypeError, ValueError):
         return None
-    normalized = dict(row)
+    normalized = {
+        key: value
+        for key, value in row.items()
+        if key not in PASSTHROUGH_OPTION_FIELDS
+    }
+    normalized.update(
+        {
+            key: row[key]
+            for key in PASSTHROUGH_OPTION_FIELDS
+            if key in row
+        }
+    )
     option_id = normalized.get("option_id")
     normalized["option_id"] = option_id.strip() if isinstance(option_id, str) and option_id.strip() else fallback_option_id(fallback_index)
     return normalized

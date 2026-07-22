@@ -1,6 +1,19 @@
 from dataclasses import replace
+from pathlib import Path
+from typing import Any
 
-from wqb.principle_model import IncentiveSnapshot, OptionCard, ScoreBreakdown, SourceEvidence, validate_option_card
+from wqb.benchmark_rules import load_benchmark_rules
+from wqb.data_ledger import load_data_ledger, summarize_data_ledger_authority
+from wqb.operator_semantics import load_operator_semantics
+from wqb.principle_model import (
+    IncentiveSnapshot,
+    OptionCard,
+    ScoreBreakdown,
+    SourceEvidence,
+    option_card_to_dict,
+    validate_option_card,
+)
+from wqb.template_library import load_template_library, template_matrix_summary
 
 
 GENIUS_BASE_SCORE = 7.0
@@ -10,6 +23,64 @@ THEME_BASE_SCORE = 6.0
 COMPETITION_BASE_SCORE = 5.5
 REFRESH_RECOVERY_SCORE = 10.0
 STALE_REFRESH_PENALTY = 3.0
+
+
+def _planner_contract_inputs(knowledge_root: Path) -> dict[str, Any]:
+    """Input: knowledge root. Output: planner input summary. Summarize semantic ledgers for option cards."""
+    data_records = load_data_ledger(knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl")
+    template_records = load_template_library(knowledge_root / "wiki" / "30_templates" / "template_library.jsonl")
+    operators = load_operator_semantics(knowledge_root / "wiki" / "20_semantics" / "operator_semantics.jsonl")
+    benchmark_rules = load_benchmark_rules(knowledge_root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl")
+    data_authority = summarize_data_ledger_authority(data_records)
+    blockers = []
+    if not data_authority.get("authoritative_measured_count"):
+        blockers.append("Authoritative data ledger is missing or has no measured platform rows.")
+    return {
+        "data_authority": data_authority,
+        "operator_semantic_count": len(operators),
+        "template_matrix_ready_count": template_matrix_summary(template_records)["matrix_ready_count"],
+        "benchmark_rule_count": len(benchmark_rules),
+        "maintenance_blockers": blockers,
+    }
+
+
+def plan_research_options(
+    knowledge_root: str | Path,
+    generated_at: str,
+    max_options: int = 5,
+    live_api_enabled: bool = False,
+) -> dict[str, Any]:
+    """Input: knowledge root, timestamp, limit, live API flag. Output: planner rows. Build non-live option cards with semantic contract inputs."""
+    root = Path(knowledge_root)
+    snapshot = IncentiveSnapshot(
+        generated_at=generated_at,
+        account={},
+        activities=[],
+        competitions=[],
+        power_pool_boards=[],
+        rule_pages={},
+        evidence=[
+            SourceEvidence(
+                "knowledge",
+                str(root),
+                "Knowledge contract inputs",
+                generated_at,
+                stale=not live_api_enabled,
+            )
+        ],
+        refresh_errors=[],
+    )
+    contract_inputs = _planner_contract_inputs(root)
+    options = []
+    for card in generate_research_options(snapshot, max_options=max_options):
+        option = option_card_to_dict(card)
+        option.update(contract_inputs)
+        options.append(option)
+    return {
+        "generated_at": generated_at,
+        "option_count": len(options),
+        "options": options,
+    }
 
 
 # Input: IncentiveSnapshot, path fragment, fallback title; Output: SourceEvidence; Purpose: choose the most relevant evidence row for one option card.
