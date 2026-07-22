@@ -35,6 +35,27 @@ class OperatorSemanticsTests(unittest.TestCase):
             score_operator_for_template(record, "MATRIX", ["repair"]),
         )
 
+    def test_operator_semantic_record_normalizes_none_and_scalar_list_fields(self):
+        record = operator_semantic_record_from_dict(
+            {
+                "operator": "rank",
+                "family": "cross_sectional_normalizer",
+                "workflow_uses": None,
+                "compatible_field_types": "matrix",
+                "template_tags": "cross_sectional",
+                "risk_tags": None,
+                "repair_levers": "group_rank",
+                "source_paths": "wiki/20_semantics/operator_catalog_official.md",
+            }
+        )
+
+        self.assertEqual(record.workflow_uses, [])
+        self.assertEqual(record.compatible_field_types, ["MATRIX"])
+        self.assertEqual(record.template_tags, ["cross_sectional"])
+        self.assertEqual(record.risk_tags, [])
+        self.assertEqual(record.repair_levers, ["group_rank"])
+        self.assertEqual(record.source_paths, ["wiki/20_semantics/operator_catalog_official.md"])
+
     def test_write_and_load_operator_semantics_jsonl_and_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -59,6 +80,8 @@ class OperatorSemanticsTests(unittest.TestCase):
         self.assertEqual(loaded[0].operator, "vec_avg")
         self.assertIn("vector_to_matrix", markdown)
         self.assertIn("summarize_vector_values", markdown)
+        self.assertIn("Sources", markdown)
+        self.assertIn("wiki/20_semantics/operators.md", markdown)
 
 
 if __name__ == "__main__":

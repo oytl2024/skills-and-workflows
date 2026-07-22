@@ -23,17 +23,28 @@ class OperatorSemanticRecord:
     source_paths: list[str]
 
 
+def normalize_string_list(value: Any, *, uppercase: bool = False) -> list[str]:
+    """Input: None, string, or list value. Output: normalized string list. Preserve scalar strings as one item."""
+    if value is None:
+        return []
+    values = [value] if isinstance(value, str) else value
+    if not isinstance(values, list):
+        raise ValueError("operator semantic list fields must be lists, strings, or None")
+    normalized = [str(item) for item in values if str(item)]
+    return [item.upper() for item in normalized] if uppercase else normalized
+
+
 def operator_semantic_record_from_dict(row: dict[str, Any]) -> OperatorSemanticRecord:
     """Input: dict row. Output: OperatorSemanticRecord. Normalize one operator semantic row."""
     return OperatorSemanticRecord(
         operator=str(row.get("operator", "")),
         family=str(row.get("family", "")),
-        workflow_uses=[str(item) for item in row.get("workflow_uses", []) if str(item)],
-        compatible_field_types=[str(item).upper() for item in row.get("compatible_field_types", []) if str(item)],
-        template_tags=[str(item) for item in row.get("template_tags", []) if str(item)],
-        risk_tags=[str(item) for item in row.get("risk_tags", []) if str(item)],
-        repair_levers=[str(item) for item in row.get("repair_levers", []) if str(item)],
-        source_paths=[str(item) for item in row.get("source_paths", []) if str(item)],
+        workflow_uses=normalize_string_list(row.get("workflow_uses")),
+        compatible_field_types=normalize_string_list(row.get("compatible_field_types"), uppercase=True),
+        template_tags=normalize_string_list(row.get("template_tags")),
+        risk_tags=normalize_string_list(row.get("risk_tags")),
+        repair_levers=normalize_string_list(row.get("repair_levers")),
+        source_paths=normalize_string_list(row.get("source_paths")),
     )
 
 
@@ -70,12 +81,12 @@ def write_operator_semantics_markdown(path: Path, records: list[OperatorSemantic
         "",
         f"Generated at: `{generated_at}`",
         "",
-        "| Operator | Family | Workflow Uses | Field Types | Template Tags | Risks | Repair Levers |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| Operator | Family | Workflow Uses | Field Types | Template Tags | Risks | Repair Levers | Sources |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for record in sorted(records, key=lambda item: item.operator):
         lines.append(
-            "| {} | {} | {} | {} | {} | {} | {} |".format(
+            "| {} | {} | {} | {} | {} | {} | {} | {} |".format(
                 record.operator,
                 record.family,
                 ", ".join(record.workflow_uses),
@@ -83,6 +94,7 @@ def write_operator_semantics_markdown(path: Path, records: list[OperatorSemantic
                 ", ".join(record.template_tags),
                 ", ".join(record.risk_tags),
                 ", ".join(record.repair_levers),
+                ", ".join(record.source_paths),
             )
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
