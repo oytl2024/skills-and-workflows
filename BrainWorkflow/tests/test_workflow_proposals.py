@@ -13,7 +13,7 @@ from wqb.workflow_proposals import (
 class WorkflowProposalsTest(unittest.TestCase):
     def test_proposal_from_correlation_issue(self):
         issue = {
-            "issue_type": "prod_correlation_cluster",
+            "issue_type": "prod_correlation",
             "summary": "Three event templates failed production correlation.",
             "evidence_paths": ["runs/20260710_scout/all_alphas.jsonl"],
             "affected_modules": ["template_library", "benchmark"],
@@ -22,7 +22,11 @@ class WorkflowProposalsTest(unittest.TestCase):
         proposal = proposal_from_issue(issue, "2026-07-10T00:00:00Z")
 
         self.assertEqual(proposal.status, "proposed")
-        self.assertIn("production correlation", proposal.proposed_rule_change.lower())
+        self.assertEqual(
+            proposal.proposed_rule_change,
+            "Down-rank the data-template pair and request template or data novelty before another batch.",
+        )
+        self.assertIn("prod_correlation_novelty_required", proposal.expected_benefit)
         self.assertIn("template_library", proposal.affected_modules)
 
     def test_write_workflow_proposals_creates_jsonl_and_markdown(self):

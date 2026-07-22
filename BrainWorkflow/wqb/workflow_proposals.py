@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from wqb.benchmark_rules import default_benchmark_rules, rules_for_issue_type
+
 
 PROPOSAL_JSONL = "workflow_change_proposals.jsonl"
 PROPOSAL_MARKDOWN = "workflow_change_proposals.md"
@@ -35,6 +37,14 @@ def workflow_change_proposal_to_dict(proposal: WorkflowChangeProposal) -> dict[s
 
 def _rule_text(issue_type: str, summary: str) -> tuple[str, str, str]:
     """Input: issue type and summary. Output: rule, benefit, risk. Map repeated issue to proposal text."""
+    matched_rules = rules_for_issue_type(default_benchmark_rules(), issue_type)
+    if matched_rules:
+        rule = matched_rules[0]
+        return (
+            rule.action,
+            f"Applies active benchmark rule `{rule.rule_id}` before the issue recurs.",
+            rule.risk,
+        )
     normalized = issue_type.lower()
     if "prod_correlation" in normalized:
         return (
