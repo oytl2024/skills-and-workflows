@@ -4,7 +4,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from wqb.data_ledger import DataLedgerRecord, load_data_ledger, select_data_for_research
+from wqb.data_ledger import (
+    DataLedgerRecord,
+    is_authoritative_data_record,
+    load_data_ledger,
+    select_data_for_research,
+    summarize_data_ledger_authority,
+)
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest
 from wqb.template_library import load_template_library, select_templates_for_data
 
@@ -145,19 +151,16 @@ def _validate_scope_artifacts(
                 )
             )
             return
-        uncertified = [
-            record
-            for record in selected_data
-            if record.source_quality != "platform_raw_capture" or record.coverage_status != "measured_raw"
-        ]
+        uncertified = [record for record in selected_data if not is_authoritative_data_record(record)]
         if uncertified:
+            authority = summarize_data_ledger_authority(selected_data)
             issues.append(
                 _issue(
                     level,
-                    "uncertified_data_coverage",
-                    f"Compatible data ledger records for {region} D{int(delay)} {universe} are not certified measured platform coverage.",
+                    "cache_only_data_ledger",
+                    f"Selected scope {region} D{int(delay)} {universe} has {authority['seed_cache_count']} seed/cache records and {authority['authoritative_measured_count']} authoritative measured records.",
                     ledger_path,
-                    "Refresh platform raw data fields and compile measured ledger rows before research.",
+                    "Run capture-platform-data-fields and compile-data-ledger before research scheduling.",
                 )
             )
             return

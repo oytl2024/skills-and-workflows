@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from wqb.data_ledger import load_data_ledger, summarize_data_ledger_authority
 from wqb.knowledge_freshness import (
     evaluate_freshness,
     evaluate_knowledge_contract_health,
@@ -142,6 +143,21 @@ def _data_coverage_summary(knowledge_root: Path) -> dict[str, Any]:
         "error_count": int(manifest.get("error_count", 0)),
         "status": str(manifest.get("status", "")),
     }
+
+
+def _data_authority_summary(knowledge_root: Path) -> dict[str, Any]:
+    """Input: knowledge root. Output: data authority summary. Summarize ledger provenance for dashboard."""
+    ledger_path = knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+    try:
+        return summarize_data_ledger_authority(load_data_ledger(ledger_path))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return {
+            "record_count": 0,
+            "authoritative_measured_count": 0,
+            "seed_cache_count": 0,
+            "unclassified_count": 0,
+            "authoritative_ready": False,
+        }
 
 
 def _data_ledger_max_age_days(knowledge_root: Path) -> int | None:
@@ -333,6 +349,7 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
         "freshness": _freshness_summary(paths.knowledge_root),
         "knowledge_contracts": evaluate_knowledge_contract_health(paths.knowledge_root),
         "data_coverage": _data_coverage_summary(paths.knowledge_root),
+        "data_authority": _data_authority_summary(paths.knowledge_root),
         "startable_scopes": _startable_scopes(paths.knowledge_root),
         "option_cards": _read_jsonl(decisions / "research_option_cards.jsonl"),
         "schedule": _schedule_summary(paths.knowledge_root),

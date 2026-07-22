@@ -223,6 +223,16 @@ class ConsoleStateTests(unittest.TestCase):
         self.assertEqual(state["workflow_events"], [])
         self.assertEqual(state["approved_queue"], [])
         self.assertEqual(state["research_record"], {"exists": False})
+        self.assertEqual(
+            state["data_authority"],
+            {
+                "record_count": 0,
+                "authoritative_measured_count": 0,
+                "seed_cache_count": 0,
+                "unclassified_count": 0,
+                "authoritative_ready": False,
+            },
+        )
 
     def test_console_state_reports_latest_data_coverage_capture(self):
         with tempfile.TemporaryDirectory() as tmp:

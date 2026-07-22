@@ -5,15 +5,57 @@ from pathlib import Path
 
 from wqb.data_ledger import (
     DataLedgerRecord,
+    data_ledger_record_from_dict,
     data_ledger_record_to_dict,
+    data_record_authority,
+    is_authoritative_data_record,
     load_data_ledger,
     score_data_for_research,
     select_data_for_research,
+    summarize_data_ledger_authority,
     write_data_ledger_markdown,
 )
 
 
 class DataLedgerTest(unittest.TestCase):
+    def test_data_record_authority_distinguishes_cache_and_measured_platform_rows(self):
+        cache = DataLedgerRecord(
+            dataset_id="fundamental3",
+            dataset_name="Fundamentals",
+            field_id="fnd3_q_cash_fast_d1",
+            field_type="MATRIX",
+            region="USA",
+            delay=1,
+            universe="TOP3000",
+            semantic_tags=["cash"],
+            coverage=0.8,
+            alpha_count=1,
+            user_count=1,
+            simulation_usage_count=0,
+            submitted_usage_count=0,
+            last_used_at="",
+            best_result_label="unexplored_cache_candidate",
+            correlation_risk="low",
+            source_paths=["docs/knowledge/cache/platform_metadata.json"],
+            source_quality="platform_metadata_cache",
+            coverage_status="measured_cache",
+        )
+        measured = data_ledger_record_from_dict(data_ledger_record_to_dict(cache) | {
+            "source_quality": "platform_raw_capture",
+            "coverage_status": "measured_raw",
+            "source_updated_at": "2026-07-22",
+            "source_paths": ["raw/platform/data_fields/2026-07-22/data_fields.jsonl"],
+        })
+
+        self.assertEqual(data_record_authority(cache), "seed_cache")
+        self.assertEqual(data_record_authority(measured), "authoritative_measured")
+        self.assertFalse(is_authoritative_data_record(cache))
+        self.assertTrue(is_authoritative_data_record(measured))
+        self.assertEqual(
+            summarize_data_ledger_authority([cache, measured])["authoritative_measured_count"],
+            1,
+        )
+
     def test_select_data_rejects_cross_product_scope_when_exact_scopes_exist(self):
         record = DataLedgerRecord(
             dataset_id="fundamental3", dataset_name="Fundamentals", field_id="cash_field", field_type="MATRIX",

@@ -108,6 +108,41 @@ def data_ledger_record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
     )
 
 
+def data_record_authority(record: DataLedgerRecord) -> str:
+    """Input: data ledger record. Output: authority label. Classify seed/cache versus measured platform rows."""
+    if (
+        record.source_quality == "platform_raw_capture"
+        and record.coverage_status == "measured_raw"
+        and bool(record.source_updated_at)
+    ):
+        return "authoritative_measured"
+    if record.source_quality in {"platform_metadata_cache", "schema_seed", "bootstrap_seed"}:
+        return "seed_cache"
+    if record.coverage_status in {"measured_cache", "schema_seeded", "partial"}:
+        return "seed_cache"
+    return "unclassified"
+
+
+def is_authoritative_data_record(record: DataLedgerRecord) -> bool:
+    """Input: data ledger record. Output: bool. Test whether the row is measured platform evidence."""
+    return data_record_authority(record) == "authoritative_measured"
+
+
+def summarize_data_ledger_authority(records: list[DataLedgerRecord]) -> dict[str, Any]:
+    """Input: data ledger records. Output: summary dict. Count authority classes for UI and readiness."""
+    counts = {"authoritative_measured": 0, "seed_cache": 0, "unclassified": 0}
+    for record in records:
+        authority = data_record_authority(record)
+        counts[authority] = counts.get(authority, 0) + 1
+    return {
+        "record_count": len(records),
+        "authoritative_measured_count": counts.get("authoritative_measured", 0),
+        "seed_cache_count": counts.get("seed_cache", 0),
+        "unclassified_count": counts.get("unclassified", 0),
+        "authoritative_ready": bool(records) and counts.get("authoritative_measured", 0) == len(records),
+    }
+
+
 def _record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
     """Input: dict row. Output: DataLedgerRecord. Keep the legacy private loader adapter."""
     return data_ledger_record_from_dict(row)
@@ -202,15 +237,16 @@ def write_data_ledger_markdown(path: Path, records: list[DataLedgerRecord], gene
         "",
         f"Generated at: `{generated_at}`",
         "",
-        "| Dataset | Field | Scope | Tags | Usage | Best Result | Risk |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| Dataset | Field | Scope | Authority | Tags | Usage | Best Result | Risk |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for record in records:
         scope = f"{record.region} D{record.delay} {record.universe}"
+        authority = data_record_authority(record)
         tags = ", ".join(record.semantic_tags)
         usage = f"sim={record.simulation_usage_count}; submitted={record.submitted_usage_count}"
         lines.append(
-            f"| {record.dataset_id} | `{record.field_id}` | {scope} | {tags} | {usage} | {record.best_result_label} | {record.correlation_risk} |"
+            f"| {record.dataset_id} | `{record.field_id}` | {scope} | {authority} | {tags} | {usage} | {record.best_result_label} | {record.correlation_risk} |"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path

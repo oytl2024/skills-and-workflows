@@ -223,7 +223,7 @@ class RunReadinessTests(unittest.TestCase):
             )
 
         self.assertFalse(report.passed)
-        self.assertIn("uncertified_data_coverage", {issue.code for issue in report.issues})
+        self.assertIn("cache_only_data_ledger", {issue.code for issue in report.issues})
 
     def test_research_blocks_partial_coverage_status_even_with_positive_coverage(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -246,7 +246,53 @@ class RunReadinessTests(unittest.TestCase):
             )
 
         self.assertFalse(report.passed)
-        self.assertIn("uncertified_data_coverage", {issue.code for issue in report.issues})
+        self.assertIn("cache_only_data_ledger", {issue.code for issue in report.issues})
+
+    def test_research_readiness_blocks_cache_only_data_ledger_for_selected_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.create_scope_ready_artifacts(root)
+            (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(
+                json.dumps(
+                    {
+                        "dataset_id": "fundamental3",
+                        "dataset_name": "Fundamentals",
+                        "field_id": "fnd3_q_cash_fast_d1",
+                        "field_type": "MATRIX",
+                        "region": "USA",
+                        "delay": 1,
+                        "universe": "TOP3000",
+                        "semantic_tags": ["cash", "power_pool"],
+                        "coverage": 0.8,
+                        "alpha_count": 1,
+                        "user_count": 1,
+                        "simulation_usage_count": 0,
+                        "submitted_usage_count": 0,
+                        "last_used_at": "",
+                        "best_result_label": "unexplored_cache_candidate",
+                        "correlation_risk": "low",
+                        "source_paths": ["docs/knowledge/cache/platform_metadata.json"],
+                        "source_quality": "platform_metadata_cache",
+                        "coverage_status": "measured_cache",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            report = evaluate_run_readiness(
+                root,
+                mode="research",
+                batch_size=30,
+                live_api_enabled=True,
+                region="USA",
+                delay=1,
+                universe="TOP3000",
+                today_value="2026-07-22",
+            )
+
+        self.assertTrue(report.blocked)
+        self.assertIn("cache_only_data_ledger", [issue.code for issue in report.issues])
 
     def test_research_blocks_stale_per_record_source_date(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -290,7 +336,7 @@ class RunReadinessTests(unittest.TestCase):
             )
 
         self.assertFalse(report.passed)
-        self.assertIn("invalid_scope_data_freshness", {issue.code for issue in report.issues})
+        self.assertIn("cache_only_data_ledger", {issue.code for issue in report.issues})
 
     def test_research_passes_with_scope_ready_knowledge(self):
         with tempfile.TemporaryDirectory() as tmp:
