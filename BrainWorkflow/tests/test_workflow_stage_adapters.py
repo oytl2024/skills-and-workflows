@@ -172,6 +172,20 @@ class WorkflowStageAdaptersTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "selected research option not found"):
                 schedule_research_stage(root / "knowledge", root / "runs" / "run1", "unknown")
 
+    def test_schedule_research_stage_rejects_manifest_without_start_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_start_artifacts(root, {})
+            run_dir = root / "runs" / "run1"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run_manifest.json").write_text(
+                json.dumps({"run_id": "run1", "selected_option_id": "option-1"}),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "start snapshot"):
+                schedule_research_stage(root / "knowledge", run_dir, "option-1")
+
     def test_schedule_research_stage_uses_stable_positional_id_for_planner_cards(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

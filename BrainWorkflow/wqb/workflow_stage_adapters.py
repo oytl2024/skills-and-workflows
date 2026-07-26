@@ -337,6 +337,8 @@ def schedule_research_stage(
             manifest.get("start_snapshot"), selected_option_id, selected_scope
         )
         region, delay, universe = scope["region"], scope["delay"], scope["universe"]
+    elif manifest_path.exists():
+        raise ValueError("start snapshot is required for workflow schedule authority")
     else:
         options_path = knowledge / "wiki" / "70_decisions" / "research_option_cards.jsonl"
         options = read_option_card_jsonl(options_path)

@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -173,6 +174,50 @@ class BenchmarkRulesTests(unittest.TestCase):
 
         self.assertEqual(result.label, "weak_discard")
         self.assertNotIn("benchmark_rule:near_miss_stable_pnl_promotion", result.reasons)
+
+    def test_official_run_without_snapshot_authority_rejects_vault_rulebook_fallback(self):
+        record = {
+            "hard_pass": False,
+            "metrics": {"sharpe": 0.7, "fitness": 0.1, "returns": 0.1, "turnover": 0.2},
+            "failed": ["LOW_SHARPE"],
+            "pending": [],
+            "signal_note": "stable pnl",
+        }
+        rule = BenchmarkRule(
+            rule_id="mutable_vault_rule",
+            issue_types=["pnl_signal"],
+            description="This mutable vault rule must not classify a damaged official run.",
+            promotion_condition="Stable PnL is observed.",
+            action="Send the alpha to repair.",
+            evidence_paths=[],
+            consumed_by=["candidate_gate"],
+            risk="May hide missing run authority.",
+        )
+        cases = ("missing manifest", "manifest without snapshot")
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                knowledge = root / "knowledge"
+                write_benchmark_rules_jsonl(
+                    knowledge / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl",
+                    [rule],
+                )
+                run_dir = root / "runs" / "run1"
+                run_dir.mkdir(parents=True)
+                (run_dir / "run_state.json").write_text("{}", encoding="utf-8")
+                if case == "manifest without snapshot":
+                    (run_dir / "run_manifest.json").write_text(
+                        json.dumps({"run_id": "run1", "selected_option_id": "option-1"}),
+                        encoding="utf-8",
+                    )
+
+                with self.assertRaisesRegex(ValueError, "benchmark rule authority"):
+                    benchmark_alpha_record(
+                        record,
+                        knowledge_root=knowledge,
+                        run_dir=run_dir,
+                        consumer="candidate_gate",
+                    )
 
     def test_default_rules_include_near_miss_and_correlation_cases(self):
         rules = default_benchmark_rules()

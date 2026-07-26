@@ -18,6 +18,7 @@ BENCHMARK_RULE_REQUIRED_FIELDS = {
     "consumed_by",
     "risk",
 }
+OFFICIAL_WORKFLOW_MARKER_FILES = ("run_state.json", "workflow_events.jsonl")
 
 
 @dataclass(frozen=True)
@@ -159,15 +160,21 @@ def benchmark_rules_from_start_snapshot(snapshot: Any) -> list[BenchmarkRule]:
 
 def load_run_benchmark_rules(run_dir: str | Path) -> list[BenchmarkRule] | None:
     """Input: run directory. Output: bound rules or none. Load official snapshot authority when present."""
-    manifest_path = Path(run_dir) / "run_manifest.json"
+    root = Path(run_dir)
+    manifest_path = root / "run_manifest.json"
     if not manifest_path.exists():
+        if any((root / marker).exists() for marker in OFFICIAL_WORKFLOW_MARKER_FILES):
+            raise ValueError("start snapshot benchmark rule authority is missing")
         return None
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         raise ValueError("run manifest must be a JSON object")
     if "start_snapshot" not in manifest:
-        return None
-    return benchmark_rules_from_start_snapshot(manifest.get("start_snapshot"))
+        raise ValueError("start snapshot benchmark rule authority is missing")
+    try:
+        return benchmark_rules_from_start_snapshot(manifest.get("start_snapshot"))
+    except ValueError as exc:
+        raise ValueError(f"start snapshot benchmark rule authority is invalid: {exc}") from exc
 
 
 def write_benchmark_rules_jsonl(path: Path, rules: list[BenchmarkRule]) -> Path:

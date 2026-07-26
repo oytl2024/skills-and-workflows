@@ -1864,6 +1864,12 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(approved.next_action, "workflow-continue")
 
     def test_schedule_adapter_errors_are_persisted_as_failed_state_and_event(self):
+        def remove_start_snapshot(manifest: dict[str, object]) -> dict[str, object]:
+            """Input: manifest dict. Output: manifest. Remove immutable start authority."""
+            updated = dict(manifest)
+            updated.pop("start_snapshot", None)
+            return updated
+
         def remove_snapshot_option(manifest: dict[str, object]) -> dict[str, object]:
             """Input: manifest dict. Output: manifest. Corrupt the bound option payload."""
             snapshot = dict(manifest.get("start_snapshot", {})) if isinstance(manifest.get("start_snapshot"), dict) else {}
@@ -1875,6 +1881,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             return {**manifest, "selected_option_id": "missing"}
 
         cases = (
+            ("missing start snapshot", remove_start_snapshot),
             ("missing snapshot option", remove_snapshot_option),
             ("option mismatch", mismatch_selected_option),
         )
