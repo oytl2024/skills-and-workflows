@@ -909,7 +909,11 @@ def summarize_run_dir(run_dir: str | Path, knowledge_root: str | Path | None = N
         failed_counts.update(str(item) for item in record.get("failed", []))
         pending_counts.update(str(item) for item in record.get("pending", []))
         warning_counts.update(str(item) for item in record.get("warnings", []))
-        benchmark = benchmark_alpha_record(record, knowledge_root=knowledge_root)
+        benchmark = benchmark_alpha_record(
+            record,
+            knowledge_root=knowledge_root,
+            consumer="repair_loop",
+        )
         benchmark_counts[benchmark.label] += 1
         if benchmark.label == "repairable_signal":
             repair_queue.append(
@@ -941,7 +945,11 @@ def summarize_run_dir(run_dir: str | Path, knowledge_root: str | Path | None = N
             terminal_hashes.add(str(expression_hash))
     for record in existing_scan_records:
         existing_scan_failed_counts.update(str(item) for item in record.get("failed", []))
-        existing_benchmark = benchmark_alpha_record(record, knowledge_root=knowledge_root)
+        existing_benchmark = benchmark_alpha_record(
+            record,
+            knowledge_root=knowledge_root,
+            consumer="repair_loop",
+        )
         existing_scan_benchmark_counts[existing_benchmark.label] += 1
         if existing_benchmark.label == "repairable_signal":
             existing_repair_queue.append(
@@ -1064,7 +1072,13 @@ def scan_existing_alpha_candidates(
                 "pending": [item.name for item in summary.pending],
                 "warnings": [item.name for item in summary.warnings],
             }
-            scan_record.update(benchmark_fields_for_record(scan_record, knowledge_root))
+            scan_record.update(
+                benchmark_fields_for_record(
+                    scan_record,
+                    knowledge_root=knowledge_root,
+                    consumer="triage",
+                )
+            )
             recorder.append_jsonl("existing_alpha_scan.jsonl", scan_record)
             if summary.hard_pass:
                 candidate = {
@@ -1088,10 +1102,18 @@ def scan_existing_alpha_candidates(
 
 
 def benchmark_fields_for_record(
-    alpha_record: dict[str, Any], knowledge_root: str | Path | None = None
+    alpha_record: dict[str, Any],
+    knowledge_root: str | Path | None = None,
+    benchmark_rules: list[Any] | None = None,
+    consumer: str = "triage",
 ) -> dict[str, Any]:
-    """Input: alpha record and optional vault root. Output: benchmark fields. Apply active gate classification."""
-    benchmark = benchmark_alpha_record(alpha_record, knowledge_root=knowledge_root)
+    """Input: alpha, vault root, rules, consumer. Output: fields. Apply consumer-scoped classification."""
+    benchmark = benchmark_alpha_record(
+        alpha_record,
+        benchmark_rules=benchmark_rules,
+        knowledge_root=knowledge_root,
+        consumer=consumer,
+    )
     return {
         "benchmark_label": benchmark.label,
         "signal_score": benchmark.score,
@@ -1122,7 +1144,13 @@ def inspect_existing_alpha(
     }
     if signal_note:
         record["signal_note"] = signal_note
-    record.update(benchmark_fields_for_record(record, knowledge_root))
+    record.update(
+        benchmark_fields_for_record(
+            record,
+            knowledge_root=knowledge_root,
+            consumer="triage",
+        )
+    )
     recorder.append_jsonl("all_alphas.jsonl", record)
     if summary.hard_pass:
         recorder.write_candidates(
@@ -2457,7 +2485,13 @@ def submit_candidate_payloads(
                     "warnings": [check.name for check in summary.warnings],
                     **item,
                 }
-                record.update(benchmark_fields_for_record(record, knowledge_root))
+                record.update(
+                    benchmark_fields_for_record(
+                        record,
+                        knowledge_root=knowledge_root,
+                        consumer="triage",
+                    )
+                )
                 recorder.append_jsonl("all_alphas.jsonl", record)
                 if summary.hard_pass:
                     candidate_rows.append(candidate_row_from_summary(alpha_id, item, summary))
@@ -2510,7 +2544,13 @@ def submit_candidate_payloads(
             "warnings": [check.name for check in summary.warnings],
             **item,
         }
-        record.update(benchmark_fields_for_record(record, knowledge_root))
+        record.update(
+            benchmark_fields_for_record(
+                record,
+                knowledge_root=knowledge_root,
+                consumer="triage",
+            )
+        )
         recorder.append_jsonl("all_alphas.jsonl", record)
         if summary.hard_pass:
             candidate_rows.append(candidate_row_from_summary(alpha_id, item, summary))

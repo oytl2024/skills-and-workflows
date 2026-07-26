@@ -284,10 +284,12 @@ def is_near_miss(
     alpha_record: dict[str, Any],
     benchmark_rules: list[Any] | None = None,
     knowledge_root: str | Path | None = None,
+    consumer: str = "repair_loop",
 ) -> bool:
-    """Input: alpha record, rules, optional vault root. Output: bool. Apply rulebook authority to Repair promotion."""
+    """Input: alpha, rules, vault root, consumer. Output: bool. Apply scoped authority to Repair promotion."""
     return benchmark_alpha_record(
         alpha_record,
         benchmark_rules=benchmark_rules,
         knowledge_root=knowledge_root,
+        consumer=consumer,
     ).label == "repairable_signal"

@@ -69,7 +69,19 @@ class ConsoleStateTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (benchmarks / "benchmark_rules.jsonl").write_text(
-                json.dumps({"rule_id": "active", "issue_types": ["near_miss"], "action": "repair"}) + "\n",
+                json.dumps(
+                    {
+                        "rule_id": "active",
+                        "issue_types": ["near_miss"],
+                        "description": "Repair near misses.",
+                        "promotion_condition": "A repairable near miss is observed.",
+                        "action": "repair",
+                        "evidence_paths": ["raw/research/near_misses/example.md"],
+                        "consumed_by": ["repair_loop"],
+                        "risk": "May spend repair budget.",
+                    }
+                )
+                + "\n",
                 encoding="utf-8",
             )
             (decisions / "workflow_change_proposals.jsonl").write_text(
@@ -85,6 +97,67 @@ class ConsoleStateTests(unittest.TestCase):
         self.assertTrue(state["semantic_ledgers"]["ready"])
         self.assertEqual(state["proposal_counts"], {"accepted_for_implementation": 1})
         self.assertEqual(state["proposals"][0]["status"], "accepted_for_implementation")
+
+    def test_console_freshness_snapshot_tracks_runtime_benchmark_rulebook(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            benchmark_path = paths.knowledge_root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+            benchmark_path.parent.mkdir(parents=True)
+            benchmark_path.write_text(
+                json.dumps(
+                    {
+                        "rule_id": "active",
+                        "issue_types": ["pnl_signal"],
+                        "description": "Promote stable PnL.",
+                        "promotion_condition": "Stable PnL is observed.",
+                        "action": "Send to repair.",
+                        "evidence_paths": ["raw/research/near_misses/example.md"],
+                        "consumed_by": ["repair_loop"],
+                        "risk": "May promote a fragile signal.",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            maintenance = paths.knowledge_root / "wiki" / "80_maintenance"
+            maintenance.mkdir(parents=True)
+            artifacts = {
+                "data_ledger": "wiki/20_semantics/data_ledger.jsonl",
+                "template_library": "wiki/30_templates/template_library.jsonl",
+                "benchmark_rules": "wiki/50_benchmarks/benchmark_rules.jsonl",
+                "activity_snapshot": "wiki/10_foundations/activity_snapshot.md",
+            }
+            for relative in artifacts.values():
+                artifact = paths.knowledge_root / relative
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                if not artifact.exists():
+                    artifact.write_text("{}\n", encoding="utf-8")
+            (maintenance / "freshness_manifest.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": name,
+                            "path": relative,
+                            "updated_at": date.today().isoformat(),
+                            "max_age_days": 7,
+                        }
+                        for name, relative in artifacts.items()
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            state = load_console_state(paths)
+
+        benchmark_records = [
+            row for row in state["freshness"]["records"]
+            if row["name"] == "benchmark_rules"
+        ]
+        self.assertEqual(
+            benchmark_records[0]["path"],
+            "wiki/50_benchmarks/benchmark_rules.jsonl",
+        )
 
     def test_console_state_includes_knowledge_contract_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -207,18 +280,35 @@ class ConsoleStateTests(unittest.TestCase):
             for relative in [
                 "wiki/20_semantics/data_ledger.jsonl",
                 "wiki/30_templates/template_library.jsonl",
-                "wiki/50_benchmarks/correlation_and_novelty.md",
                 "wiki/10_foundations/activity_snapshot.md",
             ]:
                 artifact = knowledge / relative
                 artifact.parent.mkdir(parents=True, exist_ok=True)
                 artifact.write_text("{}", encoding="utf-8")
+            benchmark = knowledge / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+            benchmark.parent.mkdir(parents=True)
+            benchmark.write_text(
+                json.dumps(
+                    {
+                        "rule_id": "near_miss",
+                        "issue_types": ["pnl_signal"],
+                        "description": "Promote stable PnL.",
+                        "promotion_condition": "Stable PnL is observed.",
+                        "action": "Send to repair.",
+                        "evidence_paths": ["raw/research/near_misses/example.md"],
+                        "consumed_by": ["triage", "repair_loop", "candidate_gate"],
+                        "risk": "May promote a fragile signal.",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             (maintenance / "freshness_manifest.json").write_text(
                 json.dumps(
                     [
                         {"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-12", "max_age_days": 7},
                         {"name": "template_library", "path": "wiki/30_templates/template_library.jsonl", "updated_at": "2026-07-12", "max_age_days": 7},
-                        {"name": "benchmark_rules", "path": "wiki/50_benchmarks/correlation_and_novelty.md", "updated_at": "2026-07-12", "max_age_days": 7},
+                        {"name": "benchmark_rules", "path": "wiki/50_benchmarks/benchmark_rules.jsonl", "updated_at": "2026-07-12", "max_age_days": 7},
                         {"name": "activity_snapshot", "path": "wiki/10_foundations/activity_snapshot.md", "updated_at": "2026-07-12", "max_age_days": 7},
                     ]
                 ),

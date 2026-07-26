@@ -82,12 +82,39 @@ def write_start_artifacts(root: Path, ledger_row: dict[str, object]) -> None:
         }) + "\n",
         encoding="utf-8",
     )
+    benchmark = knowledge / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+    benchmark.parent.mkdir(parents=True)
+    benchmark.write_text(
+        json.dumps(
+            {
+                "rule_id": "near_miss",
+                "issue_types": ["pnl_signal"],
+                "description": "Promote stable PnL.",
+                "promotion_condition": "Stable PnL is observed.",
+                "action": "Send to repair.",
+                "evidence_paths": ["raw/research/near_misses/example.md"],
+                "consumed_by": ["triage", "repair_loop", "candidate_gate"],
+                "risk": "May promote a fragile signal.",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    activity = knowledge / "wiki" / "10_foundations" / "activity_snapshot.md"
+    activity.parent.mkdir(parents=True)
+    activity.write_text("# Activity Snapshot\n", encoding="utf-8")
     maintenance = knowledge / "wiki" / "80_maintenance"
     maintenance.mkdir(parents=True)
+    artifacts = {
+        "data_ledger": "wiki/20_semantics/data_ledger.jsonl",
+        "template_library": "wiki/30_templates/template_library.jsonl",
+        "benchmark_rules": "wiki/50_benchmarks/benchmark_rules.jsonl",
+        "activity_snapshot": "wiki/10_foundations/activity_snapshot.md",
+    }
     (maintenance / "freshness_manifest.json").write_text(
         json.dumps([
-            {"name": name, "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": date.today().isoformat(), "max_age_days": 7}
-            for name in ("data_ledger", "template_library", "benchmark_rules", "activity_snapshot")
+            {"name": name, "path": path, "updated_at": date.today().isoformat(), "max_age_days": 7}
+            for name, path in artifacts.items()
         ]),
         encoding="utf-8",
     )

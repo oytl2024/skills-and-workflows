@@ -15,7 +15,7 @@ class RunReadinessTests(unittest.TestCase):
                 [
                     {"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-10", "max_age_days": 1},
                     {"name": "template_library", "path": "wiki/30_templates/template_library.jsonl", "updated_at": "2026-07-10", "max_age_days": 7},
-                    {"name": "benchmark_rules", "path": "wiki/50_benchmarks/correlation_and_novelty.md", "updated_at": "2026-07-10", "max_age_days": 7},
+                    {"name": "benchmark_rules", "path": "wiki/50_benchmarks/benchmark_rules.jsonl", "updated_at": "2026-07-10", "max_age_days": 7},
                     {"name": "activity_snapshot", "path": "wiki/10_foundations/activity_snapshot.md", "updated_at": "2026-07-10", "max_age_days": 1},
                 ]
             ),
@@ -57,6 +57,121 @@ class RunReadinessTests(unittest.TestCase):
         self.assertTrue(report.blocked)
         self.assertIn("parse_error", {issue.code for issue in report.issues})
 
+    def test_research_blocks_missing_runtime_benchmark_rulebook(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.create_scope_ready_artifacts(root)
+            (root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl").unlink()
+
+            report = evaluate_run_readiness(
+                root,
+                mode="research",
+                batch_size=30,
+                live_api_enabled=True,
+                region="USA",
+                universe="TOP3000",
+                delay=1,
+                today_value="2026-07-10",
+            )
+
+        benchmark_issues = [
+            issue for issue in report.issues
+            if issue.path.endswith("wiki\\50_benchmarks\\benchmark_rules.jsonl")
+            or issue.path.endswith("wiki/50_benchmarks/benchmark_rules.jsonl")
+        ]
+        self.assertTrue(report.blocked)
+        self.assertIn("missing_artifact", {issue.code for issue in benchmark_issues})
+
+    def test_research_blocks_empty_runtime_benchmark_rulebook(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.create_scope_ready_artifacts(root)
+            path = root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+            path.write_text("", encoding="utf-8")
+
+            report = evaluate_run_readiness(
+                root,
+                mode="research",
+                batch_size=30,
+                live_api_enabled=True,
+                region="USA",
+                universe="TOP3000",
+                delay=1,
+                today_value="2026-07-10",
+            )
+
+        self.assertTrue(report.blocked)
+        self.assertIn("empty_artifact", {issue.code for issue in report.issues})
+
+    def test_research_blocks_malformed_runtime_benchmark_rulebook(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.create_scope_ready_artifacts(root)
+            path = root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+            path.write_text("{not-json}\n", encoding="utf-8")
+
+            report = evaluate_run_readiness(
+                root,
+                mode="research",
+                batch_size=30,
+                live_api_enabled=True,
+                region="USA",
+                universe="TOP3000",
+                delay=1,
+                today_value="2026-07-10",
+            )
+
+        self.assertTrue(report.blocked)
+        self.assertIn("parse_error", {issue.code for issue in report.issues})
+
+    def test_research_blocks_runtime_benchmark_rule_missing_required_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.create_scope_ready_artifacts(root)
+            path = root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+            path.write_text(json.dumps({"rule_id": "incomplete"}) + "\n", encoding="utf-8")
+
+            report = evaluate_run_readiness(
+                root,
+                mode="research",
+                batch_size=30,
+                live_api_enabled=True,
+                region="USA",
+                universe="TOP3000",
+                delay=1,
+                today_value="2026-07-10",
+            )
+
+        self.assertTrue(report.blocked)
+        self.assertIn("invalid_benchmark_rule", {issue.code for issue in report.issues})
+
+    def test_research_blocks_noncanonical_benchmark_freshness_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.create_scope_ready_artifacts(root)
+            manifest = root / "wiki" / "80_maintenance" / "freshness_manifest.json"
+            rows = json.loads(manifest.read_text(encoding="utf-8"))
+            for row in rows:
+                if row["name"] == "benchmark_rules":
+                    row["path"] = "wiki/50_benchmarks/correlation_and_novelty.md"
+            old_note = root / "wiki" / "50_benchmarks" / "correlation_and_novelty.md"
+            old_note.write_text("# Benchmark Note\n", encoding="utf-8")
+            manifest.write_text(json.dumps(rows), encoding="utf-8")
+
+            report = evaluate_run_readiness(
+                root,
+                mode="research",
+                batch_size=30,
+                live_api_enabled=True,
+                region="USA",
+                universe="TOP3000",
+                delay=1,
+                today_value="2026-07-10",
+            )
+
+        self.assertTrue(report.blocked)
+        self.assertIn("invalid_benchmark_rule_path", {issue.code for issue in report.issues})
+
     def create_minimal_artifacts(self, root: Path) -> None:
         self.write_manifest(root)
         (root / "wiki" / "20_semantics").mkdir(parents=True, exist_ok=True)
@@ -65,7 +180,22 @@ class RunReadinessTests(unittest.TestCase):
         (root / "wiki" / "10_foundations").mkdir(parents=True, exist_ok=True)
         (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(json.dumps({"field_id": "f1"}) + "\n", encoding="utf-8")
         (root / "wiki" / "30_templates" / "template_library.jsonl").write_text(json.dumps({"template_id": "t1"}) + "\n", encoding="utf-8")
-        (root / "wiki" / "50_benchmarks" / "correlation_and_novelty.md").write_text("# Benchmarks\n", encoding="utf-8")
+        (root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl").write_text(
+            json.dumps(
+                {
+                    "rule_id": "near_miss",
+                    "issue_types": ["pnl_signal"],
+                    "description": "Promote stable PnL.",
+                    "promotion_condition": "Stable PnL is observed.",
+                    "action": "Send to repair.",
+                    "evidence_paths": ["raw/research/near_misses/example.md"],
+                    "consumed_by": ["triage", "repair_loop", "candidate_gate"],
+                    "risk": "May promote a fragile signal.",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         (root / "wiki" / "10_foundations" / "activity_snapshot.md").write_text("# Activity Snapshot\n", encoding="utf-8")
 
     def create_scope_ready_artifacts(self, root: Path) -> None:

@@ -45,6 +45,10 @@ class WorkflowLauncherTests(unittest.TestCase):
         self.assertEqual(payload["submit_policy"], "blocked")
         self.assertFalse(payload["live_api_enabled"])
         self.assertIn("data_ledger", payload["knowledge_artifacts"])
+        self.assertEqual(
+            payload["knowledge_artifacts"]["benchmark_rules"],
+            "wiki/50_benchmarks/benchmark_rules.jsonl",
+        )
 
     def test_create_run_manifest_keeps_same_day_runs_in_separate_directories(self):
         with tempfile.TemporaryDirectory() as tmp:

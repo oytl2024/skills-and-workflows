@@ -47,10 +47,18 @@ class BenchmarkRulesTests(unittest.TestCase):
             root = Path(tmp) / "knowledge"
             path = root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
             write_benchmark_rules_jsonl(path, [unrelated])
-            before = benchmark_alpha_record(record, knowledge_root=root)
+            before = benchmark_alpha_record(
+                record,
+                knowledge_root=root,
+                consumer="candidate_gate",
+            )
 
             write_benchmark_rules_jsonl(path, [promotion])
-            after = benchmark_alpha_record(record, knowledge_root=root)
+            after = benchmark_alpha_record(
+                record,
+                knowledge_root=root,
+                consumer="candidate_gate",
+            )
 
         self.assertEqual(before.label, "weak_discard")
         self.assertEqual(after.label, "repairable_signal")
@@ -86,12 +94,85 @@ class BenchmarkRulesTests(unittest.TestCase):
             risk="May promote a fragile signal.",
         )
 
-        without_rule = benchmark_alpha_record(record, benchmark_rules=[])
-        with_rule = benchmark_alpha_record(record, benchmark_rules=[rule])
+        without_rule = benchmark_alpha_record(
+            record,
+            benchmark_rules=[],
+            consumer="candidate_gate",
+        )
+        with_rule = benchmark_alpha_record(
+            record,
+            benchmark_rules=[rule],
+            consumer="candidate_gate",
+        )
 
         self.assertEqual(without_rule.label, "weak_discard")
         self.assertEqual(with_rule.label, "repairable_signal")
         self.assertIn("benchmark_rule:curated_pnl_promotion", with_rule.reasons)
+
+    def test_gate_classification_filters_rules_by_consumer_before_issue_type(self):
+        record = {
+            "hard_pass": False,
+            "metrics": {"sharpe": 0.7, "fitness": 0.1, "returns": 0.1, "turnover": 0.2},
+            "failed": ["LOW_SHARPE"],
+            "pending": [],
+            "signal_note": "stable pnl",
+        }
+        proposal_rule = BenchmarkRule(
+            rule_id="proposal_only_pnl",
+            issue_types=["pnl_signal"],
+            description="Draft a proposal for stable PnL.",
+            promotion_condition="Stable PnL is observed.",
+            action="Create a workflow proposal.",
+            evidence_paths=[],
+            consumed_by=["workflow_proposals"],
+            risk="May create noisy proposals.",
+        )
+        repair_rule = BenchmarkRule(
+            rule_id="repair_pnl",
+            issue_types=["pnl_signal"],
+            description="Promote stable PnL to repair.",
+            promotion_condition="Stable PnL is observed.",
+            action="Send the alpha to repair.",
+            evidence_paths=[],
+            consumed_by=["repair_loop"],
+            risk="May promote a fragile signal.",
+        )
+
+        unrelated = benchmark_alpha_record(
+            record,
+            benchmark_rules=[proposal_rule],
+            consumer="repair_loop",
+        )
+        applicable = benchmark_alpha_record(
+            record,
+            benchmark_rules=[proposal_rule, repair_rule],
+            consumer="repair_loop",
+        )
+
+        self.assertEqual(unrelated.label, "weak_discard")
+        self.assertEqual(applicable.label, "repairable_signal")
+        self.assertNotIn("benchmark_rule:proposal_only_pnl", applicable.reasons)
+        self.assertIn("benchmark_rule:repair_pnl", applicable.reasons)
+
+    def test_missing_persisted_rulebook_does_not_restore_defaults_for_runtime_gate(self):
+        record = {
+            "hard_pass": False,
+            "metrics": {"sharpe": 0.7, "fitness": 0.1, "returns": 0.1, "turnover": 0.2},
+            "failed": ["LOW_SHARPE"],
+            "pending": [],
+            "signal_note": "stable pnl",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+
+            result = benchmark_alpha_record(
+                record,
+                knowledge_root=root,
+                consumer="repair_loop",
+            )
+
+        self.assertEqual(result.label, "weak_discard")
+        self.assertNotIn("benchmark_rule:near_miss_stable_pnl_promotion", result.reasons)
 
     def test_default_rules_include_near_miss_and_correlation_cases(self):
         rules = default_benchmark_rules()

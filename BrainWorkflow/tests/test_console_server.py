@@ -536,12 +536,44 @@ class ConsoleServerTests(unittest.TestCase):
         template_path.parent.mkdir(parents=True, exist_ok=True)
         template_row = template if template is not None else {"template_id": "matrix_ts_zscore_rank", "status": "discovery_ready", "required_field_types": ["MATRIX"], "compatible_regions": ["USA"], "compatible_delays": [1], "compatible_universes": ["TOP3000"]}
         template_path.write_text(json.dumps(template_row) + "\n", encoding="utf-8")
+        benchmark_path = paths.knowledge_root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+        benchmark_path.parent.mkdir(parents=True, exist_ok=True)
+        benchmark_path.write_text(
+            json.dumps(
+                {
+                    "rule_id": "near_miss",
+                    "issue_types": ["pnl_signal"],
+                    "description": "Promote stable PnL.",
+                    "promotion_condition": "Stable PnL is observed.",
+                    "action": "Send to repair.",
+                    "evidence_paths": ["raw/research/near_misses/example.md"],
+                    "consumed_by": ["triage", "repair_loop", "candidate_gate"],
+                    "risk": "May promote a fragile signal.",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        activity = paths.knowledge_root / "wiki" / "10_foundations" / "activity_snapshot.md"
+        activity.parent.mkdir(parents=True, exist_ok=True)
+        activity.write_text("# Activity Snapshot\n", encoding="utf-8")
+        operator_catalog = paths.knowledge_root / "wiki" / "20_semantics" / "operator_catalog_official.md"
+        operator_catalog.parent.mkdir(parents=True, exist_ok=True)
+        operator_catalog.write_text("# Operator Catalog\n", encoding="utf-8")
         maintenance = paths.knowledge_root / "wiki" / "80_maintenance"
         maintenance.mkdir(parents=True, exist_ok=True)
+        artifacts = {
+            "data_ledger": "wiki/20_semantics/data_ledger.jsonl",
+            "template_library": "wiki/30_templates/template_library.jsonl",
+            "benchmark_rules": "wiki/50_benchmarks/benchmark_rules.jsonl",
+            "activity_snapshot": "wiki/10_foundations/activity_snapshot.md",
+            "operator_catalog": "wiki/20_semantics/operator_catalog_official.md",
+            "research_option_cards": "wiki/70_decisions/research_option_cards.jsonl",
+        }
         (maintenance / "freshness_manifest.json").write_text(
             json.dumps([
-                {"name": name, "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": fresh_date, "max_age_days": 7}
-                for name in ("data_ledger", "template_library", "benchmark_rules", "activity_snapshot", "operator_catalog", "research_option_cards")
+                {"name": name, "path": path, "updated_at": fresh_date, "max_age_days": 7}
+                for name, path in artifacts.items()
             ]),
             encoding="utf-8",
         )

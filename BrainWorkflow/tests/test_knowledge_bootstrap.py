@@ -149,6 +149,10 @@ class KnowledgeBootstrapTests(unittest.TestCase):
             report = (root / "wiki" / "80_maintenance" / "bootstrap_report.md").read_text(encoding="utf-8")
 
         by_name = {row["name"]: row for row in manifest}
+        self.assertEqual(
+            by_name["benchmark_rules"]["path"],
+            "wiki/50_benchmarks/benchmark_rules.jsonl",
+        )
         for name in ("data_ledger", "template_library", "activity_snapshot"):
             self.assertEqual(by_name[name]["updated_at"], "2026-07-10")
             self.assertEqual(by_name[name]["status"], "refreshed")

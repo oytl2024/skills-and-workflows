@@ -60,7 +60,7 @@ class ResearchWorkflowTests(unittest.TestCase):
 
         self.assertTrue(is_near_miss(stable_signal))
 
-    def test_near_miss_uses_persisted_candidate_gate_rules(self):
+    def test_near_miss_uses_persisted_repair_rules(self):
         stable_signal = {
             "metrics": {"sharpe": 0.7, "fitness": 0.1, "returns": 0.1, "turnover": 0.2},
             "failed": ["LOW_SHARPE"],
@@ -74,20 +74,54 @@ class ResearchWorkflowTests(unittest.TestCase):
             promotion_condition="Stable PnL is observed.",
             action="Send the candidate to repair.",
             evidence_paths=[],
-            consumed_by=["candidate_gate"],
+            consumed_by=["repair_loop"],
             risk="May promote a fragile signal.",
         )
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
             path = root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
             write_benchmark_rules_jsonl(path, [])
-            before = is_near_miss(stable_signal, knowledge_root=root)
+            before = is_near_miss(
+                stable_signal,
+                knowledge_root=root,
+                consumer="repair_loop",
+            )
 
             write_benchmark_rules_jsonl(path, [promotion])
-            after = is_near_miss(stable_signal, knowledge_root=root)
+            after = is_near_miss(
+                stable_signal,
+                knowledge_root=root,
+                consumer="repair_loop",
+            )
 
         self.assertFalse(before)
         self.assertTrue(after)
+
+    def test_near_miss_ignores_pnl_rule_for_unrelated_consumer(self):
+        stable_signal = {
+            "metrics": {"sharpe": 0.7, "fitness": 0.1, "returns": 0.1, "turnover": 0.2},
+            "failed": ["LOW_SHARPE"],
+            "pending": [],
+            "signal_note": "stable pnl",
+        }
+        proposal_rule = BenchmarkRule(
+            rule_id="proposal_only_pnl",
+            issue_types=["pnl_signal"],
+            description="Draft a workflow proposal.",
+            promotion_condition="Stable PnL is observed.",
+            action="Create a proposal.",
+            evidence_paths=[],
+            consumed_by=["workflow_proposals"],
+            risk="May create noisy proposals.",
+        )
+
+        promoted = is_near_miss(
+            stable_signal,
+            benchmark_rules=[proposal_rule],
+            consumer="repair_loop",
+        )
+
+        self.assertFalse(promoted)
 
     def test_scout_plan_splits_new_data_work_into_parallel_tasks(self):
         tasks = build_parallel_stage_plan("scout", ["search_interest", "news21"])

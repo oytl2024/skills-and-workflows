@@ -5,12 +5,14 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from wqb.benchmark_rules import BENCHMARK_RULES_PATH
+
 
 DEFAULT_KNOWLEDGE_ARTIFACTS = {
     "data_ledger": "wiki/20_semantics/data_ledger.jsonl",
     "template_library": "wiki/30_templates/template_library.jsonl",
     "freshness_manifest": "wiki/80_maintenance/freshness_manifest.json",
-    "benchmark_rules": "wiki/50_benchmarks/correlation_and_novelty.md",
+    "benchmark_rules": BENCHMARK_RULES_PATH.as_posix(),
     "activity_snapshot": "wiki/10_foundations/activity_snapshot.md",
 }
 

@@ -31,6 +31,13 @@ Refresh plan-only readiness:
 python -m wqb.cli readiness-check --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --readiness-mode plan-only --batch-size 30
 ```
 
+The canonical runtime benchmark rulebook is
+`wiki/50_benchmarks/benchmark_rules.jsonl`. Strict research and
+submit-candidate readiness require this file to exist, contain at least one
+valid rule, and parse with every required rule field. Rule consumers are
+isolated through `consumed_by`; planner or proposal-only rules do not change
+triage, repair-loop, or candidate-gate classification.
+
 Generate research option cards from the compiled knowledge base:
 
 ```powershell

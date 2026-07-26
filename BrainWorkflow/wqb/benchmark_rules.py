@@ -6,6 +6,19 @@ from pathlib import Path
 from typing import Any
 
 
+BENCHMARK_RULES_PATH = Path("wiki") / "50_benchmarks" / "benchmark_rules.jsonl"
+BENCHMARK_RULE_REQUIRED_FIELDS = {
+    "rule_id",
+    "issue_types",
+    "description",
+    "promotion_condition",
+    "action",
+    "evidence_paths",
+    "consumed_by",
+    "risk",
+}
+
+
 @dataclass(frozen=True)
 class BenchmarkRule:
     rule_id: str
@@ -47,7 +60,7 @@ def default_benchmark_rules() -> list[BenchmarkRule]:
             promotion_condition="PnL is visually stable or monotonic enough to resemble the 3q7OQaog signal-recognition case.",
             action="Create a repair candidate and test one lever at a time before abandoning.",
             evidence_paths=["knowledge/wiki/50_benchmarks/signal_quality_and_repairability.md"],
-            consumed_by=["triage", "repair_loop", "workflow_proposals"],
+            consumed_by=["triage", "repair_loop", "candidate_gate", "workflow_proposals"],
             risk="May spend repair budget on fragile in-sample signals.",
         ),
         BenchmarkRule(
@@ -67,14 +80,41 @@ def load_benchmark_rules(path: Path) -> list[BenchmarkRule]:
     """Input: JSONL path. Output: benchmark rules. Load active rulebook."""
     if not path.exists():
         return []
-    return [benchmark_rule_from_dict(json.loads(line)) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rules: list[BenchmarkRule] = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        validate_benchmark_rule_row(row, path, line_number)
+        rules.append(benchmark_rule_from_dict(row))
+    return rules
+
+
+def validate_benchmark_rule_row(row: Any, path: Path, line_number: int) -> None:
+    """Input: JSON value, path, line number. Output: none. Validate one runtime benchmark rule row."""
+    location = f"{path}:{line_number}"
+    if not isinstance(row, dict):
+        raise ValueError(f"{location}: benchmark rule must be an object")
+    missing = sorted(BENCHMARK_RULE_REQUIRED_FIELDS - row.keys())
+    if missing:
+        raise ValueError(f"{location}: benchmark rule missing required fields: {', '.join(missing)}")
+    for field_name in ("rule_id", "description", "promotion_condition", "action", "risk"):
+        if not isinstance(row[field_name], str) or not row[field_name].strip():
+            raise ValueError(f"{location}: benchmark rule field {field_name} must be a non-empty string")
+    for field_name in ("issue_types", "evidence_paths", "consumed_by"):
+        value = row[field_name]
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            raise ValueError(f"{location}: benchmark rule field {field_name} must be a string list")
+    for field_name in ("issue_types", "consumed_by"):
+        if not row[field_name] or any(not item.strip() for item in row[field_name]):
+            raise ValueError(f"{location}: benchmark rule field {field_name} must contain non-empty strings")
 
 
 def load_active_benchmark_rules(
     knowledge_root: str | Path, fallback_to_defaults: bool = True
 ) -> list[BenchmarkRule]:
     """Input: vault root and fallback flag. Output: active rules. Prefer the persisted benchmark rulebook."""
-    path = Path(knowledge_root) / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+    path = Path(knowledge_root) / BENCHMARK_RULES_PATH
     if path.exists():
         return load_benchmark_rules(path)
     if not fallback_to_defaults:

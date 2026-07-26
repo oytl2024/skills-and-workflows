@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from wqb.benchmark_rules import BENCHMARK_RULES_PATH, load_benchmark_rules
 from wqb.data_ledger import (
     DataLedgerRecord,
     is_authoritative_data_record,
@@ -74,6 +75,56 @@ def _check_jsonl_artifact(path: Path, code_name: str, issues: list[ReadinessIssu
         issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "parse_error", f"Cannot parse {code_name}.", error, "Fix JSONL before running research."))
     elif row_count == 0:
         issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "empty_artifact", f"{code_name} has no records.", path, "Run bootstrap-knowledge or refresh knowledge."))
+
+
+def _check_benchmark_rulebook(path: Path, issues: list[ReadinessIssue], mode: str) -> None:
+    """Input: rulebook path, issues, mode. Output: none. Enforce runtime benchmark rule readiness."""
+    level = _level_for_mode(mode)
+    if not path.exists():
+        issues.append(
+            _issue(
+                level,
+                "missing_artifact",
+                "Required artifact is missing: benchmark_rules",
+                path,
+                "Compile or restore the runtime benchmark rulebook.",
+            )
+        )
+        return
+    try:
+        rules = load_benchmark_rules(path)
+    except json.JSONDecodeError as error:
+        issues.append(
+            _issue(
+                level,
+                "parse_error",
+                "Cannot parse benchmark_rules.",
+                f"{path}:{error.lineno}: {error.msg}",
+                "Fix benchmark_rules.jsonl before running research.",
+            )
+        )
+        return
+    except (OSError, TypeError, ValueError) as error:
+        issues.append(
+            _issue(
+                level,
+                "invalid_benchmark_rule",
+                f"Runtime benchmark rule is invalid: {error}",
+                path,
+                "Add every required benchmark rule field before running research.",
+            )
+        )
+        return
+    if not rules:
+        issues.append(
+            _issue(
+                level,
+                "empty_artifact",
+                "benchmark_rules has no records.",
+                path,
+                "Compile or restore at least one active benchmark rule.",
+            )
+        )
 
 
 def _level_for_mode(mode: str) -> str:
@@ -273,6 +324,17 @@ def evaluate_run_readiness(
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
             issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "parse_error", f"Cannot load freshness manifest: {error}", manifest, "Fix the freshness manifest before running."))
         else:
+            for record in freshness_records:
+                if record.name == "benchmark_rules" and Path(record.path) != BENCHMARK_RULES_PATH:
+                    issues.append(
+                        _issue(
+                            _level_for_mode(mode),
+                            "invalid_benchmark_rule_path",
+                            "Freshness manifest must track the runtime benchmark rulebook.",
+                            record.path,
+                            f"Set benchmark_rules path to {BENCHMARK_RULES_PATH.as_posix()}.",
+                        )
+                    )
             for status in statuses:
                 if not status.artifact_exists:
                     issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "missing_artifact", f"Required artifact is missing: {status.name}", status.path, "Run bootstrap-knowledge."))
@@ -280,6 +342,7 @@ def evaluate_run_readiness(
                     issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "stale_artifact", f"Required artifact is stale: {status.name}", status.path, "Run knowledge maintenance."))
     _check_jsonl_artifact(root / DATA_LEDGER_PATH, "data_ledger", issues, mode)
     _check_jsonl_artifact(root / TEMPLATE_LIBRARY_PATH, "template_library", issues, mode)
+    _check_benchmark_rulebook(root / BENCHMARK_RULES_PATH, issues, mode)
     _validate_scope_artifacts(
         root,
         mode,

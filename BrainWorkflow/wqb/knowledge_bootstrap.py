@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from wqb.benchmark_rules import BENCHMARK_RULES_PATH
 from wqb.data_ledger import load_data_ledger, write_data_ledger_markdown
 from wqb.template_library import load_template_library, write_template_library_markdown
 
@@ -110,7 +111,7 @@ def _write_manifest(path: Path, generated_at: str, initialized_names: set[str]) 
         _scaffold_manifest_row("template_library", TEMPLATE_LIBRARY_JSONL, 7, day, initialized_names),
         {
             "name": "benchmark_rules",
-            "path": "wiki/50_benchmarks/correlation_and_novelty.md",
+            "path": BENCHMARK_RULES_PATH.as_posix(),
             "updated_at": NON_REFRESHED_BASELINE_DATE,
             "max_age_days": 7,
             "status": "not_refreshed",

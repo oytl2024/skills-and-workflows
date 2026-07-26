@@ -149,14 +149,29 @@ def write_ready_knowledge_artifacts(root: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    (root / "wiki" / "50_benchmarks" / "correlation_and_novelty.md").write_text("# Benchmarks\n", encoding="utf-8")
+    (root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl").write_text(
+        json.dumps(
+            {
+                "rule_id": "near_miss",
+                "issue_types": ["pnl_signal"],
+                "description": "Promote stable PnL.",
+                "promotion_condition": "Stable PnL is observed.",
+                "action": "Send to repair.",
+                "evidence_paths": ["raw/research/near_misses/example.md"],
+                "consumed_by": ["triage", "repair_loop", "candidate_gate"],
+                "risk": "May promote a fragile signal.",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     (root / "wiki" / "10_foundations" / "activity_snapshot.md").write_text("# Activity Snapshot\n", encoding="utf-8")
     (root / "wiki" / "80_maintenance" / "freshness_manifest.json").write_text(
         json.dumps(
             [
                 {"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": fresh_date, "max_age_days": 7},
                 {"name": "template_library", "path": "wiki/30_templates/template_library.jsonl", "updated_at": fresh_date, "max_age_days": 7},
-                {"name": "benchmark_rules", "path": "wiki/50_benchmarks/correlation_and_novelty.md", "updated_at": fresh_date, "max_age_days": 7},
+                {"name": "benchmark_rules", "path": "wiki/50_benchmarks/benchmark_rules.jsonl", "updated_at": fresh_date, "max_age_days": 7},
                 {"name": "activity_snapshot", "path": "wiki/10_foundations/activity_snapshot.md", "updated_at": fresh_date, "max_age_days": 7},
             ]
         ),
@@ -189,13 +204,50 @@ class CliTests(unittest.TestCase):
             root = Path(tmp) / "knowledge"
             path = root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
             write_benchmark_rules_jsonl(path, [])
-            before = benchmark_fields_for_record(record, knowledge_root=root)
+            before = benchmark_fields_for_record(
+                record,
+                knowledge_root=root,
+                consumer="candidate_gate",
+            )
 
             write_benchmark_rules_jsonl(path, [promotion])
-            after = benchmark_fields_for_record(record, knowledge_root=root)
+            after = benchmark_fields_for_record(
+                record,
+                knowledge_root=root,
+                consumer="candidate_gate",
+            )
 
         self.assertEqual(before["benchmark_label"], "weak_discard")
         self.assertEqual(after["benchmark_label"], "repairable_signal")
+
+    def test_benchmark_fields_ignore_rule_for_unrelated_consumer(self):
+        from wqb.benchmark_rules import BenchmarkRule
+
+        record = {
+            "hard_pass": False,
+            "metrics": {"sharpe": 0.7, "fitness": 0.1, "returns": 0.1, "turnover": 0.2},
+            "failed": ["LOW_SHARPE"],
+            "pending": [],
+            "signal_note": "stable pnl",
+        }
+        proposal_rule = BenchmarkRule(
+            rule_id="proposal_only_pnl",
+            issue_types=["pnl_signal"],
+            description="Draft a workflow proposal.",
+            promotion_condition="Stable PnL is observed.",
+            action="Create a proposal.",
+            evidence_paths=[],
+            consumed_by=["workflow_proposals"],
+            risk="May create noisy proposals.",
+        )
+
+        fields = benchmark_fields_for_record(
+            record,
+            benchmark_rules=[proposal_rule],
+            consumer="triage",
+        )
+
+        self.assertEqual(fields["benchmark_label"], "weak_discard")
 
     def test_launch_workflow_writes_manifest_readiness_and_handoffs(self):
         from wqb.cli import launch_workflow
