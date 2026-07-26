@@ -435,19 +435,30 @@ class ConsoleServerTests(unittest.TestCase):
             compile_data_ledger_from_raw(paths.knowledge_root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
             ledger = paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
             compiled_row = json.loads(ledger.read_text(encoding="utf-8").splitlines()[0])
-            maintenance = paths.knowledge_root / "wiki" / "80_maintenance"
-            maintenance.mkdir(parents=True, exist_ok=True)
-            (maintenance / "freshness_manifest.json").write_text(
-                json.dumps([
-                    {"name": name, "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7}
-                    for name in ("data_ledger", "template_library", "benchmark_rules", "activity_snapshot", "operator_catalog", "research_option_cards")
-                ]),
-                encoding="utf-8",
-            )
             decisions = paths.knowledge_root / "wiki" / "70_decisions"
             decisions.mkdir(parents=True, exist_ok=True)
             (decisions / "research_option_cards.jsonl").write_text(
                 json.dumps(valid_option()) + "\n",
+                encoding="utf-8",
+            )
+            freshness_artifacts = {
+                "data_ledger": ledger,
+                "template_library": paths.knowledge_root / "wiki" / "30_templates" / "template_library.jsonl",
+                "benchmark_rules": paths.knowledge_root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl",
+                "activity_snapshot": paths.knowledge_root / "wiki" / "80_maintenance" / "activity_snapshot.json",
+                "operator_catalog": paths.knowledge_root / "wiki" / "20_semantics" / "operator_semantics.jsonl",
+                "research_option_cards": decisions / "research_option_cards.jsonl",
+            }
+            for artifact in freshness_artifacts.values():
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                if artifact != ledger and not artifact.exists():
+                    artifact.write_text("{}\n", encoding="utf-8")
+            maintenance = paths.knowledge_root / "wiki" / "80_maintenance"
+            (maintenance / "freshness_manifest.json").write_text(
+                json.dumps([
+                    {"name": name, "path": artifact.relative_to(paths.knowledge_root).as_posix(), "updated_at": date.today().isoformat(), "max_age_days": 7}
+                    for name, artifact in freshness_artifacts.items()
+                ]),
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "data coverage"):
