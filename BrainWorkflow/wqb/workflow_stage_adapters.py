@@ -6,6 +6,14 @@ from pathlib import Path
 import re
 from typing import Any
 
+from wqb.benchmark_rules import (
+    BENCHMARK_RULES_PATH,
+    benchmark_rule_to_dict,
+    benchmark_rulebook_digest,
+    benchmark_rules_from_start_snapshot,
+    load_benchmark_rules,
+    load_run_benchmark_rules,
+)
 from wqb.data_ledger import data_ledger_record_from_dict, load_data_ledger
 from wqb.option_cards import option_card_from_row, read_option_card_jsonl
 from wqb.principle_model import OptionCard
@@ -21,7 +29,7 @@ POST_SCHEDULE_STAGES = (
     "triage",
     "repair",
 )
-START_SNAPSHOT_VERSION = 1
+START_SNAPSHOT_VERSION = 2
 
 
 def advance_post_schedule_stage(run_dir: str | Path, stage_name: str) -> dict[str, object]:
@@ -250,6 +258,9 @@ def create_start_snapshot(
     template_rows = _read_jsonl_objects(knowledge / "wiki" / "30_templates" / "template_library.jsonl")
     compatible_ids = _validate_start_artifact_rows(selected, scope, ledger_rows, template_rows)
     selected_template_rows = [row for row in template_rows if str(row.get("template_id", "")) in set(compatible_ids)]
+    benchmark_rules = load_benchmark_rules(knowledge / BENCHMARK_RULES_PATH)
+    if not benchmark_rules:
+        raise ValueError("start snapshot benchmark rule rows are required")
     return {
         "artifact_binding_version": START_SNAPSHOT_VERSION,
         "selected_option": dict(selected),
@@ -257,6 +268,11 @@ def create_start_snapshot(
         "data_ledger_rows": [dict(row) for row in ledger_rows],
         "compatible_template_ids": compatible_ids,
         "template_rows": selected_template_rows,
+        "benchmark_rulebook": {
+            "path": BENCHMARK_RULES_PATH.as_posix(),
+            "sha256": benchmark_rulebook_digest(benchmark_rules),
+            "rules": [benchmark_rule_to_dict(rule) for rule in benchmark_rules],
+        },
         "gate_metadata": {
             "required_source_quality": "platform_raw_capture",
             "required_coverage_status": "measured_raw",
@@ -270,8 +286,8 @@ def _snapshot_schedule_inputs(
     snapshot: Any,
     selected_option_id: str,
     selected_scope: dict[str, Any] | None,
-) -> tuple[dict[str, Any], dict[str, Any], list[Any], list[Any]]:
-    """Input: snapshot payload, selected option id, optional scope. Output: option, scope, ledger, templates."""
+) -> tuple[dict[str, Any], dict[str, Any], list[Any], list[Any], list[Any]]:
+    """Input: snapshot payload, option id, scope. Output: option, scope, ledger, templates, rules."""
     if not isinstance(snapshot, dict):
         raise ValueError("start snapshot is required for this workflow")
     if int(snapshot.get("artifact_binding_version", 0) or 0) != START_SNAPSHOT_VERSION:
@@ -292,6 +308,7 @@ def _snapshot_schedule_inputs(
         raise ValueError("start snapshot data ledger rows are required")
     if not isinstance(template_rows, list) or not all(isinstance(row, dict) for row in template_rows):
         raise ValueError("start snapshot template rows are required")
+    benchmark_rules = benchmark_rules_from_start_snapshot(snapshot)
     compatible_ids = _validate_start_artifact_rows(selected_option, scope, [dict(row) for row in ledger_rows], [dict(row) for row in template_rows])
     stored_compatible_ids = snapshot.get("compatible_template_ids")
     if not isinstance(stored_compatible_ids, list) or not set(compatible_ids).issubset({str(item) for item in stored_compatible_ids}):
@@ -301,6 +318,7 @@ def _snapshot_schedule_inputs(
         scope,
         [data_ledger_record_from_dict(dict(row)) for row in ledger_rows],
         [template_record_from_dict(dict(row)) for row in template_rows],
+        benchmark_rules,
     )
 
 
@@ -315,7 +333,7 @@ def schedule_research_stage(
     manifest_path = Path(run_dir) / "run_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
     if isinstance(manifest, dict) and "start_snapshot" in manifest:
-        selected, scope, ledger, templates = _snapshot_schedule_inputs(
+        selected, scope, ledger, templates, benchmark_rules = _snapshot_schedule_inputs(
             manifest.get("start_snapshot"), selected_option_id, selected_scope
         )
         region, delay, universe = scope["region"], scope["delay"], scope["universe"]
@@ -332,6 +350,7 @@ def schedule_research_stage(
         region, delay, universe = _scope_from_selected_or_option(selected_scope, selected)
         ledger = load_data_ledger(knowledge / "wiki" / "20_semantics" / "data_ledger.jsonl")
         templates = load_template_library(knowledge / "wiki" / "30_templates" / "template_library.jsonl")
+        benchmark_rules = []
     stage_dir = Path(run_dir) / "stages" / "schedule"
     stage_dir.mkdir(parents=True, exist_ok=True)
     option = _option_card_from_row(selected)
@@ -345,6 +364,7 @@ def schedule_research_stage(
             "selected_option_id": str(selected_option_id),
             "selected_option": dict(selected),
             "schedule_path": str(markdown_path),
+            "benchmark_rule_ids": [rule.rule_id for rule in benchmark_rules],
         }
     )
     json_path = stage_dir / "research_schedule.json"
@@ -392,8 +412,10 @@ def summarize_stage_artifacts(run_dir: str | Path) -> dict[str, object]:
     """Input: run dir. Output: artifact summary. Read existing run artifacts without changing state."""
     root = Path(run_dir)
     alpha_results = _read_jsonl(root / "all_alphas.jsonl")
+    benchmark_rules = load_run_benchmark_rules(root)
     return {
         "alpha_result_count": len(alpha_results),
         "candidate_file_exists": (root / "candidates.csv").exists(),
         "simulation_event_count": len(_read_jsonl(root / "simulation_events.jsonl")),
+        "benchmark_rule_ids": [rule.rule_id for rule in benchmark_rules or []],
     }

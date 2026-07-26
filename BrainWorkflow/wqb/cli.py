@@ -912,6 +912,7 @@ def summarize_run_dir(run_dir: str | Path, knowledge_root: str | Path | None = N
         benchmark = benchmark_alpha_record(
             record,
             knowledge_root=knowledge_root,
+            run_dir=run_dir,
             consumer="repair_loop",
         )
         benchmark_counts[benchmark.label] += 1
@@ -948,6 +949,7 @@ def summarize_run_dir(run_dir: str | Path, knowledge_root: str | Path | None = N
         existing_benchmark = benchmark_alpha_record(
             record,
             knowledge_root=knowledge_root,
+            run_dir=run_dir,
             consumer="repair_loop",
         )
         existing_scan_benchmark_counts[existing_benchmark.label] += 1
@@ -1076,6 +1078,7 @@ def scan_existing_alpha_candidates(
                 benchmark_fields_for_record(
                     scan_record,
                     knowledge_root=knowledge_root,
+                    run_dir=recorder.run_dir,
                     consumer="triage",
                 )
             )
@@ -1105,13 +1108,15 @@ def benchmark_fields_for_record(
     alpha_record: dict[str, Any],
     knowledge_root: str | Path | None = None,
     benchmark_rules: list[Any] | None = None,
+    run_dir: str | Path | None = None,
     consumer: str = "triage",
 ) -> dict[str, Any]:
-    """Input: alpha, vault root, rules, consumer. Output: fields. Apply consumer-scoped classification."""
+    """Input: alpha, vault/run roots, rules, consumer. Output: fields. Apply bound classification."""
     benchmark = benchmark_alpha_record(
         alpha_record,
         benchmark_rules=benchmark_rules,
         knowledge_root=knowledge_root,
+        run_dir=run_dir,
         consumer=consumer,
     )
     return {
@@ -1148,6 +1153,7 @@ def inspect_existing_alpha(
         benchmark_fields_for_record(
             record,
             knowledge_root=knowledge_root,
+            run_dir=recorder.run_dir,
             consumer="triage",
         )
     )
@@ -2489,6 +2495,7 @@ def submit_candidate_payloads(
                     benchmark_fields_for_record(
                         record,
                         knowledge_root=knowledge_root,
+                        run_dir=recorder.run_dir,
                         consumer="triage",
                     )
                 )
@@ -2548,6 +2555,7 @@ def submit_candidate_payloads(
             benchmark_fields_for_record(
                 record,
                 knowledge_root=knowledge_root,
+                run_dir=recorder.run_dir,
                 consumer="triage",
             )
         )

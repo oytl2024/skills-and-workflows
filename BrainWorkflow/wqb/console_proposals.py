@@ -37,7 +37,7 @@ def create_proposal_from_form(
     proposal = proposal_from_issue(
         issue,
         generated,
-        benchmark_rules=load_active_benchmark_rules(knowledge_root),
+        benchmark_rules=load_active_benchmark_rules(knowledge_root, fallback_to_defaults=False),
     )
     write_workflow_proposals(destination, [proposal])
     return proposal

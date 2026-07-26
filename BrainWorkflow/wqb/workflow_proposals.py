@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from wqb.benchmark_rules import default_benchmark_rules, rules_for_issue_type
+from wqb.benchmark_rules import default_benchmark_rules, rules_for_consumer, rules_for_issue_type
 
 
 PROPOSAL_JSONL = "workflow_change_proposals.jsonl"
@@ -65,7 +65,8 @@ def _rule_text(
 ) -> tuple[str, str, str]:
     """Input: issue, summary, optional active rules. Output: rule, benefit, risk. Apply benchmark authority."""
     active_rules = default_benchmark_rules() if benchmark_rules is None else benchmark_rules
-    matched_rules = rules_for_issue_type(active_rules, issue_type)
+    proposal_rules = rules_for_consumer(active_rules, "workflow_proposals")
+    matched_rules = rules_for_issue_type(proposal_rules, issue_type)
     if matched_rules:
         rule = matched_rules[0]
         return (

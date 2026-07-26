@@ -13,6 +13,7 @@ from wqb.candidate_queue import (
     load_approvals,
     queue_approved_candidate,
 )
+from wqb.cli import summarize_run_dir
 from wqb.orchestrator import OrchestratorPaths, WorkflowOrchestrator
 from wqb.research_record import (
     empty_research_record,
@@ -527,6 +528,67 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(result["current_stage"], "scout_seed")
         self.assertEqual(schedule["option_title"], "Persisted valid option")
         self.assertEqual([row["field_id"] for row in schedule["selected_data"]], ["cash_field"])
+
+    def test_started_run_classification_uses_bound_rules_after_vault_rulebook_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_start_artifacts(root, [valid_option_row(option_id="option-1")])
+            benchmark_path = root / "knowledge" / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+            original_rule = {
+                "rule_id": "bound_near_miss",
+                "issue_types": ["pnl_signal"],
+                "description": "Use the rule bound at workflow start.",
+                "promotion_condition": "Stable PnL is observed.",
+                "action": "Send the alpha to repair.",
+                "evidence_paths": ["raw/research/near_misses/bound.md"],
+                "consumed_by": ["triage", "repair_loop", "candidate_gate"],
+                "risk": "May promote a fragile signal.",
+            }
+            benchmark_path.write_text(json.dumps(original_rule) + "\n", encoding="utf-8")
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+
+            started = orchestrator.start(
+                "Power Pool",
+                "option-1",
+                "2026-07-12T00:00:00Z",
+            )
+            run_dir = Path(str(started["run_dir"]))
+            mutated_rule = {
+                **original_rule,
+                "rule_id": "mutated_after_start",
+                "description": "This later vault edit must not affect the started run.",
+            }
+            benchmark_path.write_text(json.dumps(mutated_rule) + "\n", encoding="utf-8")
+            (run_dir / "all_alphas.jsonl").write_text(
+                json.dumps(
+                    {
+                        "alpha_id": "a1",
+                        "hard_pass": False,
+                        "metrics": {
+                            "sharpe": 0.7,
+                            "fitness": 0.1,
+                            "returns": 0.1,
+                            "turnover": 0.2,
+                        },
+                        "failed": ["LOW_SHARPE"],
+                        "pending": [],
+                        "signal_note": "stable pnl",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            summary = summarize_run_dir(run_dir, root / "knowledge")
+            manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+
+        reasons = summary["repair_queue"][0]["reasons"]
+        self.assertIn("benchmark_rule:bound_near_miss", reasons)
+        self.assertNotIn("benchmark_rule:mutated_after_start", reasons)
+        authority = manifest["start_snapshot"]["benchmark_rulebook"]
+        self.assertEqual(authority["path"], "wiki/50_benchmarks/benchmark_rules.jsonl")
+        self.assertEqual(authority["rules"][0]["rule_id"], "bound_near_miss")
+        self.assertRegex(authority["sha256"], r"^[0-9a-f]{64}$")
 
     def test_unscoped_start_derives_scope_and_binds_snapshot_before_current_files_change(self):
         with tempfile.TemporaryDirectory() as tmp:

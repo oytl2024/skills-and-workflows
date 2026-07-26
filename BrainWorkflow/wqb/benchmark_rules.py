@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,17 @@ def benchmark_rule_from_dict(row: dict[str, Any]) -> BenchmarkRule:
 def benchmark_rule_to_dict(rule: BenchmarkRule) -> dict[str, Any]:
     """Input: BenchmarkRule. Output: dict. Convert rule to JSON-safe row."""
     return asdict(rule)
+
+
+def benchmark_rulebook_digest(rules: list[BenchmarkRule]) -> str:
+    """Input: benchmark rules. Output: SHA-256 string. Hash normalized rule rows for run binding."""
+    payload = json.dumps(
+        [benchmark_rule_to_dict(rule) for rule in rules],
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def default_benchmark_rules() -> list[BenchmarkRule]:
@@ -120,6 +132,42 @@ def load_active_benchmark_rules(
     if not fallback_to_defaults:
         return []
     return default_benchmark_rules()
+
+
+def benchmark_rules_from_start_snapshot(snapshot: Any) -> list[BenchmarkRule]:
+    """Input: start snapshot value. Output: bound rules. Validate immutable benchmark rule authority."""
+    if not isinstance(snapshot, dict):
+        raise ValueError("start snapshot is required for benchmark rule authority")
+    authority = snapshot.get("benchmark_rulebook")
+    if not isinstance(authority, dict):
+        raise ValueError("start snapshot benchmark rulebook is missing")
+    if str(authority.get("path", "")) != BENCHMARK_RULES_PATH.as_posix():
+        raise ValueError("start snapshot benchmark rulebook path is not canonical")
+    rows = authority.get("rules")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("start snapshot benchmark rule rows are required")
+    rules: list[BenchmarkRule] = []
+    snapshot_path = Path("run_manifest.json") / "start_snapshot" / "benchmark_rulebook"
+    for line_number, row in enumerate(rows, start=1):
+        validate_benchmark_rule_row(row, snapshot_path, line_number)
+        rules.append(benchmark_rule_from_dict(row))
+    expected_digest = str(authority.get("sha256", ""))
+    if not expected_digest or benchmark_rulebook_digest(rules) != expected_digest:
+        raise ValueError("start snapshot benchmark rulebook digest mismatch")
+    return rules
+
+
+def load_run_benchmark_rules(run_dir: str | Path) -> list[BenchmarkRule] | None:
+    """Input: run directory. Output: bound rules or none. Load official snapshot authority when present."""
+    manifest_path = Path(run_dir) / "run_manifest.json"
+    if not manifest_path.exists():
+        return None
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        raise ValueError("run manifest must be a JSON object")
+    if "start_snapshot" not in manifest:
+        return None
+    return benchmark_rules_from_start_snapshot(manifest.get("start_snapshot"))
 
 
 def write_benchmark_rules_jsonl(path: Path, rules: list[BenchmarkRule]) -> Path:

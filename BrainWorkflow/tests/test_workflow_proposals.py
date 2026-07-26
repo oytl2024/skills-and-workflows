@@ -37,6 +37,39 @@ class WorkflowProposalsTest(unittest.TestCase):
         self.assertEqual(proposal.proposed_rule_change, "Use the curated novelty action.")
         self.assertIn("curated_prod_corr", proposal.expected_benefit)
 
+    def test_proposal_filters_matching_rules_by_workflow_proposals_consumer(self):
+        candidate_gate_rule = BenchmarkRule(
+            rule_id="candidate_only_prod_corr",
+            issue_types=["prod_correlation"],
+            description="Candidate gate response.",
+            promotion_condition="Production correlation fails.",
+            action="Use candidate-gate-only action.",
+            evidence_paths=[],
+            consumed_by=["candidate_gate"],
+            risk="candidate-only risk",
+        )
+        proposal_rule = BenchmarkRule(
+            rule_id="proposal_prod_corr",
+            issue_types=["prod_correlation"],
+            description="Workflow proposal response.",
+            promotion_condition="Production correlation fails.",
+            action="Use workflow-proposal action.",
+            evidence_paths=[],
+            consumed_by=["workflow_proposals"],
+            risk="proposal risk",
+        )
+
+        proposal = proposal_from_issue(
+            {"issue_type": "prod_correlation", "summary": "Correlation failed."},
+            "2026-07-22T00:00:00Z",
+            benchmark_rules=[candidate_gate_rule, proposal_rule],
+        )
+
+        self.assertEqual(proposal.proposed_rule_change, "Use workflow-proposal action.")
+        self.assertEqual(proposal.risk, "proposal risk")
+        self.assertIn("proposal_prod_corr", proposal.expected_benefit)
+        self.assertNotIn("candidate_only_prod_corr", proposal.expected_benefit)
+
     def test_load_normalizes_legacy_accepted_status(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
@@ -62,9 +95,9 @@ class WorkflowProposalsTest(unittest.TestCase):
         self.assertEqual(proposal.status, "proposed")
         self.assertEqual(
             proposal.proposed_rule_change,
-            "Down-rank the data-template pair and request template or data novelty before another batch.",
+            "Down-rank data-template pairs that repeatedly fail production correlation, and require a distinct data source, operator skeleton, or economic hypothesis before reusing them.",
         )
-        self.assertIn("prod_correlation_novelty_required", proposal.expected_benefit)
+        self.assertNotIn("prod_correlation_novelty_required", proposal.expected_benefit)
         self.assertIn("template_library", proposal.affected_modules)
 
     def test_write_workflow_proposals_creates_jsonl_and_markdown(self):
