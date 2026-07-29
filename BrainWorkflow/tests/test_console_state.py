@@ -20,6 +20,30 @@ def make_paths(root: Path) -> ConsolePaths:
 
 
 class ConsoleStateTests(unittest.TestCase):
+    def test_load_console_state_includes_timeline_current_work_and_ai_checkpoints(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            decisions = paths.knowledge_root / "wiki" / "70_decisions"
+            decisions.mkdir(parents=True)
+            (decisions / "ai_checkpoints.jsonl").write_text(
+                json.dumps({
+                    "checkpoint_id": "ai-1",
+                    "checkpoint_type": "blocker_explanation",
+                    "reason": "Explain stale data ledger.",
+                    "evidence_paths": ["runs/readiness/report.md"],
+                    "created_at": "2026-07-30T00:00:00+00:00",
+                    "status": "pending",
+                }) + "\n",
+                encoding="utf-8",
+            )
+
+            state = load_console_state(paths)
+
+        self.assertEqual(state["ai_checkpoints"][0]["checkpoint_id"], "ai-1")
+        self.assertTrue(state["timeline"])
+        self.assertIn("current_work", state)
+
     def test_console_state_summarizes_semantic_ledgers_and_normalizes_legacy_proposals(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

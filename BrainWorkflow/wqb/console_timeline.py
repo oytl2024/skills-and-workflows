@@ -1,0 +1,149 @@
+from __future__ import annotations
+
+from typing import Any
+
+
+WORKFLOW_STAGE_LABELS = {
+    "knowledge_health": "Knowledge health",
+    "platform_data_capture": "Platform data capture",
+    "data_ledger_compile": "Data ledger compile",
+    "research_options": "Research options",
+    "user_research_decision": "Research decision",
+    "workflow_start": "Workflow start",
+    "scout": "Scout",
+    "seed": "Seed",
+    "batch": "30 alpha batch",
+    "simulation": "Multisim and backtest",
+    "triage": "Triage",
+    "repair": "Repair",
+    "submit_review": "Submit review",
+    "submission_approval": "Submission approval",
+    "knowledge_compile": "Knowledge compile",
+}
+
+
+def _row(stage_id: str, status: str, source: str, explanation: str, evidence_path: str = "") -> dict[str, Any]:
+    """Input: timeline fields. Output: JSON-safe row. Build one stable workflow timeline row."""
+    return {
+        "stage_id": stage_id,
+        "label": WORKFLOW_STAGE_LABELS.get(stage_id, stage_id.replace("_", " ").title()),
+        "status": status,
+        "source": source,
+        "explanation": explanation,
+        "evidence_path": evidence_path,
+    }
+
+
+def _running_job_for_action(state: dict[str, Any], action: str) -> dict[str, Any] | None:
+    """Input: console state and action. Output: running job or none. Find active durable job."""
+    for job in state.get("jobs", []):
+        if isinstance(job, dict) and job.get("action") == action and job.get("status") in {"running", "detached"}:
+            return job
+    return None
+
+
+def _stage_status_from_workflow(state: dict[str, Any], stage_id: str) -> str:
+    """Input: console state and stage id. Output: timeline status. Map Orchestrator stage to row status."""
+    workflow = state.get("active_workflow", {})
+    if not isinstance(workflow, dict) or not workflow.get("exists"):
+        return "not_started"
+    current = str(workflow.get("current_stage", "")).lower()
+    if current == stage_id:
+        return "waiting" if workflow.get("waiting_for_user") else "running"
+    return "ready"
+
+
+def build_timeline_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Input: console state. Output: timeline rows. Build the one-page workflow run tape."""
+    freshness = state.get("freshness", {}) if isinstance(state.get("freshness"), dict) else {}
+    data_coverage = state.get("data_coverage", {}) if isinstance(state.get("data_coverage"), dict) else {}
+    capture_job = _running_job_for_action(state, "capture-platform-data-fields")
+    compile_job = _running_job_for_action(state, "compile-data-ledger")
+    rows = [
+        _row(
+            "knowledge_health",
+            "blocked" if int(freshness.get("stale_count", 0) or 0) or int(freshness.get("missing_count", 0) or 0) else "completed",
+            "deterministic",
+            "Checks raw/wiki freshness and maintenance contract state.",
+        ),
+        _row(
+            "platform_data_capture",
+            str(capture_job.get("status")) if capture_job else ("completed" if data_coverage.get("exists") else "not_started"),
+            "deterministic",
+            "Captures platform data fields into the raw vault.",
+            str(data_coverage.get("latest_capture_dir", "")),
+        ),
+        _row(
+            "data_ledger_compile",
+            str(compile_job.get("status")) if compile_job else "ready",
+            "deterministic",
+            "Compiles measured raw platform data into the semantic data ledger.",
+        ),
+        _row(
+            "research_options",
+            "completed" if state.get("option_cards") else "ready",
+            "ai_judgment",
+            "Chooses research options from incentives, data coverage, and template novelty.",
+        ),
+        _row("user_research_decision", "waiting" if state.get("option_cards") else "not_started", "user_approval", "User selects one research direction and measured scope."),
+        _row("workflow_start", _stage_status_from_workflow(state, "workflow_start"), "deterministic", "Creates an Orchestrator-owned workflow run."),
+        _row("scout", _stage_status_from_workflow(state, "scout"), "deterministic", "Tests whether a data-template direction has signal."),
+        _row("seed", _stage_status_from_workflow(state, "seed"), "ai_judgment", "Locks the economic template kernel for exploitation."),
+        _row("batch", _stage_status_from_workflow(state, "batch"), "deterministic", "Builds a 30 alpha batch before simulation."),
+        _row("simulation", _stage_status_from_workflow(state, "simulation"), "deterministic", "Runs multisim or backtest and records results."),
+        _row("triage", _stage_status_from_workflow(state, "triage"), "ai_judgment", "Classifies results and near misses."),
+        _row("repair", _stage_status_from_workflow(state, "repair"), "ai_judgment", "Applies narrow repair levers to promising alphas."),
+        _row("submit_review", _stage_status_from_workflow(state, "submit_review"), "deterministic", "Checks submission readiness and candidate gates."),
+        _row("submission_approval", "waiting", "user_approval", "User approves a submit-ready Alpha before API submission."),
+        _row("knowledge_compile", "ready", "ai_judgment", "Compiles research records back into the knowledge vault."),
+    ]
+    for checkpoint in state.get("ai_checkpoints", []):
+        if isinstance(checkpoint, dict) and checkpoint.get("status") == "pending":
+            rows.append(_row("ai_checkpoint", "waiting", "ai_judgment", str(checkpoint.get("reason", "")), ",".join(str(item) for item in checkpoint.get("evidence_paths", []))))
+    return rows
+
+
+def select_current_work(state: dict[str, Any], timeline: list[dict[str, Any]]) -> dict[str, Any]:
+    """Input: console state and timeline. Output: current work summary. Explain the active row for the UI."""
+    for job in state.get("jobs", []):
+        if isinstance(job, dict) and job.get("status") in {"running", "detached"}:
+            if job.get("action") == "capture-platform-data-fields":
+                progress = job.get("progress", {}) if isinstance(job.get("progress"), dict) else {}
+                return {
+                    "title": "Platform data capture",
+                    "status": job.get("status"),
+                    "next_action": "wait for capture to finish",
+                    "details": [
+                        f"Fields captured: {progress.get('data_field_rows', 0)}",
+                        f"Data sets captured: {progress.get('data_set_rows', 0)}",
+                        f"Raw directory: {progress.get('capture_dir', '')}",
+                    ],
+                    "evidence_paths": [str(progress.get("capture_dir", ""))],
+                }
+            return {
+                "title": str(job.get("action", "Console job")).replace("-", " ").title(),
+                "status": job.get("status"),
+                "next_action": "watch job evidence files",
+                "details": [f"Job ID: {job.get('job_id', '')}"],
+                "evidence_paths": [str(job.get("summary_path", ""))],
+            }
+    workflow = state.get("active_workflow", {})
+    if isinstance(workflow, dict) and workflow.get("exists"):
+        stage = str(workflow.get("current_stage", "workflow_start"))
+        label = WORKFLOW_STAGE_LABELS.get(stage, stage.replace("_", " ").title())
+        return {
+            "title": label,
+            "status": workflow.get("status", ""),
+            "next_action": workflow.get("next_action", ""),
+            "details": [f"Run ID: {workflow.get('run_id', '')}", f"Current stage: {stage}"],
+            "evidence_paths": [str(workflow.get("run_dir", ""))],
+        }
+    waiting_rows = [row for row in timeline if row.get("status") in {"blocked", "waiting", "running"}]
+    row = waiting_rows[0] if waiting_rows else timeline[0]
+    return {
+        "title": str(row.get("label", "Workflow")),
+        "status": row.get("status", ""),
+        "next_action": "choose the next safe action",
+        "details": [str(row.get("explanation", ""))],
+        "evidence_paths": [str(row.get("evidence_path", ""))],
+    }

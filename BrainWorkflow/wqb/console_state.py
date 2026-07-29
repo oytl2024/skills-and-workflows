@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from wqb.ai_checkpoints import load_ai_checkpoints
 from wqb.benchmark_rules import load_active_benchmark_rules
 from wqb.data_ledger import load_data_ledger, summarize_data_ledger_authority
 from wqb.knowledge_freshness import (
@@ -22,6 +23,7 @@ from wqb.workflow_proposals import load_workflow_proposals
 from wqb.workflow_events import read_workflow_events
 from wqb.workflow_paths import resolve_project_root, resolve_run_root
 from wqb.workflow_state import diagnose_state_consistency, discover_active_workflow
+from wqb.console_timeline import build_timeline_rows, select_current_work
 
 
 @dataclass(frozen=True)
@@ -265,11 +267,11 @@ def _schedule_summary(knowledge_root: Path) -> dict[str, Any]:
     return {"exists": True, "path": str(path), "preview": text[:2000]}
 
 
-def _job_rows(job_root: Path) -> list[dict[str, Any]]:
-    """Input: job root. Output: job rows. Read job records newest first."""
-    rows = [_read_json(path) for path in job_root.glob("*/job.json")]
-    rows = [row for row in rows if row]
-    return sorted(rows, key=lambda row: str(row.get("updated_at", row.get("created_at", ""))), reverse=True)
+def _job_rows(job_root: Path, knowledge_root: Path) -> list[dict[str, Any]]:
+    """Input: job root and knowledge root. Output: reconciled job rows. Read console jobs newest first."""
+    from wqb.console_jobs import load_job_history
+
+    return load_job_history(job_root, knowledge_root)
 
 
 def _milestone_summary(path: Path) -> dict[str, str]:
@@ -369,7 +371,8 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
     active_workflow, active_run_dir = _active_workflow_summary(paths.runs_root)
     workflow_events = [] if active_run_dir is None else [event.__dict__ for event in read_workflow_events(active_run_dir)]
     approved_queue, queue_diagnostics = _approved_queue_with_diagnostics(paths.runs_root)
-    return {
+    ai_checkpoints = load_ai_checkpoints(decisions)
+    base_state = {
         "readiness": _latest_readiness(paths.runs_root),
         "freshness": _freshness_summary(paths.knowledge_root),
         "knowledge_contracts": evaluate_knowledge_contract_health(paths.knowledge_root),
@@ -379,9 +382,10 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
         "startable_scopes": _startable_scopes(paths.knowledge_root),
         "option_cards": _read_jsonl(decisions / "research_option_cards.jsonl"),
         "schedule": _schedule_summary(paths.knowledge_root),
-        "jobs": _job_rows(paths.job_root),
+        "jobs": _job_rows(paths.job_root, paths.knowledge_root),
         "proposals": proposals,
         "proposal_counts": dict(proposal_counts),
+        "ai_checkpoints": ai_checkpoints,
         "milestone": _milestone_summary(paths.milestone_path),
         "active_workflow": active_workflow,
         "workflow_events": workflow_events,
@@ -389,3 +393,7 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
         "queue_diagnostics": queue_diagnostics,
         "research_record": _research_record_summary(active_run_dir),
     }
+    timeline = build_timeline_rows(base_state)
+    base_state["timeline"] = timeline
+    base_state["current_work"] = select_current_work(base_state, timeline)
+    return base_state
