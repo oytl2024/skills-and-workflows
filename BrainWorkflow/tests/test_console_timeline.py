@@ -146,3 +146,41 @@ class ConsoleTimelineTests(unittest.TestCase):
         self.assertEqual(sources["repair"], "deterministic")
         self.assertEqual(sources["ai_checkpoint"], "ai_judgment")
         self.assertTrue(all(row["stage_id"] == "ai_checkpoint" for row in rows if row["source"] == "ai_judgment"))
+
+    def test_current_stage_preserves_paused_status_and_terminal_complete(self):
+        base_state = {
+            "jobs": [],
+            "workflow_events": [],
+            "ai_checkpoints": [],
+            "freshness": {"stale_count": 0, "missing_count": 0},
+            "data_coverage": {"exists": True, "field_count": 120},
+            "option_cards": [],
+        }
+        paused_state = {
+            **base_state,
+            "active_workflow": {
+                "exists": True,
+                "current_stage": "user_approval",
+                "status": "paused",
+                "waiting_for_user": False,
+                "stages": {"user_approval": {"status": "paused"}},
+            },
+        }
+        completed_state = {
+            **base_state,
+            "active_workflow": {
+                "exists": True,
+                "current_stage": "complete",
+                "status": "completed",
+                "waiting_for_user": False,
+                "stages": {"complete": {"status": "not_started"}},
+            },
+        }
+
+        paused_rows = build_timeline_rows(paused_state)
+        completed_rows = build_timeline_rows(completed_state)
+        paused_row = next(row for row in paused_rows if row["stage_id"] == "user_approval")
+        complete_row = next(row for row in completed_rows if row["stage_id"] == "complete")
+
+        self.assertEqual(paused_row["status"], "paused")
+        self.assertEqual(complete_row["status"], "completed")

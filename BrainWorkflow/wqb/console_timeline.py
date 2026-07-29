@@ -54,7 +54,9 @@ def _stage_status_from_workflow(state: dict[str, Any], stage_id: str) -> str:
     stage = stages.get(stage_id, {}) if isinstance(stages, dict) else {}
     stage_status = str(stage.get("status", "")) if isinstance(stage, dict) else ""
     if current == stage_id:
-        if stage_status in {"completed", "failed", "skipped"}:
+        if stage_id == "complete":
+            return "completed"
+        if stage_status in {"completed", "failed", "paused", "skipped"}:
             return stage_status
         return "waiting" if workflow.get("waiting_for_user") else "running"
     if stage_status:
