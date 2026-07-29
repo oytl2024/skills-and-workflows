@@ -338,28 +338,29 @@ class BenchmarkRulesTests(unittest.TestCase):
             "signal_note": "stable pnl",
         }
         rule = default_benchmark_rules()[0]
-        with tempfile.TemporaryDirectory() as tmp:
-            run_dir = Path(tmp) / "run1"
-            run_dir.mkdir()
-            (run_dir / "run_manifest.json").write_text(
-                json.dumps(
-                    {
-                        "run_id": "run1",
-                        "start_snapshot": {
-                            "artifact_binding_version": 1,
-                            "benchmark_rulebook": {
-                                "path": "wiki/50_benchmarks/benchmark_rules.jsonl",
-                                "sha256": benchmark_rulebook_digest([rule]),
-                                "rules": [benchmark_rule_to_dict(rule)],
+        for version in (1, 2.5, "2", True, None):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as tmp:
+                run_dir = Path(tmp) / "run1"
+                run_dir.mkdir()
+                (run_dir / "run_manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "run_id": "run1",
+                            "start_snapshot": {
+                                "artifact_binding_version": version,
+                                "benchmark_rulebook": {
+                                    "path": "wiki/50_benchmarks/benchmark_rules.jsonl",
+                                    "sha256": benchmark_rulebook_digest([rule]),
+                                    "rules": [benchmark_rule_to_dict(rule)],
+                                },
                             },
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
+                        }
+                    ),
+                    encoding="utf-8",
+                )
 
-            with self.assertRaisesRegex(ValueError, "benchmark rule authority.*version"):
-                benchmark_alpha_record(record, run_dir=run_dir)
+                with self.assertRaisesRegex(ValueError, "benchmark rule authority.*version"):
+                    benchmark_alpha_record(record, run_dir=run_dir)
 
     def test_default_rules_include_near_miss_and_correlation_cases(self):
         rules = default_benchmark_rules()

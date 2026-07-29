@@ -140,10 +140,9 @@ def benchmark_rules_from_start_snapshot(snapshot: Any) -> list[BenchmarkRule]:
     """Input: start snapshot value. Output: bound rules. Validate immutable benchmark rule authority."""
     if not isinstance(snapshot, dict):
         raise ValueError("start snapshot is required for benchmark rule authority")
-    try:
-        version = int(snapshot.get("artifact_binding_version", 0) or 0)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("start snapshot version is unsupported") from exc
+    version = snapshot.get("artifact_binding_version")
+    if isinstance(version, bool) or not isinstance(version, int):
+        raise ValueError("start snapshot version is unsupported")
     if version != START_SNAPSHOT_VERSION:
         raise ValueError("start snapshot version is unsupported")
     authority = snapshot.get("benchmark_rulebook")
