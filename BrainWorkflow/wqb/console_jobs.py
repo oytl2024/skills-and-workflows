@@ -6,13 +6,16 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import threading
 from typing import Any
 from uuid import uuid4
 
+from wqb.console_progress import probe_data_capture_progress, process_is_alive
 from wqb.console_state import ConsolePaths
 
 
 DEFAULT_TIMEOUT_SECONDS = 3600
+TERMINAL_JOB_STATUSES = {"completed", "failed", "refused", "timed_out"}
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,14 @@ class ConsoleJob:
     summary_path: str
     exit_code: int | None = None
     error: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    pid: int | None = None
+    duration_seconds: float | None = None
+    last_progress_at: str = ""
+    progress_kind: str = ""
+    progress: dict[str, Any] | None = None
+    status_message: str = ""
 
 
 def console_job_to_dict(job: ConsoleJob) -> dict[str, Any]:
@@ -41,6 +52,18 @@ def console_job_to_dict(job: ConsoleJob) -> dict[str, Any]:
 def _now() -> str:
     """Input: none. Output: UTC timestamp string. Provide a stable timestamp format."""
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _duration_seconds(started_at: str, finished_at: str) -> float | None:
+    """Input: start and finish timestamps. Output: elapsed seconds or none. Compute job duration."""
+    if not started_at or not finished_at:
+        return None
+    try:
+        start = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        finish = datetime.fromisoformat(finished_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return max(0.0, (finish - start).total_seconds())
 
 
 def _write_job(job: ConsoleJob) -> ConsoleJob:
@@ -143,8 +166,107 @@ def run_job(job: ConsoleJob, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> 
     return _write_job(completed)
 
 
-def load_job_history(job_root: str | Path) -> list[dict[str, Any]]:
-    """Input: job root. Output: job rows newest first. Load persisted console job records."""
+def _finalize_process_result(job: ConsoleJob, returncode: int, error: str = "") -> ConsoleJob:
+    """Input: running job and return code. Output: terminal job. Persist process result."""
+    finished = _now()
+    status = "completed" if returncode == 0 else "failed"
+    completed = replace(
+        job,
+        status=status,
+        updated_at=finished,
+        finished_at=finished,
+        duration_seconds=_duration_seconds(job.started_at, finished),
+        exit_code=returncode,
+        error=error,
+        status_message=status,
+    )
+    _write_summary(completed)
+    return _write_job(completed)
+
+
+def watch_job(
+    job: ConsoleJob,
+    process: subprocess.Popen[Any],
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+) -> ConsoleJob:
+    """Input: running job, process, timeout. Output: terminal job. Wait for async process and persist result."""
+    try:
+        returncode = process.wait(timeout=timeout_seconds)
+        return _finalize_process_result(job, int(returncode))
+    except subprocess.TimeoutExpired:
+        process.kill()
+        returncode = process.wait()
+        return _finalize_process_result(job, int(returncode), f"timed out after {timeout_seconds}s")
+
+
+def start_job_async(job: ConsoleJob, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> ConsoleJob:
+    """Input: created job and timeout. Output: running job. Start a CLI command without blocking the caller."""
+    started_at = _now()
+    stdout_path = Path(job.stdout_path)
+    stderr_path = Path(job.stderr_path)
+    stdout_path.parent.mkdir(parents=True, exist_ok=True)
+    stdout_handle = stdout_path.open("w", encoding="utf-8")
+    stderr_handle = stderr_path.open("w", encoding="utf-8")
+    try:
+        process = subprocess.Popen(
+            job.command,
+            cwd=job.cwd,
+            stdout=stdout_handle,
+            stderr=stderr_handle,
+            text=True,
+        )
+    except Exception as error:
+        stdout_handle.close()
+        stderr_handle.close()
+        return finish_job(job, "failed", exit_code=-1, error=f"{job.command[0] if job.command else 'command'}: {error}")
+    stdout_handle.close()
+    stderr_handle.close()
+    running = replace(
+        job,
+        status="running",
+        updated_at=started_at,
+        started_at=started_at,
+        pid=process.pid,
+        status_message="running",
+    )
+    _write_job(running)
+    thread = threading.Thread(target=watch_job, args=(running, process, timeout_seconds), daemon=True)
+    thread.start()
+    return running
+
+
+def _progress_for_action(action: str, knowledge_root: str | Path | None) -> tuple[str, dict[str, Any]]:
+    """Input: action and knowledge root. Output: progress kind and payload. Compute action-specific progress."""
+    if action == "capture-platform-data-fields" and knowledge_root is not None:
+        return "data_capture", probe_data_capture_progress(knowledge_root)
+    return "", {}
+
+
+def reconcile_job_dict(row: dict[str, Any], knowledge_root: str | Path | None = None) -> dict[str, Any]:
+    """Input: persisted job row and knowledge root. Output: reconciled row. Refresh running job state for the Console."""
+    result = dict(row)
+    status = str(result.get("status", ""))
+    action = str(result.get("action", ""))
+    progress_kind, progress = _progress_for_action(action, knowledge_root)
+    if progress_kind:
+        result["progress_kind"] = progress_kind
+        result["progress"] = progress
+        result["last_progress_at"] = str(progress.get("last_write_at", ""))
+    if status in TERMINAL_JOB_STATUSES:
+        return result
+    if status == "running":
+        pid = result.get("pid")
+        if process_is_alive(int(pid)) if isinstance(pid, int) else False:
+            result["status_message"] = "running"
+            return result
+        if result.get("exit_code") is None:
+            result["status"] = "detached"
+            result["status_message"] = "process handle is no longer attached"
+    return result
+
+
+def load_job_history(job_root: str | Path, knowledge_root: str | Path | None = None) -> list[dict[str, Any]]:
+    """Input: job root and optional knowledge root. Output: job rows newest first. Load and reconcile console jobs."""
     root = Path(job_root)
     rows: list[dict[str, Any]] = []
     for path in root.glob("*/job.json"):
@@ -153,7 +275,7 @@ def load_job_history(job_root: str | Path) -> list[dict[str, Any]]:
         except (OSError, json.JSONDecodeError):
             continue
         if isinstance(row, dict):
-            rows.append(row)
+            rows.append(reconcile_job_dict(row, knowledge_root))
     return sorted(rows, key=lambda row: str(row.get("updated_at", row.get("created_at", ""))), reverse=True)
 
 

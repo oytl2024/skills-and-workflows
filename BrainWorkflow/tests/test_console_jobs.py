@@ -1,10 +1,11 @@
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
-from wqb.console_jobs import build_cli_command, create_job, load_job_history, run_job
+from wqb.console_jobs import build_cli_command, create_job, load_job_history, reconcile_job_dict, run_job, start_job_async
 from wqb.console_state import ConsolePaths
 
 
@@ -129,6 +130,63 @@ class ConsoleJobsTests(unittest.TestCase):
         self.assertEqual(payload["status"], "failed")
         self.assertIn("definitely_missing_executable", completed.error)
         self.assertIn("failed", summary)
+
+
+class AsyncConsoleJobsTests(unittest.TestCase):
+    def test_start_job_async_returns_running_job_with_pid_before_command_finishes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            command = [sys.executable, "-c", "import time; time.sleep(0.4); print('done')"]
+            job = create_job(paths.job_root, "slow-action", command, root, {}, now="2026-07-30T00:00:00+00:00")
+
+            started = start_job_async(job, timeout_seconds=5)
+            payload = json.loads((Path(job.job_dir) / "job.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(started.status, "running")
+            self.assertIsInstance(started.pid, int)
+            self.assertEqual(payload["status"], "running")
+            self.assertEqual(payload["pid"], started.pid)
+            time.sleep(0.8)
+            final_payload = json.loads((Path(job.job_dir) / "job.json").read_text(encoding="utf-8"))
+            stdout = Path(job.stdout_path).read_text(encoding="utf-8")
+            summary_exists = Path(final_payload["summary_path"]).exists()
+
+        self.assertEqual(final_payload["status"], "completed")
+        self.assertEqual(final_payload["exit_code"], 0)
+        self.assertIn("done", stdout)
+        self.assertTrue(summary_exists)
+
+    def test_reconcile_running_capture_job_adds_progress_without_claiming_completion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            knowledge = root / "knowledge"
+            capture = knowledge / "raw" / "platform" / "data_fields" / "2026-07-30"
+            capture.mkdir(parents=True)
+            (capture / "data_fields.jsonl").write_text('{"id":"f1"}\n{"id":"f2"}\n', encoding="utf-8")
+            row = {
+                "job_id": "job-1",
+                "status": "running",
+                "action": "capture-platform-data-fields",
+                "pid": None,
+                "exit_code": None,
+                "progress": {},
+            }
+
+            reconciled = reconcile_job_dict(row, knowledge)
+
+        self.assertEqual(reconciled["status"], "detached")
+        self.assertEqual(reconciled["progress_kind"], "data_capture")
+        self.assertEqual(reconciled["progress"]["data_field_rows"], 2)
+        self.assertNotEqual(reconciled["status"], "completed")
+
+    def test_reconcile_completed_job_keeps_terminal_state(self):
+        row = {"job_id": "job-2", "status": "completed", "action": "readiness-check", "exit_code": 0}
+
+        reconciled = reconcile_job_dict(row, None)
+
+        self.assertEqual(reconciled["status"], "completed")
+        self.assertEqual(reconciled["exit_code"], 0)
 
 
 if __name__ == "__main__":
