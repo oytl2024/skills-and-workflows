@@ -10,7 +10,7 @@ import webbrowser
 
 from wqb.console_context import record_console_job_context
 from wqb.console_jobs import build_cli_command as build_raw_cli_command
-from wqb.console_jobs import create_job, finish_job, run_job
+from wqb.console_jobs import create_job, finish_job, run_job, start_job_async
 from wqb.console_proposals import create_proposal_from_form
 from wqb.console_state import ConsolePaths, default_console_paths, load_console_state
 from wqb.data_ledger import DataLedgerRecord
@@ -28,6 +28,8 @@ PROPOSAL_DECISION_STATUSES = (
     "deferred",
 )
 
+ASYNC_CONSOLE_ACTIONS = {"capture-platform-data-fields"}
+
 
 def _fallback_option_id(index: int) -> str:
     """Input: valid option order. Output: fallback option ID. Normalize cards without durable IDs."""
@@ -42,9 +44,8 @@ def _html_page(title: str, body: str) -> str:
         "<style>"
         "body{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#F6F7F9;color:#18202A}"
         "header{background:#18202A;color:white;padding:14px 24px;display:flex;justify-content:space-between;align-items:center}"
-        "main{display:grid;grid-template-columns:220px minmax(0,1fr);gap:0;min-height:calc(100vh - 56px)}"
-        "nav{border-right:1px solid #D9E0E8;background:#fff;padding:16px}nav a{display:block;color:#18202A;margin-top:10px;text-decoration:none}"
-        ".workspace{padding:18px 22px;display:grid;gap:14px}"
+        "main{min-height:calc(100vh - 56px)}"
+        ".workspace,.control-center{padding:18px 22px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}"
         "section{background:white;border:1px solid #D9E0E8;border-radius:8px;padding:14px}"
         ".ledger-strip{display:flex;gap:8px;flex-wrap:wrap}"
         ".badge{border:1px solid #D9E0E8;border-radius:999px;padding:4px 8px;font-size:12px;background:#fff}"
@@ -54,6 +55,8 @@ def _html_page(title: str, body: str) -> str:
         ".option-title{display:block;font-weight:600}.option-meta{display:block;font-size:12px;color:#4B5563;margin-top:3px}"
         "button,input,select,textarea{font:inherit;margin:4px 0;padding:7px 9px}button{cursor:pointer}textarea{width:100%;min-height:90px}"
         "code,pre{font-family:Consolas,monospace}.wide{grid-column:1/-1}.empty{color:#6B7280}"
+        ".timeline{list-style:none;margin:0;padding:0}.timeline-row{display:grid;grid-template-columns:14px minmax(0,1fr);gap:10px;padding:10px 0;border-top:1px solid #D9E0E8}.timeline-row:first-child{border-top:0}.timeline-dot{width:9px;height:9px;margin-top:6px;border-radius:50%;background:#6B7280}.state-running .timeline-dot,.state-completed .timeline-dot{background:#167C80}.state-blocked .timeline-dot,.state-failed .timeline-dot{background:#B42318}.state-waiting .timeline-dot,.state-paused .timeline-dot{background:#B7791F}.timeline-row span{display:block;color:#4B5563;font-size:12px;margin-top:2px}.timeline-row p{margin:5px 0}.timeline-row code{font-size:12px;overflow-wrap:anywhere}"
+        "@media(max-width:760px){.workspace,.control-center{grid-template-columns:1fr;padding:14px}.wide{grid-column:auto}}"
         "</style></head><body>"
         f"<header><h1>{escape(title)}</h1></header><main>{body}</main></body></html>"
     )
@@ -162,6 +165,64 @@ def _render_scope_controls(scopes: list[dict[str, Any]]) -> str:
     return f'<label>Scope <select name="selected_scope">{options}</select></label>'
 
 
+def _state_label(status: Any) -> str:
+    """Input: status value. Output: CSS-safe state label. Normalize timeline state styling."""
+    value = str(status or "not_started").replace("_", "-")
+    return "".join(ch for ch in value if ch.isalnum() or ch == "-")
+
+
+def _render_timeline(rows: list[dict[str, Any]]) -> str:
+    """Input: timeline rows. Output: HTML. Render the durable workflow run tape."""
+    if not rows:
+        return "<div class='empty'>No timeline rows available.</div>"
+    items = []
+    for row in rows:
+        state = _state_label(row.get("status"))
+        items.append(
+            "<li class='timeline-row state-{state}'>"
+            "<span class='timeline-dot'></span>"
+            "<div><strong>{label}</strong><span>{status} · {source}</span><p>{explanation}</p><code>{evidence}</code></div>"
+            "</li>".format(
+                state=escape(state),
+                label=escape(str(row.get("label", ""))),
+                status=escape(str(row.get("status", ""))),
+                source=escape(str(row.get("source", ""))),
+                explanation=escape(str(row.get("explanation", ""))),
+                evidence=escape(str(row.get("evidence_path", ""))),
+            )
+        )
+    return "<ol class='timeline'>" + "".join(items) + "</ol>"
+
+
+def _render_current_work(work: dict[str, Any]) -> str:
+    """Input: current work row. Output: HTML. Render active job or workflow stage details."""
+    details = "".join(f"<li>{escape(str(item))}</li>" for item in work.get("details", []) if str(item))
+    evidence = "".join(f"<li><code>{escape(str(item))}</code></li>" for item in work.get("evidence_paths", []) if str(item))
+    return (
+        f"<h3>{escape(str(work.get('title', 'No active work')))}</h3>"
+        f"<p>Status: <strong>{escape(str(work.get('status', '')))}</strong></p>"
+        f"<p>Next action: {escape(str(work.get('next_action', '')))}</p>"
+        f"<ul>{details}</ul>"
+        f"<details><summary>Evidence paths</summary><ul>{evidence}</ul></details>"
+    )
+
+
+def _render_ai_checkpoints(rows: list[dict[str, Any]]) -> str:
+    """Input: checkpoint rows. Output: HTML. Render GPT/Codex judgment queue."""
+    if not rows:
+        return "<div class='empty'>No AI judgment checkpoints.</div>"
+    items = []
+    for row in rows:
+        items.append(
+            "<li><strong>{kind}</strong> <span>{status}</span><p>{reason}</p></li>".format(
+                kind=escape(str(row.get("checkpoint_type", "ai_checkpoint"))),
+                status=escape(str(row.get("status", ""))),
+                reason=escape(str(row.get("reason", ""))),
+            )
+        )
+    return "<ul>" + "".join(items) + "</ul>"
+
+
 def render_dashboard(state: dict[str, Any]) -> str:
     """Input: console state dict. Output: HTML. Render dashboard, controls, and progress summary."""
     readiness = state.get("readiness", {})
@@ -171,7 +232,6 @@ def render_dashboard(state: dict[str, Any]) -> str:
     cards = _normalized_option_rows(option_rows)
     scopes = [scope for scope in state.get("startable_scopes", []) if isinstance(scope, dict)]
     jobs = state.get("jobs", [])
-    active = state.get("active_workflow", {})
     job_items = "".join(
         f"<li><code>{escape(str(job.get('job_id', '')))}</code> {escape(str(job.get('action', '')))} {escape(str(job.get('status', '')))}</li>"
         for job in jobs[:8] if isinstance(job, dict)
@@ -193,10 +253,6 @@ def render_dashboard(state: dict[str, Any]) -> str:
 {_render_scope_controls(scopes)}
 <button>Start selected workflow</button>
 </form>
-"""
-    workflow_progress = f"""
-<p>Active run: <code>{escape(str(active.get('run_id', 'none')))}</code></p>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="workflow-continue"><button>Continue workflow</button></form>
 """
     knowledge_forms = """
 <form method="post" action="/actions/run"><input type="hidden" name="action" value="readiness-check"><button>Run readiness check</button></form>
@@ -223,26 +279,28 @@ def render_dashboard(state: dict[str, Any]) -> str:
         f"<p>Errors: <code>{escape(str(data_coverage.get('error_count', 0)))}</code></p>"
     )
     body = f"""
-<nav>
-<strong>Operations</strong>
-<a href="/">Research start</a>
-<a href="/proposals">Proposals</a>
-</nav>
-<div class="workspace">
-<section class="wide"><h2>Ledger Strip</h2><div class="ledger-strip">{ledger_strip}</div></section>
-<section><h2>Research Start</h2>{research_start_form}</section>
-<section><h2>Workflow Progress</h2>{workflow_progress}</section>
-<section><h2>Knowledge Maintenance</h2>{knowledge_forms}</section>
-<section><h2>Data Coverage</h2>{data_coverage_panel}</section>
-<section><h2>Data Authority</h2>{_render_data_authority(state.get("data_authority", {}))}</section>
-<section><h2>Knowledge Contracts</h2>{_render_knowledge_contracts(state.get("knowledge_contracts", {}))}</section>
-<section><h2>Semantic Ledgers</h2>{_render_semantic_ledgers(state.get("semantic_ledgers", {}))}</section>
-<section><h2>Proposal Lifecycle</h2>{_render_proposal_lifecycle(state.get("proposal_counts", {}))}</section>
-<section><h2>Option Blockers</h2>{_option_blockers(option_rows)}</section>
+<div class="control-center">
+<section class="wide hero"><h2>Objective and Gate Summary</h2><div class="ledger-strip">{ledger_strip}</div><p>Current work: <strong data-current-work-title>{escape(str(state.get("current_work", {}).get("title", "No active workflow")))}</strong></p></section>
+<section class="timeline-panel"><h2>Runtime Timeline</h2>{_render_timeline(state.get("timeline", []))}</section>
+<section class="current-work"><h2>Current Work</h2>{_render_current_work(state.get("current_work", {}))}</section>
+<section class="wide"><h2>Decisions and Approvals</h2>{research_start_form}{_render_inline_proposals(state.get("proposals", []))}</section>
+<section class="wide"><h2>AI Checkpoints</h2>{_render_ai_checkpoints(state.get("ai_checkpoints", []))}</section>
+<section><h2>Maintain Knowledge</h2>{knowledge_forms}</section>
+<section><h2>Platform Data</h2>{data_coverage_panel}</section>
 <section class="wide"><h2>Recent Jobs</h2><ul>{job_items}</ul></section>
 </div>
+<script>
+async function refreshState(){{
+  const response = await fetch('/api/state');
+  if (!response.ok) return;
+  const state = await response.json();
+  const marker = document.querySelector('[data-current-work-title]');
+  if (marker && state.current_work) marker.textContent = state.current_work.title || 'No active work';
+}}
+setInterval(refreshState, 5000);
+</script>
 """
-    return _html_page("Workflow Console", body)
+    return _html_page("BrainWorkflow Control Center", body)
 
 
 def _render_proposal_decision_form(proposal: dict[str, Any]) -> str:
@@ -260,6 +318,17 @@ def _render_proposal_decision_form(proposal: dict[str, Any]) -> str:
         '<textarea name="user_decision" placeholder="decision rationale"></textarea>'
         '<button>Update decision</button></form>'
     )
+
+
+def _render_inline_proposals(proposals: list[dict[str, Any]]) -> str:
+    """Input: proposal rows. Output: HTML. Render proposal decisions in the Control Center."""
+    rows = "".join(
+        f"<li><strong>{escape(str(row.get('title', '')))}</strong> <span>{escape(str(row.get('status', '')))}</span>"
+        f"{_render_proposal_decision_form(row)}</li>"
+        for row in proposals
+        if isinstance(row, dict)
+    ) or "<li>No proposals.</li>"
+    return "<ul>" + rows + "</ul>"
 
 
 def render_proposals(proposals: list[dict[str, Any]]) -> str:
@@ -484,6 +553,9 @@ def run_console_action(paths: ConsolePaths, form: dict[str, Any]) -> Any:
         return completed
     job = create_job(paths.job_root, action, command, paths.workflow_root, {"form": dict(form)})
     try:
+        if action in ASYNC_CONSOLE_ACTIONS:
+            started = start_job_async(job)
+            return started
         completed = run_job(job)
     except Exception as error:
         completed = finish_job(job, "failed", exit_code=1, error=str(error))
@@ -532,6 +604,15 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _send_json(self, payload: dict[str, Any], status: int = 200) -> None:
+        """Input: JSON payload and status. Output: none. Send one JSON response."""
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _read_form(self) -> dict[str, Any]:
         """Input: request body. Output: parsed form dict. Decode URL-encoded POST data."""
         length = int(self.headers.get("Content-Length", "0"))
@@ -544,6 +625,9 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         paths: ConsolePaths = self.server.console_paths  # type: ignore[attr-defined]
         state = load_console_state(paths)
+        if parsed.path == "/api/state":
+            self._send_json(state)
+            return
         if parsed.path == "/proposals":
             self._send_html(render_proposals(state.get("proposals", [])))
             return
@@ -565,6 +649,11 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/actions/run":
                 completed = run_console_action(paths, form)
+                if completed.status == "running":
+                    self.send_response(303)
+                    self.send_header("Location", "/")
+                    self.end_headers()
+                    return
                 self._send_html(f"<html><body>Job {escape(completed.status)}: <code>{escape(completed.job_id)}</code> <a href='/'>Back</a></body></html>")
                 return
         except Exception as error:  # local console should show recoverable errors instead of crashing.

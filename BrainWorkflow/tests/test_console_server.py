@@ -36,6 +36,39 @@ def valid_option(**overrides):
 
 
 class ConsoleServerTests(unittest.TestCase):
+    def test_render_dashboard_has_single_page_timeline_control_center(self):
+        state = {
+            "readiness": {"exists": True, "passed": False},
+            "freshness": {"exists": True, "valid": True, "stale_count": 1, "missing_count": 0},
+            "data_coverage": {"exists": True, "field_count": 60046, "scope_count": 7, "data_set_count": 453, "error_count": 0, "status": "completed"},
+            "option_cards": [valid_option()],
+            "startable_scopes": [{"region": "USA", "delay": 1, "universe": "TOP3000"}],
+            "jobs": [{"job_id": "job-1", "action": "capture-platform-data-fields", "status": "completed"}],
+            "active_workflow": {"exists": False},
+            "workflow_events": [],
+            "approved_queue": [],
+            "queue_diagnostics": [],
+            "proposal_counts": {"proposed": 1},
+            "proposals": [{"proposal_id": "p1", "title": "Improve workflow", "status": "proposed"}],
+            "ai_checkpoints": [{"checkpoint_id": "ai-1", "reason": "Explain blocker.", "status": "pending"}],
+            "timeline": [
+                {"stage_id": "platform_data_capture", "label": "Platform data capture", "status": "completed", "source": "deterministic", "explanation": "Captured raw fields.", "evidence_path": "raw/platform/data_fields/2026-07-30"},
+                {"stage_id": "ai_checkpoint", "label": "AI checkpoint", "status": "waiting", "source": "ai_judgment", "explanation": "Explain blocker.", "evidence_path": "runs/readiness/report.md"},
+            ],
+            "current_work": {"title": "Knowledge health", "status": "blocked", "next_action": "Run knowledge health check", "details": ["Freshness has stale artifacts."], "evidence_paths": []},
+        }
+
+        html = render_dashboard(state)
+
+        self.assertIn("BrainWorkflow Control Center", html)
+        self.assertIn("Objective and Gate Summary", html)
+        self.assertIn("Runtime Timeline", html)
+        self.assertIn("Current Work", html)
+        self.assertIn("Decisions and Approvals", html)
+        self.assertIn("AI Checkpoints", html)
+        self.assertIn("Platform data capture", html)
+        self.assertIn("Explain blocker.", html)
+
     def test_render_dashboard_labels_cache_data_as_not_authoritative(self):
         state = {
             "readiness": {"exists": True, "passed": False},
@@ -651,6 +684,28 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertEqual(len(jobs), 1)
         self.assertIn("enable_live_api", completed.error)
         self.assertIn("Console Job Context", milestone)
+
+    def test_run_console_action_starts_data_capture_async(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            with patch("wqb.console_server.start_job_async") as start_async:
+                start_async.side_effect = lambda job: job.__class__(**{**job.__dict__, "status": "running", "pid": 123})
+                completed = run_console_action(paths, {"action": "capture-platform-data-fields", "enable_live_api": "on", "max_scopes": "4"})
+
+        self.assertEqual(completed.status, "running")
+        start_async.assert_called_once()
+
+    def test_run_console_action_keeps_short_actions_synchronous(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            with patch("wqb.console_server.run_job") as run_sync:
+                run_sync.side_effect = lambda job: job.__class__(**{**job.__dict__, "status": "completed", "exit_code": 0})
+                completed = run_console_action(paths, {"action": "knowledge-health-check"})
+
+        self.assertEqual(completed.status, "completed")
+        run_sync.assert_called_once()
 
     def test_run_console_action_finalizes_job_when_runner_raises(self):
         with tempfile.TemporaryDirectory() as tmp:
