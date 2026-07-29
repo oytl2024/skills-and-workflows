@@ -44,10 +44,30 @@ def latest_data_capture_dir(knowledge_root: str | Path) -> Path | None:
 
 def process_is_alive(pid: int | None) -> bool:
     """Input: process id or none. Output: bool. Check whether a child process still exists."""
-    if pid is None:
-        return False
     try:
-        os.kill(int(pid), 0)
+        process_id = int(pid) if pid is not None else 0
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if process_id <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, process_id)
+            if not handle:
+                return False
+            try:
+                exit_code = ctypes.c_ulong()
+                if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return False
+                return exit_code.value == 259
+            finally:
+                ctypes.windll.kernel32.CloseHandle(handle)
+        except (AttributeError, OSError):
+            return False
+    try:
+        os.kill(process_id, 0)
     except (OSError, ValueError, TypeError, OverflowError):
         return False
     return True

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -28,7 +29,13 @@ PROPOSAL_DECISION_STATUSES = (
     "deferred",
 )
 
-ASYNC_CONSOLE_ACTIONS = {"capture-platform-data-fields"}
+ASYNC_CONSOLE_ACTIONS = {
+    "bootstrap-knowledge",
+    "capture-platform-data-fields",
+    "compile-data-ledger",
+    "compile-research-records",
+    "plan-research-options",
+}
 
 
 def _fallback_option_id(index: int) -> str:
@@ -207,6 +214,71 @@ def _render_current_work(work: dict[str, Any]) -> str:
     )
 
 
+def _render_objective_summary(state: dict[str, Any]) -> str:
+    """Input: Console state. Output: HTML. Render polling-safe gate badges and current work title."""
+    readiness = state.get("readiness", {})
+    freshness = state.get("freshness", {})
+    data_coverage = state.get("data_coverage", {})
+    readiness_state = "ready" if readiness.get("passed", readiness.get("exists", False)) else "blocked"
+    freshness_state = "ready" if freshness.get("valid") and not freshness.get("stale_count") and not freshness.get("missing_count") else "warn"
+    coverage_state = "ready" if data_coverage.get("status") == "completed" and not data_coverage.get("error_count") else "warn"
+    badges = "".join(
+        [
+            _badge("Readiness", readiness.get("passed", readiness.get("exists", False)), readiness_state),
+            _badge("Freshness", f"stale {freshness.get('stale_count', 0)} / missing {freshness.get('missing_count', 0)}", freshness_state),
+            _badge("Data fields", data_coverage.get("field_count", 0), coverage_state),
+        ]
+    )
+    return (
+        "<p>Workflow Console</p>"
+        f"<div class='ledger-strip'>{badges}</div>"
+        f"<p>Current work: <strong>{escape(str(state.get('current_work', {}).get('title', 'No active workflow')))}</strong></p>"
+    )
+
+
+def _render_recent_jobs(jobs: list[dict[str, Any]]) -> str:
+    """Input: Console job rows. Output: HTML. Render recent durable job statuses for polling replacement."""
+    items = "".join(
+        f"<li><code>{escape(str(job.get('job_id', '')))}</code> {escape(str(job.get('action', '')))} {escape(str(job.get('status', '')))}</li>"
+        for job in jobs[:8]
+        if isinstance(job, dict)
+    )
+    return f"<ul>{items or '<li>No console jobs.</li>'}</ul>"
+
+
+def _render_data_coverage_panel(data_coverage: dict[str, Any]) -> str:
+    """Input: data coverage summary. Output: HTML. Render capture controls and live persisted progress counts."""
+    return (
+        '<form method="post" action="/actions/run">'
+        '<input type="hidden" name="action" value="capture-platform-data-fields">'
+        '<label><input type="checkbox" name="enable_live_api"> enable_live_api</label>'
+        '<select name="max_scopes">'
+        '<option value="0">All configured scopes</option>'
+        '<option value="4">First 4 scopes</option>'
+        '<option value="10">First 10 scopes</option>'
+        '</select>'
+        '<button>Capture platform data fields</button></form>'
+        '<form method="post" action="/actions/run">'
+        '<input type="hidden" name="action" value="compile-data-ledger">'
+        '<button>Compile data ledger from raw</button></form>'
+        f"<p>Fields: <code>{escape(str(data_coverage.get('field_count', 0)))}</code></p>"
+        f"<p>Scopes: <code>{escape(str(data_coverage.get('scope_count', 0)))}</code></p>"
+        f"<p>Data sets: <code>{escape(str(data_coverage.get('data_set_count', 0)))}</code></p>"
+        f"<p>Errors: <code>{escape(str(data_coverage.get('error_count', 0)))}</code></p>"
+    )
+
+
+def render_runtime_fragments(state: dict[str, Any]) -> dict[str, str]:
+    """Input: Console state. Output: named HTML fragments. Render all runtime regions refreshed by browser polling."""
+    return {
+        "objective": _render_objective_summary(state),
+        "timeline": _render_timeline(state.get("timeline", [])),
+        "current_work": _render_current_work(state.get("current_work", {})),
+        "platform_data": _render_data_coverage_panel(state.get("data_coverage", {})),
+        "recent_jobs": _render_recent_jobs(state.get("jobs", [])),
+    }
+
+
 def _render_ai_checkpoints(rows: list[dict[str, Any]]) -> str:
     """Input: checkpoint rows. Output: HTML. Render GPT/Codex judgment queue."""
     if not rows:
@@ -225,28 +297,11 @@ def _render_ai_checkpoints(rows: list[dict[str, Any]]) -> str:
 
 def render_dashboard(state: dict[str, Any]) -> str:
     """Input: console state dict. Output: HTML. Render dashboard, controls, and progress summary."""
-    readiness = state.get("readiness", {})
-    freshness = state.get("freshness", {})
-    data_coverage = state.get("data_coverage", {})
     option_rows = [card for card in state.get("option_cards", []) if isinstance(card, dict)]
     cards = _normalized_option_rows(option_rows)
     scopes = [scope for scope in state.get("startable_scopes", []) if isinstance(scope, dict)]
-    jobs = state.get("jobs", [])
     active = state.get("active_workflow", {})
-    job_items = "".join(
-        f"<li><code>{escape(str(job.get('job_id', '')))}</code> {escape(str(job.get('action', '')))} {escape(str(job.get('status', '')))}</li>"
-        for job in jobs[:8] if isinstance(job, dict)
-    ) or "<li>No console jobs.</li>"
-    readiness_state = "ready" if readiness.get("passed", readiness.get("exists", False)) else "blocked"
-    freshness_state = "ready" if freshness.get("valid") and not freshness.get("stale_count") and not freshness.get("missing_count") else "warn"
-    coverage_state = "ready" if data_coverage.get("status") == "completed" and not data_coverage.get("error_count") else "warn"
-    ledger_strip = "".join(
-        [
-            _badge("Readiness", readiness.get("passed", readiness.get("exists", False)), readiness_state),
-            _badge("Freshness", f"stale {freshness.get('stale_count', 0)} / missing {freshness.get('missing_count', 0)}", freshness_state),
-            _badge("Data fields", data_coverage.get("field_count", 0), coverage_state),
-        ]
-    )
+    fragments = render_runtime_fragments(state)
     research_start_form = f"""
 <form method="post" action="/actions/run">
 <input type="hidden" name="action" value="workflow-start-from-option">
@@ -265,43 +320,27 @@ def render_dashboard(state: dict[str, Any]) -> str:
 <form method="post" action="/actions/run"><input type="hidden" name="action" value="plan-research-options"><label><input type="checkbox" name="enable_live_api"> Enable live API</label><button>Refresh research options</button></form>
 <form method="post" action="/actions/run"><input type="hidden" name="action" value="knowledge-health-check"><button>Check knowledge health</button></form>
 """
-    data_coverage_panel = (
-        "<form method=\"post\" action=\"/actions/run\">"
-        "<input type=\"hidden\" name=\"action\" value=\"capture-platform-data-fields\">"
-        "<label><input type=\"checkbox\" name=\"enable_live_api\"> enable_live_api</label>"
-        "<select name=\"max_scopes\">"
-        "<option value=\"0\">All configured scopes</option>"
-        "<option value=\"4\">First 4 scopes</option>"
-        "<option value=\"10\">First 10 scopes</option>"
-        "</select>"
-        "<button>Capture platform data fields</button></form>"
-        "<form method=\"post\" action=\"/actions/run\">"
-        "<input type=\"hidden\" name=\"action\" value=\"compile-data-ledger\">"
-        "<button>Compile data ledger from raw</button></form>"
-        f"<p>Fields: <code>{escape(str(data_coverage.get('field_count', 0)))}</code></p>"
-        f"<p>Scopes: <code>{escape(str(data_coverage.get('scope_count', 0)))}</code></p>"
-        f"<p>Data sets: <code>{escape(str(data_coverage.get('data_set_count', 0)))}</code></p>"
-        f"<p>Errors: <code>{escape(str(data_coverage.get('error_count', 0)))}</code></p>"
-    )
     body = f"""
 <div class="control-center">
-<section class="wide hero"><h2>Objective and Gate Summary</h2><p>Workflow Console</p><div class="ledger-strip">{ledger_strip}</div><p>Current work: <strong data-current-work-title>{escape(str(state.get("current_work", {}).get("title", "No active workflow")))}</strong></p></section>
-<section class="timeline-panel"><h2>Runtime Timeline</h2>{_render_timeline(state.get("timeline", []))}</section>
-<section class="current-work"><h2>Current Work</h2>{_render_current_work(state.get("current_work", {}))}</section>
+<section class="wide hero"><h2>Objective and Gate Summary</h2><div data-runtime-fragment='objective'>{fragments["objective"]}</div></section>
+<section class="timeline-panel"><h2>Runtime Timeline</h2><div data-runtime-fragment='timeline'>{fragments["timeline"]}</div></section>
+<section class="current-work"><h2>Current Work</h2><div data-runtime-fragment='current_work'>{fragments["current_work"]}</div></section>
 <section class="wide"><h2>Decisions and Approvals</h2><h3>Research Start</h3>{research_start_form}<h3>Workflow Progress</h3>{workflow_progress}{_render_inline_proposals(state.get("proposals", []))}</section>
 <section class="wide"><h2>AI Checkpoints</h2>{_render_ai_checkpoints(state.get("ai_checkpoints", []))}</section>
 <section><h2>Knowledge Maintenance</h2>{knowledge_forms}</section>
-<section><h2>Platform Data</h2>{data_coverage_panel}</section>
+<section><h2>Platform Data</h2><div data-runtime-fragment='platform_data'>{fragments["platform_data"]}</div></section>
 <section class="wide"><h2>Knowledge and Data Authority</h2><h3>Data Authority</h3>{_render_data_authority(state.get("data_authority", {}))}<h3>Knowledge Contracts</h3>{_render_knowledge_contracts(state.get("knowledge_contracts", {}))}<h3>Semantic Ledgers</h3>{_render_semantic_ledgers(state.get("semantic_ledgers", {}))}<h3>Option Blockers</h3>{_option_blockers(option_rows)}</section>
-<section class="wide"><h2>Recent Jobs</h2><ul>{job_items}</ul></section>
+<section class="wide"><h2>Recent Jobs</h2><div data-runtime-fragment='recent_jobs'>{fragments["recent_jobs"]}</div></section>
 </div>
 <script>
 async function refreshState(){{
-  const response = await fetch('/api/state');
+  const response = await fetch('/api/fragments');
   if (!response.ok) return;
-  const state = await response.json();
-  const marker = document.querySelector('[data-current-work-title]');
-  if (marker && state.current_work) marker.textContent = state.current_work.title || 'No active work';
+  const fragments = await response.json();
+  for (const [name, html] of Object.entries(fragments)) {{
+    const target = document.querySelector('[data-runtime-fragment="' + name + '"]');
+    if (target) target.innerHTML = html;
+  }}
 }}
 setInterval(refreshState, 5000);
 </script>
@@ -374,6 +413,36 @@ def _truthy(value: Any) -> bool:
     if isinstance(value, list):
         return any(_truthy(item) for item in value)
     return str(value).lower() in {"1", "true", "yes", "on"}
+
+
+def _capture_date(form: dict[str, Any]) -> str:
+    """Input: capture form values. Output: ISO date. Select the raw capture directory date before process launch."""
+    value = str(form.get("data_capture_date", "")).strip()
+    if not value:
+        return datetime.now(timezone.utc).date().isoformat()
+    try:
+        return datetime.fromisoformat(value).date().isoformat()
+    except ValueError:
+        raise ValueError("data_capture_date must be an ISO date") from None
+
+
+def _job_metadata(action: str, paths: ConsolePaths, form: dict[str, Any], command: list[str]) -> dict[str, Any]:
+    """Input: action, paths, form, command. Output: durable metadata. Bind capture progress to its launched raw directory."""
+    metadata = {"form": dict(form)}
+    if action == "capture-platform-data-fields":
+        capture_date = command[command.index("--data-capture-date") + 1]
+        metadata["capture_dir"] = str(paths.knowledge_root / "raw" / "platform" / "data_fields" / capture_date)
+    return metadata
+
+
+def _record_async_console_job_context(paths: ConsolePaths, job: Any) -> None:
+    """Input: Console paths and terminal async job. Output: none. Record recovery context without breaking a job watcher."""
+    if str(getattr(job, "status", "")) not in {"completed", "failed", "refused", "timed_out"}:
+        return
+    try:
+        record_console_job_context(paths, job, next_command="python -m wqb.cli workflow-status")
+    except Exception:
+        return
 
 
 def _freshness_clean(paths: ConsolePaths) -> bool:
@@ -544,6 +613,8 @@ def build_action_command(action: str, paths: ConsolePaths, form: dict[str, Any] 
         }
         return build_raw_cli_command("workflow-start", paths, normalized)
     normalized = {key: (_truthy(value) if key in {"enable_live_api", "confirm_submit"} else value) for key, value in data.items()}
+    if action == "capture-platform-data-fields":
+        normalized["data_capture_date"] = _capture_date(data)
     return build_raw_cli_command(action, paths, normalized)
 
 
@@ -557,10 +628,10 @@ def run_console_action(paths: ConsolePaths, form: dict[str, Any]) -> Any:
         completed = finish_job(job, "refused", exit_code=2, error=str(error))
         record_console_job_context(paths, completed, next_command="python -m wqb.cli workflow-status")
         return completed
-    job = create_job(paths.job_root, action, command, paths.workflow_root, {"form": dict(form)})
+    job = create_job(paths.job_root, action, command, paths.workflow_root, _job_metadata(action, paths, form, command))
     try:
         if action in ASYNC_CONSOLE_ACTIONS:
-            started = start_job_async(job)
+            started = start_job_async(job, on_complete=lambda completed: _record_async_console_job_context(paths, completed))
             return started
         completed = run_job(job)
     except Exception as error:
@@ -631,6 +702,9 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         paths: ConsolePaths = self.server.console_paths  # type: ignore[attr-defined]
         state = load_console_state(paths)
+        if parsed.path == "/api/fragments":
+            self._send_json(render_runtime_fragments(state))
+            return
         if parsed.path == "/api/state":
             self._send_json(state)
             return

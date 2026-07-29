@@ -147,6 +147,18 @@ class ConsoleJobsTests(unittest.TestCase):
         self.assertIn("definitely_missing_executable", completed.error)
         self.assertIn("failed", summary)
 
+    def test_run_job_marks_timeout_timed_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            job = create_job(paths.job_root, "timed", [sys.executable, "-c", "import time; time.sleep(5)"], root, {})
+
+            completed = run_job(job, timeout_seconds=0.1)
+
+        self.assertEqual(completed.status, "timed_out")
+        self.assertEqual(completed.exit_code, -1)
+        self.assertEqual(completed.error, "timed out after 0.1s")
+
 
 class AsyncConsoleJobsTests(unittest.TestCase):
     def test_start_job_async_returns_running_job_with_pid_before_command_finishes(self):
@@ -189,7 +201,7 @@ class AsyncConsoleJobsTests(unittest.TestCase):
         self.assertEqual(payload["status_message"], "failed")
         self.assertIn("failed", summary)
 
-    def test_start_job_async_terminates_timed_out_process_and_persists_failure(self):
+    def test_start_job_async_terminates_timed_out_process_and_persists_timed_out_status(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             paths = make_paths(root)
@@ -199,10 +211,10 @@ class AsyncConsoleJobsTests(unittest.TestCase):
             start_job_async(job, timeout_seconds=0.1)
             payload = wait_for_terminal_payload(job.job_dir)
 
-        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["status"], "timed_out")
         self.assertIsNotNone(payload["exit_code"])
         self.assertTrue(payload["finished_at"])
-        self.assertEqual(payload["status_message"], "failed")
+        self.assertEqual(payload["status_message"], "timed_out")
         self.assertEqual(payload["error"], "timed out after 0.1s")
 
     def test_start_job_async_persists_spawn_failure(self):
@@ -243,6 +255,44 @@ class AsyncConsoleJobsTests(unittest.TestCase):
         self.assertEqual(reconciled["progress_kind"], "data_capture")
         self.assertEqual(reconciled["progress"]["data_field_rows"], 2)
         self.assertNotEqual(reconciled["status"], "completed")
+
+    def test_reconcile_capture_job_uses_its_persisted_capture_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            knowledge = root / "knowledge"
+            selected = knowledge / "raw" / "platform" / "data_fields" / "2026-07-29"
+            newer = knowledge / "raw" / "platform" / "data_fields" / "2026-07-30"
+            selected.mkdir(parents=True)
+            newer.mkdir(parents=True)
+            (selected / "data_fields.jsonl").write_text('{"id":"selected"}\n', encoding="utf-8")
+            (newer / "data_fields.jsonl").write_text('{"id":"newer-1"}\n{"id":"newer-2"}\n', encoding="utf-8")
+            row = {
+                "job_id": "job-capture-29",
+                "status": "running",
+                "action": "capture-platform-data-fields",
+                "pid": None,
+                "exit_code": None,
+                "metadata": {"capture_dir": str(selected)},
+            }
+
+            reconciled = reconcile_job_dict(row, knowledge)
+
+        self.assertEqual(reconciled["progress"]["capture_dir"], str(selected))
+        self.assertEqual(reconciled["progress"]["data_field_rows"], 1)
+
+    def test_start_job_async_calls_completion_callback_after_terminal_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            job = create_job(paths.job_root, "callback-action", [sys.executable, "-c", "print('done')"], root, {})
+            callbacks = []
+
+            start_job_async(job, timeout_seconds=5, on_complete=callbacks.append)
+            payload = wait_for_terminal_payload(job.job_dir)
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(len(callbacks), 1)
+        self.assertEqual(callbacks[0].status, "completed")
 
     def test_reconcile_completed_job_keeps_terminal_state(self):
         row = {"job_id": "job-2", "status": "completed", "action": "readiness-check", "exit_code": 0}

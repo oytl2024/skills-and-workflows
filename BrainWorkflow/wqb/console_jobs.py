@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from wqb.console_progress import probe_data_capture_progress, process_is_alive
@@ -156,7 +156,7 @@ def run_job(job: ConsoleJob, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> 
     except subprocess.TimeoutExpired as error:
         Path(running.stdout_path).write_text(error.stdout or "", encoding="utf-8")
         Path(running.stderr_path).write_text(error.stderr or "", encoding="utf-8")
-        completed = replace(running, status="failed", updated_at=_now(), exit_code=-1, error=f"timed out after {timeout_seconds}s")
+        completed = replace(running, status="timed_out", updated_at=_now(), exit_code=-1, error=f"timed out after {timeout_seconds}s")
     except Exception as error:
         Path(running.stdout_path).write_text("", encoding="utf-8")
         error_text = f"{running.command[0] if running.command else 'command'}: {error}"
@@ -166,40 +166,57 @@ def run_job(job: ConsoleJob, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> 
     return _write_job(completed)
 
 
-def _finalize_process_result(job: ConsoleJob, returncode: int, error: str = "") -> ConsoleJob:
+def _finalize_process_result(job: ConsoleJob, returncode: int, error: str = "", status: str = "") -> ConsoleJob:
     """Input: running job and return code. Output: terminal job. Persist process result."""
     finished = _now()
-    status = "completed" if returncode == 0 else "failed"
+    terminal_status = status or ("completed" if returncode == 0 else "failed")
     completed = replace(
         job,
-        status=status,
+        status=terminal_status,
         updated_at=finished,
         finished_at=finished,
         duration_seconds=_duration_seconds(job.started_at, finished),
         exit_code=returncode,
         error=error,
-        status_message=status,
+        status_message=terminal_status,
     )
     _write_summary(completed)
     return _write_job(completed)
+
+
+def _notify_completion(callback: Callable[[ConsoleJob], None] | None, job: ConsoleJob) -> None:
+    """Input: optional completion callback and terminal job. Output: none. Notify recovery hooks without breaking a watcher."""
+    if callback is None:
+        return
+    try:
+        callback(job)
+    except Exception:
+        return
 
 
 def watch_job(
     job: ConsoleJob,
     process: subprocess.Popen[Any],
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    on_complete: Callable[[ConsoleJob], None] | None = None,
 ) -> ConsoleJob:
     """Input: running job, process, timeout. Output: terminal job. Wait for async process and persist result."""
     try:
         returncode = process.wait(timeout=timeout_seconds)
-        return _finalize_process_result(job, int(returncode))
+        completed = _finalize_process_result(job, int(returncode))
     except subprocess.TimeoutExpired:
         process.kill()
         returncode = process.wait()
-        return _finalize_process_result(job, int(returncode), f"timed out after {timeout_seconds}s")
+        completed = _finalize_process_result(job, int(returncode), f"timed out after {timeout_seconds}s", status="timed_out")
+    _notify_completion(on_complete, completed)
+    return completed
 
 
-def start_job_async(job: ConsoleJob, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> ConsoleJob:
+def start_job_async(
+    job: ConsoleJob,
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    on_complete: Callable[[ConsoleJob], None] | None = None,
+) -> ConsoleJob:
     """Input: created job and timeout. Output: running job. Start a CLI command without blocking the caller."""
     started_at = _now()
     stdout_path = Path(job.stdout_path)
@@ -218,7 +235,9 @@ def start_job_async(job: ConsoleJob, timeout_seconds: int = DEFAULT_TIMEOUT_SECO
     except Exception as error:
         stdout_handle.close()
         stderr_handle.close()
-        return finish_job(job, "failed", exit_code=-1, error=f"{job.command[0] if job.command else 'command'}: {error}")
+        completed = finish_job(job, "failed", exit_code=-1, error=f"{job.command[0] if job.command else 'command'}: {error}")
+        _notify_completion(on_complete, completed)
+        return completed
     stdout_handle.close()
     stderr_handle.close()
     running = replace(
@@ -230,15 +249,20 @@ def start_job_async(job: ConsoleJob, timeout_seconds: int = DEFAULT_TIMEOUT_SECO
         status_message="running",
     )
     _write_job(running)
-    thread = threading.Thread(target=watch_job, args=(running, process, timeout_seconds), daemon=True)
+    thread = threading.Thread(target=watch_job, args=(running, process, timeout_seconds, on_complete), daemon=True)
     thread.start()
     return running
 
 
-def _progress_for_action(action: str, knowledge_root: str | Path | None) -> tuple[str, dict[str, Any]]:
+def _progress_for_action(
+    action: str,
+    knowledge_root: str | Path | None,
+    metadata: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any]]:
     """Input: action and knowledge root. Output: progress kind and payload. Compute action-specific progress."""
     if action == "capture-platform-data-fields" and knowledge_root is not None:
-        return "data_capture", probe_data_capture_progress(knowledge_root)
+        capture_dir = (metadata or {}).get("capture_dir")
+        return "data_capture", probe_data_capture_progress(knowledge_root, capture_dir=capture_dir)
     return "", {}
 
 
@@ -247,7 +271,8 @@ def reconcile_job_dict(row: dict[str, Any], knowledge_root: str | Path | None = 
     result = dict(row)
     status = str(result.get("status", ""))
     action = str(result.get("action", ""))
-    progress_kind, progress = _progress_for_action(action, knowledge_root)
+    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    progress_kind, progress = _progress_for_action(action, knowledge_root, metadata)
     if progress_kind:
         result["progress_kind"] = progress_kind
         result["progress"] = progress
@@ -326,6 +351,8 @@ def build_cli_command(action: str, paths: ConsolePaths, form: dict[str, Any] | N
             command.extend(["--max-fields-per-dataset", str(data.get("max_fields_per_dataset"))])
         if data.get("resume_capture"):
             command.append("--resume-capture")
+        if data.get("data_capture_date"):
+            command.extend(["--data-capture-date", str(data.get("data_capture_date"))])
         return command
     if action == "compile-data-ledger":
         return [*base, "compile-data-ledger", "--knowledge-root", knowledge_root]

@@ -138,9 +138,13 @@ derived from persisted workflow, readiness, job, proposal, and checkpoint data;
 do not make a browser request depend on a model call or an unrecorded process
 side effect. Existing job records must remain readable across code changes.
 
-Long actions must use `start_job_async`. Short local checks may use `run_job`.
+Long actions (`bootstrap-knowledge`, `compile-research-records`,
+`capture-platform-data-fields`, `compile-data-ledger`, and
+`plan-research-options`) must use `start_job_async`. Short local checks may use `run_job`.
 When recovering a running job, reconcile `job.json`, PID state, and the
-persisted raw, wiki, or run artifacts before retrying it. Do not launch a second
+persisted raw, wiki, or run artifacts before retrying it. Capture jobs persist
+their target raw capture directory in `job.json`; use that directory rather
+than a globally newest capture. Do not launch a second
 live capture or compile merely because the browser lost its connection.
 
 Do not put model API calls or model credentials in `console_server.py`. When

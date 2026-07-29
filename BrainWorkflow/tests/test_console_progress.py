@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,7 @@ from wqb.console_progress import (
     count_jsonl_rows,
     file_snapshot,
     latest_data_capture_dir,
+    process_is_alive,
     probe_data_capture_progress,
 )
 
@@ -38,6 +40,11 @@ class ConsoleProgressTests(unittest.TestCase):
         self.assertIn("last_write_at", snapshot)
         self.assertEqual(missing["exists"], False)
         self.assertEqual(missing["bytes"], 0)
+
+    def test_process_is_alive_rejects_invalid_pid_and_accepts_current_process(self):
+        self.assertFalse(process_is_alive(-1))
+        self.assertFalse(process_is_alive("not-a-pid"))
+        self.assertTrue(process_is_alive(os.getpid()))
 
 
 class ConsoleCaptureProgressTests(unittest.TestCase):

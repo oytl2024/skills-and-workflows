@@ -1,12 +1,16 @@
 import json
+from http.client import HTTPConnection
+import sys
 import tempfile
+import threading
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from wqb.console_server import build_action_command, create_console_proposal, make_console_server, render_dashboard, render_proposals, run_console_action, update_console_proposal_decision
-from wqb.console_state import ConsolePaths
+from wqb.console_server import build_action_command, create_console_proposal, make_console_server, render_dashboard, render_proposals, render_runtime_fragments, run_console_action, update_console_proposal_decision
+from wqb.console_state import ConsolePaths, load_console_state
 from wqb.data_ledger_compile import compile_data_ledger_from_raw
 from wqb.workflow_proposals import load_workflow_proposals
 
@@ -33,6 +37,23 @@ def valid_option(**overrides):
         "score": {"total": 1.0, "components": {}, "penalties": {}, "reasons": ["measured coverage"]},
     }
     return {**row, **overrides}
+
+
+def request_from_console_server(server, method: str, path: str, body: str = "") -> tuple[int, dict[str, str], bytes]:
+    """Input: local Console server and HTTP request values. Output: status, headers, body. Exercise one handler request."""
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = HTTPConnection(*server.server_address, timeout=5)
+    try:
+        headers = {"Content-Type": "application/x-www-form-urlencoded"} if body else {}
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        return response.status, dict(response.getheaders()), response.read()
+    finally:
+        connection.close()
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 class ConsoleServerTests(unittest.TestCase):
@@ -68,6 +89,26 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn("AI Checkpoints", html)
         self.assertIn("Platform data capture", html)
         self.assertIn("Explain blocker.", html)
+
+    def test_runtime_fragments_include_refreshed_timeline_work_badges_and_jobs(self):
+        state = {
+            "readiness": {"passed": True},
+            "freshness": {"valid": True, "stale_count": 0, "missing_count": 0},
+            "data_coverage": {"field_count": 2, "scope_count": 1, "data_set_count": 1, "error_count": 0, "status": "running"},
+            "jobs": [{"job_id": "job-live", "action": "capture-platform-data-fields", "status": "running"}],
+            "timeline": [{"label": "Platform data capture", "status": "running", "source": "deterministic", "explanation": "2 fields captured.", "evidence_path": "raw/platform/data_fields/2026-07-30"}],
+            "current_work": {"title": "Capturing platform data", "status": "running", "next_action": "Wait for completion", "details": ["2 fields"], "evidence_paths": ["raw/platform/data_fields/2026-07-30"]},
+        }
+
+        fragments = render_runtime_fragments(state)
+        html = render_dashboard(state)
+
+        self.assertIn("Platform data capture", fragments["timeline"])
+        self.assertIn("Capturing platform data", fragments["current_work"])
+        self.assertIn("Data fields", fragments["objective"])
+        self.assertIn("job-live", fragments["recent_jobs"])
+        self.assertIn("data-runtime-fragment='timeline'", html)
+        self.assertIn("/api/fragments", html)
 
     def test_render_dashboard_labels_cache_data_as_not_authoritative(self):
         state = {
@@ -690,11 +731,84 @@ class ConsoleServerTests(unittest.TestCase):
             root = Path(tmp)
             paths = make_paths(root)
             with patch("wqb.console_server.start_job_async") as start_async:
-                start_async.side_effect = lambda job: job.__class__(**{**job.__dict__, "status": "running", "pid": 123})
+                start_async.side_effect = lambda job, **_: job.__class__(**{**job.__dict__, "status": "running", "pid": 123})
                 completed = run_console_action(paths, {"action": "capture-platform-data-fields", "enable_live_api": "on", "max_scopes": "4"})
 
         self.assertEqual(completed.status, "running")
         start_async.assert_called_once()
+
+    def test_run_console_action_starts_all_long_maintenance_actions_async_and_records_terminal_context(self):
+        actions = ("compile-data-ledger", "compile-research-records", "bootstrap-knowledge", "plan-research-options")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            paths.workflow_root.mkdir()
+            for action in actions:
+                with patch("wqb.console_server.build_action_command", return_value=[sys.executable, "-c", "import time; time.sleep(0.2)"]):
+                    started = run_console_action(paths, {"action": action, "enable_live_api": "on"})
+                self.assertEqual(started.status, "running")
+            self.assertFalse(paths.milestone_path.exists())
+            terminal_paths = []
+            for job_path in paths.job_root.glob("*/job.json"):
+                for _ in range(100):
+                    payload = json.loads(job_path.read_text(encoding="utf-8"))
+                    if payload["status"] in {"completed", "failed", "refused", "timed_out"}:
+                        terminal_paths.append(payload)
+                        break
+                    threading.Event().wait(0.02)
+            milestone = paths.milestone_path.read_text(encoding="utf-8")
+            todo = paths.todo_path.read_text(encoding="utf-8")
+
+        self.assertEqual(len(terminal_paths), len(actions))
+        self.assertTrue(all(payload["status"] == "completed" for payload in terminal_paths))
+        self.assertEqual(milestone.count("Console Job Context"), len(actions))
+        self.assertEqual(todo.count("### Console Job"), len(actions))
+
+    def test_async_context_recording_failure_keeps_terminal_job_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            paths.workflow_root.mkdir()
+            with patch("wqb.console_server.build_action_command", return_value=[sys.executable, "-c", "print('done')"]):
+                with patch("wqb.console_server.record_console_job_context", side_effect=OSError("context unavailable")):
+                    started = run_console_action(paths, {"action": "compile-data-ledger"})
+            for _ in range(100):
+                payload = json.loads((Path(started.job_dir) / "job.json").read_text(encoding="utf-8"))
+                if payload["status"] in {"completed", "failed", "refused", "timed_out"}:
+                    break
+                threading.Event().wait(0.02)
+
+        self.assertEqual(started.status, "running")
+        self.assertEqual(payload["status"], "completed")
+
+    def test_capture_job_persists_command_capture_directory_before_async_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            with patch("wqb.console_server.start_job_async", side_effect=lambda job, **_: SimpleNamespace(status="running", job_id=job.job_id)):
+                run_console_action(paths, {"action": "capture-platform-data-fields", "enable_live_api": "on", "data_capture_date": "2026-07-29"})
+            payload = json.loads(next(paths.job_root.glob("*/job.json")).read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["metadata"]["capture_dir"], str(paths.knowledge_root / "raw" / "platform" / "data_fields" / "2026-07-29"))
+        command = payload["command"]
+        self.assertEqual(command[command.index("--data-capture-date") + 1], "2026-07-29")
+
+    def test_handler_api_state_matches_console_state_and_async_post_redirects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            expected = load_console_state(paths)
+            state_server = make_console_server("127.0.0.1", 0, paths)
+            status, headers, body = request_from_console_server(state_server, "GET", "/api/state")
+            redirect_server = make_console_server("127.0.0.1", 0, paths)
+            with patch("wqb.console_server.run_console_action", return_value=SimpleNamespace(status="running", job_id="job-async")):
+                redirect_status, redirect_headers, _ = request_from_console_server(redirect_server, "POST", "/actions/run", "action=compile-data-ledger")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
+        self.assertEqual(json.loads(body.decode("utf-8")), expected)
+        self.assertEqual(redirect_status, 303)
+        self.assertEqual(redirect_headers["Location"], "/")
 
     def test_run_console_action_keeps_short_actions_synchronous(self):
         with tempfile.TemporaryDirectory() as tmp:
