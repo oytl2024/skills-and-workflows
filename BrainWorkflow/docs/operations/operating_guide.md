@@ -200,3 +200,37 @@ On this Windows setup, direct unittest startup can hit a local `_overlapped` imp
 python -c "import sys, runpy; sys.platform='linux'; runpy.run_module('unittest', run_name='__main__')" discover -s tests -q
 python -m compileall -q wqb tests
 ```
+
+## Single-Page Workflow Console
+
+Launch the Console from PowerShell. Set `SystemRoot` and `windir` first when
+the local Windows shell does not provide them:
+
+```powershell
+$env:SystemRoot='C:\Windows'
+$env:windir='C:\Windows'
+$env:WQB_USERNAME=[Environment]::GetEnvironmentVariable('WQB_USERNAME','User')
+$env:WQB_PASSWORD=[Environment]::GetEnvironmentVariable('WQB_PASSWORD','User')
+Set-Location 'C:\Users\oytl\Desktop\pyproject\brain\skills-and-workflows\BrainWorkflow'
+python -m wqb.cli launch-console --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --run-dir 'C:\Users\oytl\Desktop\pyproject\brain\runs' --console-port 8765
+```
+
+Open `http://127.0.0.1:8765`. The page is the normal operating surface:
+
+1. Read `Objective and Gate Summary` for the active objective and readiness blockers.
+2. Check `Runtime Timeline` for running, waiting, blocked, and completed stages.
+3. Inspect `Current Work` for async job progress, status, and evidence paths.
+4. Use `Decisions and Approvals` for research option selection and proposal review.
+5. Use `AI Checkpoints` to see where later GPT/Codex judgment is required.
+
+The page state is served by `/api/state`. Refreshing it is a read operation;
+long actions create an async Console job and return a job identifier instead of
+blocking the browser request. Inspect the job record under
+`runs/console_jobs/<job-id>/job.json` when recovering an interrupted action.
+
+Live API actions require their explicit checkbox. Deterministic checks,
+captures, compiles, readiness gates, and job monitoring do not imply GPT/Codex
+work. The local server must not call model APIs directly. Model work is recorded
+durably in `ai_checkpoints.jsonl` for a later Codex agent or automation runner to
+consume and write back with evidence. Alpha submission still requires user
+approval.

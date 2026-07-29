@@ -125,3 +125,35 @@ Latest clean implementation review:
 - Range: `2711667..974158a`
 - Result: 0 Critical, 0 Important
 - Full non-live tests: 418 passed
+
+## Console Timeline Maintenance Contract
+
+The Console is a read and control layer. The Orchestrator owns research workflow
+state, Console jobs own command execution evidence, and `console_timeline.py`
+maps durable state into the timeline rows shown by the page. Keep these
+ownership boundaries intact when extending the UI or API.
+
+`/api/state` must remain a deterministic read model. New fields should be
+derived from persisted workflow, readiness, job, proposal, and checkpoint data;
+do not make a browser request depend on a model call or an unrecorded process
+side effect. Existing job records must remain readable across code changes.
+
+Long actions must use `start_job_async`. Short local checks may use `run_job`.
+When recovering a running job, reconcile `job.json`, PID state, and the
+persisted raw, wiki, or run artifacts before retrying it. Do not launch a second
+live capture or compile merely because the browser lost its connection.
+
+Do not put model API calls or model credentials in `console_server.py`. When
+GPT/Codex judgment is needed, write an `ai_checkpoints.jsonl` record through
+`ai_checkpoints.py`. A later Codex skill or automation runner consumes the
+checkpoint, records its decision or proposal, and links the resulting durable
+artifact and evidence path. Deterministic actions must remain explicitly
+non-AI in labels and behavior.
+
+Workflow proposals and rule evolution are durable project changes, not
+transient UI state. Keep the proposal, approval/rejection decision, rationale,
+and affected rule or template path in the project records before changing a
+workflow rule. Human approval remains required for durable rule changes and
+Alpha submission. Preserve append-only records and existing legacy/stage1
+archive material; update compiled wiki or benchmark artifacts through their
+normal maintenance commands.
