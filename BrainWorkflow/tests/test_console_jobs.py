@@ -9,6 +9,10 @@ from wqb.console_jobs import build_cli_command, create_job, load_job_history, re
 from wqb.console_state import ConsolePaths
 
 
+TERMINAL_STATUSES = {"completed", "failed", "refused", "timed_out"}
+POLL_INTERVAL_SECONDS = 0.02
+
+
 def make_paths(root: Path) -> ConsolePaths:
     """Input: temp root. Output: ConsolePaths. Create a minimal console path fixture."""
     return ConsolePaths(
@@ -20,6 +24,18 @@ def make_paths(root: Path) -> ConsolePaths:
         todo_path=root / "todo.md",
         job_root=root / "runs" / "console_jobs",
     )
+
+
+def wait_for_terminal_payload(job_dir: str | Path, timeout_seconds: float = 5) -> dict[str, object]:
+    """Input: job directory and timeout seconds. Output: terminal job payload. Poll durable job state until terminal."""
+    deadline = time.monotonic() + timeout_seconds
+    path = Path(job_dir) / "job.json"
+    while time.monotonic() < deadline:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("status") in TERMINAL_STATUSES:
+            return payload
+        time.sleep(POLL_INTERVAL_SECONDS)
+    raise AssertionError(f"job did not reach a terminal state within {timeout_seconds}s")
 
 
 class ConsoleJobsTests(unittest.TestCase):
@@ -147,8 +163,7 @@ class AsyncConsoleJobsTests(unittest.TestCase):
             self.assertIsInstance(started.pid, int)
             self.assertEqual(payload["status"], "running")
             self.assertEqual(payload["pid"], started.pid)
-            time.sleep(0.8)
-            final_payload = json.loads((Path(job.job_dir) / "job.json").read_text(encoding="utf-8"))
+            final_payload = wait_for_terminal_payload(job.job_dir)
             stdout = Path(job.stdout_path).read_text(encoding="utf-8")
             summary_exists = Path(final_payload["summary_path"]).exists()
 
@@ -156,6 +171,55 @@ class AsyncConsoleJobsTests(unittest.TestCase):
         self.assertEqual(final_payload["exit_code"], 0)
         self.assertIn("done", stdout)
         self.assertTrue(summary_exists)
+
+    def test_start_job_async_persists_failed_nonzero_exit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            command = [sys.executable, "-c", "import sys; print('bad'); sys.exit(7)"]
+            job = create_job(paths.job_root, "failing-action", command, root, {})
+
+            start_job_async(job, timeout_seconds=5)
+            payload = wait_for_terminal_payload(job.job_dir)
+            summary = Path(job.summary_path).read_text(encoding="utf-8")
+
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["exit_code"], 7)
+        self.assertTrue(payload["finished_at"])
+        self.assertEqual(payload["status_message"], "failed")
+        self.assertIn("failed", summary)
+
+    def test_start_job_async_terminates_timed_out_process_and_persists_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            command = [sys.executable, "-c", "import time; time.sleep(5)"]
+            job = create_job(paths.job_root, "timed-action", command, root, {})
+
+            start_job_async(job, timeout_seconds=0.1)
+            payload = wait_for_terminal_payload(job.job_dir)
+
+        self.assertEqual(payload["status"], "failed")
+        self.assertIsNotNone(payload["exit_code"])
+        self.assertTrue(payload["finished_at"])
+        self.assertEqual(payload["status_message"], "failed")
+        self.assertEqual(payload["error"], "timed out after 0.1s")
+
+    def test_start_job_async_persists_spawn_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            job = create_job(paths.job_root, "broken", ["definitely_missing_executable"], root, {})
+
+            failed = start_job_async(job, timeout_seconds=5)
+            payload = json.loads((Path(job.job_dir) / "job.json").read_text(encoding="utf-8"))
+            summary = Path(job.summary_path).read_text(encoding="utf-8")
+
+        self.assertEqual(failed.status, "failed")
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["exit_code"], -1)
+        self.assertIn("definitely_missing_executable", payload["error"])
+        self.assertIn("failed", summary)
 
     def test_reconcile_running_capture_job_adds_progress_without_claiming_completion(self):
         with tempfile.TemporaryDirectory() as tmp:
