@@ -9,16 +9,18 @@ WORKFLOW_STAGE_LABELS = {
     "data_ledger_compile": "Data ledger compile",
     "research_options": "Research options",
     "user_research_decision": "Research decision",
-    "workflow_start": "Workflow start",
-    "scout": "Scout",
-    "seed": "Seed",
-    "batch": "30 alpha batch",
-    "simulation": "Multisim and backtest",
+    "objective_selected": "Research decision",
+    "schedule": "Schedule research",
+    "scout_seed": "Scout and Seed",
+    "batch_generation": "30 alpha batch",
+    "backtest": "Multisim and backtest",
     "triage": "Triage",
     "repair": "Repair",
-    "submit_review": "Submit review",
-    "submission_approval": "Submission approval",
-    "knowledge_compile": "Knowledge compile",
+    "candidate_gate": "Candidate gate",
+    "user_approval": "User approval",
+    "approved_queue": "Approved candidate queue",
+    "research_record_sync": "Research record sync",
+    "complete": "Workflow complete",
 }
 
 
@@ -48,8 +50,15 @@ def _stage_status_from_workflow(state: dict[str, Any], stage_id: str) -> str:
     if not isinstance(workflow, dict) or not workflow.get("exists"):
         return "not_started"
     current = str(workflow.get("current_stage", "")).lower()
+    stages = workflow.get("stages", {})
+    stage = stages.get(stage_id, {}) if isinstance(stages, dict) else {}
+    stage_status = str(stage.get("status", "")) if isinstance(stage, dict) else ""
     if current == stage_id:
+        if stage_status in {"completed", "failed", "skipped"}:
+            return stage_status
         return "waiting" if workflow.get("waiting_for_user") else "running"
+    if stage_status:
+        return stage_status
     return "ready"
 
 
@@ -82,20 +91,22 @@ def build_timeline_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
         _row(
             "research_options",
             "completed" if state.get("option_cards") else "ready",
-            "ai_judgment",
+            "deterministic",
             "Chooses research options from incentives, data coverage, and template novelty.",
         ),
         _row("user_research_decision", "waiting" if state.get("option_cards") else "not_started", "user_approval", "User selects one research direction and measured scope."),
-        _row("workflow_start", _stage_status_from_workflow(state, "workflow_start"), "deterministic", "Creates an Orchestrator-owned workflow run."),
-        _row("scout", _stage_status_from_workflow(state, "scout"), "deterministic", "Tests whether a data-template direction has signal."),
-        _row("seed", _stage_status_from_workflow(state, "seed"), "ai_judgment", "Locks the economic template kernel for exploitation."),
-        _row("batch", _stage_status_from_workflow(state, "batch"), "deterministic", "Builds a 30 alpha batch before simulation."),
-        _row("simulation", _stage_status_from_workflow(state, "simulation"), "deterministic", "Runs multisim or backtest and records results."),
-        _row("triage", _stage_status_from_workflow(state, "triage"), "ai_judgment", "Classifies results and near misses."),
-        _row("repair", _stage_status_from_workflow(state, "repair"), "ai_judgment", "Applies narrow repair levers to promising alphas."),
-        _row("submit_review", _stage_status_from_workflow(state, "submit_review"), "deterministic", "Checks submission readiness and candidate gates."),
-        _row("submission_approval", "waiting", "user_approval", "User approves a submit-ready Alpha before API submission."),
-        _row("knowledge_compile", "ready", "ai_judgment", "Compiles research records back into the knowledge vault."),
+        _row("objective_selected", _stage_status_from_workflow(state, "objective_selected"), "user_approval", "Records the selected research objective and measured scope."),
+        _row("schedule", _stage_status_from_workflow(state, "schedule"), "deterministic", "Builds the Orchestrator-owned research schedule."),
+        _row("scout_seed", _stage_status_from_workflow(state, "scout_seed"), "deterministic", "Tests signal and records the template kernel."),
+        _row("batch_generation", _stage_status_from_workflow(state, "batch_generation"), "deterministic", "Builds a 30 alpha batch before simulation."),
+        _row("backtest", _stage_status_from_workflow(state, "backtest"), "deterministic", "Runs multisim or backtest and records results."),
+        _row("triage", _stage_status_from_workflow(state, "triage"), "deterministic", "Classifies results and near misses."),
+        _row("repair", _stage_status_from_workflow(state, "repair"), "deterministic", "Applies narrow repair levers to promising alphas."),
+        _row("candidate_gate", _stage_status_from_workflow(state, "candidate_gate"), "deterministic", "Checks candidate readiness and writes approval requests."),
+        _row("user_approval", _stage_status_from_workflow(state, "user_approval"), "user_approval", "User approves a submit-ready Alpha before API submission."),
+        _row("approved_queue", _stage_status_from_workflow(state, "approved_queue"), "deterministic", "Writes approved candidates to the durable queue."),
+        _row("research_record_sync", _stage_status_from_workflow(state, "research_record_sync"), "deterministic", "Compiles workflow evidence into the research record."),
+        _row("complete", _stage_status_from_workflow(state, "complete"), "deterministic", "Marks the durable workflow run complete."),
     ]
     for checkpoint in state.get("ai_checkpoints", []):
         if isinstance(checkpoint, dict) and checkpoint.get("status") == "pending":

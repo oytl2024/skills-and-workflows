@@ -316,6 +316,7 @@ def _active_workflow_summary(runs_root: Path) -> tuple[dict[str, Any], Path | No
             "current_stage": state.current_stage,
             "next_action": state.next_action,
             "waiting_for_user": state.waiting_for_user,
+            "stages": {name: stage.__dict__ for name, stage in state.stages.items()},
             "consistent": not diagnostics,
             "diagnostics": diagnostics,
             "recovered_read_only": discovery.recovered,

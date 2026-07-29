@@ -38,6 +38,7 @@ class ConsoleTimelineTests(unittest.TestCase):
         ai_rows = [row for row in rows if row["stage_id"] == "ai_checkpoint"]
         self.assertEqual(capture_rows[0]["status"], "running")
         self.assertEqual(ai_rows[0]["status"], "waiting")
+        self.assertEqual(ai_rows[0]["source"], "ai_judgment")
         self.assertEqual(current["title"], "Platform data capture")
         self.assertIn("12", current["details"][0])
 
@@ -59,3 +60,89 @@ class ConsoleTimelineTests(unittest.TestCase):
         self.assertEqual(repair_rows[0]["status"], "running")
         self.assertEqual(current["title"], "Repair")
         self.assertEqual(current["next_action"], "workflow-continue")
+
+    def test_timeline_uses_real_orchestrator_stage_ids_and_persisted_statuses(self):
+        base_state = {
+            "jobs": [],
+            "workflow_events": [],
+            "ai_checkpoints": [],
+            "freshness": {"stale_count": 0, "missing_count": 0},
+            "data_coverage": {"exists": True, "field_count": 120},
+            "option_cards": [],
+        }
+        stage_labels = {
+            "scout_seed": "Scout and Seed",
+            "batch_generation": "30 alpha batch",
+            "backtest": "Multisim and backtest",
+            "candidate_gate": "Candidate gate",
+            "user_approval": "User approval",
+            "research_record_sync": "Research record sync",
+        }
+
+        for stage_id, label in stage_labels.items():
+            with self.subTest(stage_id=stage_id):
+                state = {
+                    **base_state,
+                    "active_workflow": {
+                        "exists": True,
+                        "run_id": "run1",
+                        "current_stage": stage_id,
+                        "status": "running",
+                        "next_action": "workflow-continue",
+                        "waiting_for_user": False,
+                        "stages": {stage_id: {"status": "running"}},
+                    },
+                }
+
+                rows = build_timeline_rows(state)
+                current = select_current_work(state, rows)
+                row = next(row for row in rows if row["stage_id"] == stage_id)
+
+                self.assertEqual(row["status"], "running")
+                self.assertEqual(current["title"], label)
+
+        completed_state = {
+            **base_state,
+            "active_workflow": {
+                "exists": True,
+                "run_id": "run1",
+                "current_stage": "batch_generation",
+                "status": "running",
+                "next_action": "workflow-continue",
+                "waiting_for_user": False,
+                "stages": {
+                    "scout_seed": {"status": "completed"},
+                    "batch_generation": {"status": "running"},
+                },
+            },
+        }
+        completed_rows = build_timeline_rows(completed_state)
+        scout_seed = next(row for row in completed_rows if row["stage_id"] == "scout_seed")
+        self.assertEqual(scout_seed["status"], "completed")
+
+    def test_only_explicit_ai_checkpoints_are_labeled_ai_judgment(self):
+        state = {
+            "jobs": [],
+            "active_workflow": {"exists": True, "current_stage": "repair", "waiting_for_user": False},
+            "workflow_events": [],
+            "ai_checkpoints": [
+                {
+                    "checkpoint_id": "ai-1",
+                    "checkpoint_type": "blocker_explanation",
+                    "reason": "Explain stale data ledger.",
+                    "status": "pending",
+                    "evidence_paths": [],
+                }
+            ],
+            "freshness": {"stale_count": 0, "missing_count": 0},
+            "data_coverage": {"exists": True, "field_count": 120},
+            "option_cards": [],
+        }
+
+        rows = build_timeline_rows(state)
+        sources = {row["stage_id"]: row["source"] for row in rows}
+
+        self.assertEqual(sources["triage"], "deterministic")
+        self.assertEqual(sources["repair"], "deterministic")
+        self.assertEqual(sources["ai_checkpoint"], "ai_judgment")
+        self.assertTrue(all(row["stage_id"] == "ai_checkpoint" for row in rows if row["source"] == "ai_judgment"))
