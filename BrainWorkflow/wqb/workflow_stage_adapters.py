@@ -8,6 +8,8 @@ from typing import Any
 
 from wqb.benchmark_rules import (
     BENCHMARK_RULES_PATH,
+    OFFICIAL_WORKFLOW_MARKER_FILES,
+    START_SNAPSHOT_VERSION,
     benchmark_rule_to_dict,
     benchmark_rulebook_digest,
     benchmark_rules_from_start_snapshot,
@@ -29,7 +31,6 @@ POST_SCHEDULE_STAGES = (
     "triage",
     "repair",
 )
-START_SNAPSHOT_VERSION = 2
 
 
 def advance_post_schedule_stage(run_dir: str | Path, stage_name: str) -> dict[str, object]:
@@ -330,14 +331,17 @@ def schedule_research_stage(
 ) -> dict[str, object]:
     """Input: knowledge root, run dir, option id. Output: schedule summary. Write a plan-only schedule artifact."""
     knowledge = Path(knowledge_root)
-    manifest_path = Path(run_dir) / "run_manifest.json"
+    run_root = Path(run_dir)
+    manifest_path = run_root / "run_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
     if isinstance(manifest, dict) and "start_snapshot" in manifest:
         selected, scope, ledger, templates, benchmark_rules = _snapshot_schedule_inputs(
             manifest.get("start_snapshot"), selected_option_id, selected_scope
         )
         region, delay, universe = scope["region"], scope["delay"], scope["universe"]
-    elif manifest_path.exists():
+    elif manifest_path.exists() or any(
+        (run_root / marker).exists() for marker in OFFICIAL_WORKFLOW_MARKER_FILES
+    ):
         raise ValueError("start snapshot is required for workflow schedule authority")
     else:
         options_path = knowledge / "wiki" / "70_decisions" / "research_option_cards.jsonl"
@@ -353,7 +357,7 @@ def schedule_research_stage(
         ledger = load_data_ledger(knowledge / "wiki" / "20_semantics" / "data_ledger.jsonl")
         templates = load_template_library(knowledge / "wiki" / "30_templates" / "template_library.jsonl")
         benchmark_rules = []
-    stage_dir = Path(run_dir) / "stages" / "schedule"
+    stage_dir = run_root / "stages" / "schedule"
     stage_dir.mkdir(parents=True, exist_ok=True)
     option = _option_card_from_row(selected)
     schedule = build_research_schedule(option, ledger, templates, region, delay, universe)

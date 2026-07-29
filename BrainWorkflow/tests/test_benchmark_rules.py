@@ -6,6 +6,8 @@ from pathlib import Path
 from wqb.benchmark import benchmark_alpha_record
 from wqb.benchmark_rules import (
     BenchmarkRule,
+    benchmark_rule_to_dict,
+    benchmark_rulebook_digest,
     default_benchmark_rules,
     load_active_benchmark_rules,
     load_benchmark_rules,
@@ -218,6 +220,146 @@ class BenchmarkRulesTests(unittest.TestCase):
                         run_dir=run_dir,
                         consumer="candidate_gate",
                     )
+
+    def test_official_run_authority_is_validated_before_early_classification_returns(self):
+        cases = (
+            (
+                "hard pass",
+                {
+                    "hard_pass": True,
+                    "metrics": {},
+                    "failed": [],
+                    "pending": [],
+                },
+            ),
+            (
+                "checks pending",
+                {
+                    "hard_pass": False,
+                    "metrics": {},
+                    "failed": [],
+                    "pending": ["NO_CHECKS"],
+                },
+            ),
+            (
+                "non-repairable check",
+                {
+                    "hard_pass": False,
+                    "metrics": {},
+                    "failed": ["INVALID_OPERATOR"],
+                    "pending": [],
+                },
+            ),
+        )
+        for label, record in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                run_dir = Path(tmp) / "run1"
+                run_dir.mkdir()
+                (run_dir / "run_state.json").write_text("{}", encoding="utf-8")
+
+                with self.assertRaisesRegex(ValueError, "benchmark rule authority"):
+                    benchmark_alpha_record(record, run_dir=run_dir)
+
+    def test_injected_rules_cannot_bypass_missing_official_run_authority(self):
+        record = {
+            "hard_pass": False,
+            "metrics": {"sharpe": 0.7, "fitness": 0.1, "returns": 0.1, "turnover": 0.2},
+            "failed": ["LOW_SHARPE"],
+            "pending": [],
+            "signal_note": "stable pnl",
+        }
+        injected_rule = default_benchmark_rules()[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run1"
+            run_dir.mkdir()
+            (run_dir / "workflow_events.jsonl").write_text("", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "benchmark rule authority"):
+                benchmark_alpha_record(
+                    record,
+                    benchmark_rules=[injected_rule],
+                    run_dir=run_dir,
+                )
+
+    def test_official_run_authority_takes_precedence_over_injected_rules(self):
+        record = {
+            "hard_pass": False,
+            "metrics": {"sharpe": 0.7, "fitness": 0.1, "returns": 0.1, "turnover": 0.2},
+            "failed": ["LOW_SHARPE"],
+            "pending": [],
+            "signal_note": "stable pnl",
+        }
+        injected_rule = default_benchmark_rules()[0]
+        bound_rule = BenchmarkRule(
+            rule_id="bound_correlation_rule",
+            issue_types=["prod_correlation"],
+            description="Require novelty for production correlation.",
+            promotion_condition="Production correlation fails.",
+            action="Require a novel research direction.",
+            evidence_paths=[],
+            consumed_by=["candidate_gate"],
+            risk="May reject a repairable family.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run1"
+            run_dir.mkdir()
+            (run_dir / "run_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "run1",
+                        "start_snapshot": {
+                            "artifact_binding_version": 2,
+                            "benchmark_rulebook": {
+                                "path": "wiki/50_benchmarks/benchmark_rules.jsonl",
+                                "sha256": benchmark_rulebook_digest([bound_rule]),
+                                "rules": [benchmark_rule_to_dict(bound_rule)],
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = benchmark_alpha_record(
+                record,
+                benchmark_rules=[injected_rule],
+                run_dir=run_dir,
+            )
+
+        self.assertEqual(result.label, "weak_discard")
+        self.assertNotIn(f"benchmark_rule:{injected_rule.rule_id}", result.reasons)
+
+    def test_official_run_rejects_non_v2_start_snapshot_authority(self):
+        record = {
+            "hard_pass": False,
+            "metrics": {"sharpe": 0.7, "fitness": 0.1, "returns": 0.1, "turnover": 0.2},
+            "failed": ["LOW_SHARPE"],
+            "pending": [],
+            "signal_note": "stable pnl",
+        }
+        rule = default_benchmark_rules()[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run1"
+            run_dir.mkdir()
+            (run_dir / "run_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "run1",
+                        "start_snapshot": {
+                            "artifact_binding_version": 1,
+                            "benchmark_rulebook": {
+                                "path": "wiki/50_benchmarks/benchmark_rules.jsonl",
+                                "sha256": benchmark_rulebook_digest([rule]),
+                                "rules": [benchmark_rule_to_dict(rule)],
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "benchmark rule authority.*version"):
+                benchmark_alpha_record(record, run_dir=run_dir)
 
     def test_default_rules_include_near_miss_and_correlation_cases(self):
         rules = default_benchmark_rules()

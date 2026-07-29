@@ -186,6 +186,18 @@ class WorkflowStageAdaptersTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "start snapshot"):
                 schedule_research_stage(root / "knowledge", run_dir, "option-1")
 
+    def test_schedule_research_stage_rejects_marker_only_official_directories(self):
+        for marker in ("run_state.json", "workflow_events.jsonl"):
+            with self.subTest(marker=marker), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                write_start_artifacts(root, {})
+                run_dir = root / "runs" / "run1"
+                run_dir.mkdir(parents=True)
+                (run_dir / marker).write_text("", encoding="utf-8")
+
+                with self.assertRaisesRegex(ValueError, "start snapshot.*authority"):
+                    schedule_research_stage(root / "knowledge", run_dir, "option-1")
+
     def test_schedule_research_stage_uses_stable_positional_id_for_planner_cards(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

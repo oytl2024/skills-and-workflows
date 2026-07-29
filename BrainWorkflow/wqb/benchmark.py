@@ -108,6 +108,7 @@ def benchmark_alpha_record(
     consumer: str = "candidate_gate",
 ) -> AlphaBenchmarkResult:
     """Input: alpha, rules, vault/run roots, consumer. Output: result. Apply bound consumer authority."""
+    bound_rules = load_run_benchmark_rules(run_dir) if run_dir is not None else None
     metrics = alpha_record.get("metrics") if isinstance(alpha_record.get("metrics"), dict) else {}
     failed = check_name_set(alpha_record, "failed")
     pending = check_name_set(alpha_record, "pending")
@@ -172,13 +173,12 @@ def benchmark_alpha_record(
         score += 0.1
         reasons.append("repairable_turnover")
 
-    if benchmark_rules is not None:
+    if bound_rules is not None:
+        active_rules = bound_rules
+    elif benchmark_rules is not None:
         active_rules = benchmark_rules
     else:
-        bound_rules = load_run_benchmark_rules(run_dir) if run_dir is not None else None
-        if bound_rules is not None:
-            active_rules = bound_rules
-        elif knowledge_root is not None:
+        if knowledge_root is not None:
             active_rules = load_active_benchmark_rules(knowledge_root, fallback_to_defaults=False)
         else:
             active_rules = default_benchmark_rules()
