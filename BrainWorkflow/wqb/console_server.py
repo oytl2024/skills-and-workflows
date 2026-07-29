@@ -232,6 +232,7 @@ def render_dashboard(state: dict[str, Any]) -> str:
     cards = _normalized_option_rows(option_rows)
     scopes = [scope for scope in state.get("startable_scopes", []) if isinstance(scope, dict)]
     jobs = state.get("jobs", [])
+    active = state.get("active_workflow", {})
     job_items = "".join(
         f"<li><code>{escape(str(job.get('job_id', '')))}</code> {escape(str(job.get('action', '')))} {escape(str(job.get('status', '')))}</li>"
         for job in jobs[:8] if isinstance(job, dict)
@@ -253,6 +254,10 @@ def render_dashboard(state: dict[str, Any]) -> str:
 {_render_scope_controls(scopes)}
 <button>Start selected workflow</button>
 </form>
+"""
+    workflow_progress = f"""
+<p>Active run: <code>{escape(str(active.get('run_id', 'none')))}</code></p>
+<form method="post" action="/actions/run"><input type="hidden" name="action" value="workflow-continue"><button>Continue workflow</button></form>
 """
     knowledge_forms = """
 <form method="post" action="/actions/run"><input type="hidden" name="action" value="readiness-check"><button>Run readiness check</button></form>
@@ -280,13 +285,14 @@ def render_dashboard(state: dict[str, Any]) -> str:
     )
     body = f"""
 <div class="control-center">
-<section class="wide hero"><h2>Objective and Gate Summary</h2><div class="ledger-strip">{ledger_strip}</div><p>Current work: <strong data-current-work-title>{escape(str(state.get("current_work", {}).get("title", "No active workflow")))}</strong></p></section>
+<section class="wide hero"><h2>Objective and Gate Summary</h2><p>Workflow Console</p><div class="ledger-strip">{ledger_strip}</div><p>Current work: <strong data-current-work-title>{escape(str(state.get("current_work", {}).get("title", "No active workflow")))}</strong></p></section>
 <section class="timeline-panel"><h2>Runtime Timeline</h2>{_render_timeline(state.get("timeline", []))}</section>
 <section class="current-work"><h2>Current Work</h2>{_render_current_work(state.get("current_work", {}))}</section>
-<section class="wide"><h2>Decisions and Approvals</h2>{research_start_form}{_render_inline_proposals(state.get("proposals", []))}</section>
+<section class="wide"><h2>Decisions and Approvals</h2><h3>Research Start</h3>{research_start_form}<h3>Workflow Progress</h3>{workflow_progress}{_render_inline_proposals(state.get("proposals", []))}</section>
 <section class="wide"><h2>AI Checkpoints</h2>{_render_ai_checkpoints(state.get("ai_checkpoints", []))}</section>
-<section><h2>Maintain Knowledge</h2>{knowledge_forms}</section>
+<section><h2>Knowledge Maintenance</h2>{knowledge_forms}</section>
 <section><h2>Platform Data</h2>{data_coverage_panel}</section>
+<section class="wide"><h2>Knowledge and Data Authority</h2><h3>Data Authority</h3>{_render_data_authority(state.get("data_authority", {}))}<h3>Knowledge Contracts</h3>{_render_knowledge_contracts(state.get("knowledge_contracts", {}))}<h3>Semantic Ledgers</h3>{_render_semantic_ledgers(state.get("semantic_ledgers", {}))}<h3>Option Blockers</h3>{_option_blockers(option_rows)}</section>
 <section class="wide"><h2>Recent Jobs</h2><ul>{job_items}</ul></section>
 </div>
 <script>
