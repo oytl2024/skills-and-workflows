@@ -222,6 +222,34 @@ Open `http://127.0.0.1:8765`. The page is the normal operating surface:
 3. Inspect `Current Work` for async job progress, status, and evidence paths.
 4. Use `Decisions and Approvals` for research option selection and proposal review.
 5. Use `AI Checkpoints` to see where later GPT/Codex judgment is required.
+6. Use `Knowledge Maintenance` to run readiness checks, compile research
+   records, refresh research options, and run the knowledge health check.
+7. Use `Platform Data` for live-gated data-field capture, choose the maximum
+   scope count deliberately, compile the data ledger, and watch capture
+   progress in `Current Work` and `Runtime Timeline`.
+8. Read `Knowledge and Data Authority` before starting research. Confirm which
+   rows are authoritative measured data versus seed/cache data, review contract
+   warnings and semantic ledgers, and resolve option blockers before starting.
+9. Use `Recent Jobs` to find each job id, action, and status. Open its persisted
+   job record to recover an interrupted action and to locate stdout, stderr,
+   summary, raw, wiki, or run evidence paths.
+
+`Knowledge Maintenance` actions are local and deterministic unless an action
+explicitly enables a live platform operation. Refreshing research options uses
+the selected measured scope and should be followed by the option cards and
+readiness gates above. In `Platform Data`, keep the live checkbox selected only
+for an authorized capture; the max-scope selector limits the capture breadth,
+and ledger compilation consumes the persisted capture rather than calling the
+platform again. A running capture remains visible as progress and must be
+reconciled before retrying.
+
+`Knowledge and Data Authority` is the decision gate for research inputs: a
+seed/cache row is useful for scaffolding but cannot satisfy authoritative
+coverage. Contract failures, missing raw/wiki metadata, stale manifests, and
+incomplete semantic ledgers should be fixed before selecting a blocked option.
+`Recent Jobs` is the durable audit trail for these actions, not a second control
+surface; use it to verify completion and evidence after acting in the lower
+sections.
 
 The page state is served by `/api/state`. Refreshing it is a read operation;
 long actions create an async Console job and return a job identifier instead of
