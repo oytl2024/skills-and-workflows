@@ -23,6 +23,13 @@ class KnowledgePathsTests(unittest.TestCase):
             self.assertTrue(paths.wiki.is_dir())
             self.assertEqual(active_top_level_names(tmp), {"raw", "machine", "wiki"})
 
+    def test_active_top_level_names_includes_unexpected_directories_for_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ensure_knowledge_dirs(tmp)
+            Path(tmp, "legacy").mkdir()
+
+            self.assertEqual(active_top_level_names(tmp), {"raw", "machine", "wiki", "legacy"})
+
     def test_machine_resource_path_uses_canonical_machine_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = machine_resource_path(tmp, "data_ledger")

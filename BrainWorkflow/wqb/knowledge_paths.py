@@ -88,7 +88,7 @@ def relative_to_knowledge_root(path: str | Path, knowledge_root: str | Path) -> 
 
 
 def active_top_level_names(knowledge_root: str | Path) -> set[str]:
-    """Input: knowledge root. Output: set of top-level directory names in the active vault."""
+    """Input: knowledge root. Output: all current top-level directory names for active-structure validation."""
     root = Path(knowledge_root)
     if not root.exists():
         return set()
