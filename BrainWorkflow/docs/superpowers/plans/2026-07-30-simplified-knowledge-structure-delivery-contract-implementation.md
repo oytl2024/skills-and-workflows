@@ -14,6 +14,7 @@
 - The active knowledge tree is exactly `knowledge/raw`, `knowledge/machine`, and `knowledge/wiki`; root `todo.md`, root `milestone.md`, `runs/`, and project source files remain outside this contract.
 - Machine resources live under `knowledge/machine`: `scope_matrix.jsonl`, `data_ledger.jsonl`, `operator_ledger.jsonl`, `template_library.jsonl`, `benchmark_rules.jsonl`, `research_records.jsonl`, `source_index.jsonl`, and `freshness_manifest.json`.
 - Human wiki pages stay compact and experience-oriented: no full JSONL ledgers, no raw API dumps, and no chronological run dumps.
+- Human wiki `compiled_from` metadata may reference canonical `raw/*` facts or canonical `machine/*` resources; it must not reference another `wiki/*` page as source authority.
 - Clean compile removes ordinary obsolete active mixed paths only after verification and refuses automatic deletion for `.env`, credential, secret, token, password, key, and ambiguous private files.
 - Platform data capture broadens before depth: discover a scope matrix, sample bounded field counts across many scopes, and record partial coverage explicitly.
 - Research workflows must continue to obey readiness gates. If only partial or stale platform knowledge exists, the system records a blocker rather than inventing coverage.
@@ -529,6 +530,8 @@ git commit -m "move machine resources out of wiki"
 - Create: `BrainWorkflow/tests/test_knowledge_clean_compile.py`
 - Modify: `BrainWorkflow/wqb/knowledge_freshness.py`
 - Modify: `BrainWorkflow/tests/test_knowledge_freshness.py`
+- Modify: `BrainWorkflow/wqb/knowledge_contracts.py`
+- Modify: `BrainWorkflow/tests/test_knowledge_contracts.py`
 
 **Interfaces:**
 - Consumes from Task 1:
@@ -797,13 +800,61 @@ Set returned fields:
 "clean_structure_issue_count": clean_report["issue_count"],
 ```
 
+Also update wiki backlink validation so compiled human pages may cite either `raw/*` facts or `machine/*` resources, while `wiki/*` backlinks remain invalid:
+
+```python
+family = canonical_source_family(resolved, root)
+if not (family.startswith("raw/") or family.startswith("machine/")):
+    issues.append(
+        KnowledgeHealthIssue(
+            code="wiki_backlink_not_source_authority",
+            path=str(path),
+            message=f"compiled_from target is not raw or machine source authority: {value}",
+            action="Replace the backlink with direct provenance under raw or machine.",
+        )
+    )
+    continue
+```
+
+Add a focused test:
+
+```python
+def test_contract_health_accepts_machine_resource_backlink_for_compiled_wiki(self):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        machine = root / "machine"
+        machine.mkdir(parents=True)
+        ledger = machine / "data_ledger.jsonl"
+        ledger.write_text("{}\n", encoding="utf-8")
+        wiki = root / "wiki" / "20_data_semantics.md"
+        wiki.parent.mkdir(parents=True)
+        wiki.write_text(
+            "---\n"
+            "compiled_from:\n"
+            "  - machine/data_ledger.jsonl\n"
+            "compiled_at: 2026-07-30T00:00:00+00:00\n"
+            "trust_level: compiled_experience\n"
+            "stale_after_days: 14\n"
+            "update_trigger: compile-knowledge\n"
+            "consumed_by:\n"
+            "  - human_learning\n"
+            "---\n"
+            "# Data Semantics\n",
+            encoding="utf-8",
+        )
+
+        report = evaluate_knowledge_contract_health(root)
+
+        self.assertNotIn("wiki_backlink_not_source_authority", {issue["code"] for issue in report["issues"]})
+```
+
 - [ ] **Step 5: Run focused tests**
 
 Run:
 
 ```powershell
 Set-Location 'C:\Users\oytl\Desktop\pyproject\brain\skills-and-workflows\BrainWorkflow'
-python -m unittest tests.test_knowledge_clean_compile tests.test_knowledge_freshness -v
+python -m unittest tests.test_knowledge_clean_compile tests.test_knowledge_freshness tests.test_knowledge_contracts -v
 ```
 
 Expected: all tests pass.
@@ -814,7 +865,7 @@ Run:
 
 ```powershell
 Set-Location 'C:\Users\oytl\Desktop\pyproject\brain\skills-and-workflows'
-git add BrainWorkflow/wqb/knowledge_clean_compile.py BrainWorkflow/tests/test_knowledge_clean_compile.py BrainWorkflow/wqb/knowledge_freshness.py BrainWorkflow/tests/test_knowledge_freshness.py
+git add BrainWorkflow/wqb/knowledge_clean_compile.py BrainWorkflow/tests/test_knowledge_clean_compile.py BrainWorkflow/wqb/knowledge_freshness.py BrainWorkflow/tests/test_knowledge_freshness.py BrainWorkflow/wqb/knowledge_contracts.py BrainWorkflow/tests/test_knowledge_contracts.py
 git commit -m "add clean knowledge compile checks"
 ```
 
@@ -1544,7 +1595,6 @@ git commit -m "capture interaction memory for workflow learning"
   - Existing `CaptureScope`
 - Produces:
   - `ScopeMatrixRow` dataclass
-  - `StratifiedCaptureScope` dataclass
   - `discover_scope_matrix(client: Any, knowledge_root: str | Path, generated_at: str | None = None, instrument_types: list[str] | None = None, regions: list[str] | None = None, delays: list[int] | None = None, universes: list[str] | None = None, max_scopes: int = 0) -> dict[str, Any]`
   - `build_stratified_capture_plan(scope_rows: list[dict[str, Any]], fields_per_scope: int = 100, max_scopes: int = 0) -> list[dict[str, Any]]`
   - `write_capture_plan(knowledge_root: str | Path, rows: list[dict[str, Any]], generated_at: str) -> Path`
