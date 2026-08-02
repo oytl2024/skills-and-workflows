@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -89,10 +90,25 @@ class KnowledgeContractTests(unittest.TestCase):
 
             output = update_source_index(root, [row])
             text = output.read_text(encoding="utf-8")
+            machine_rows = [
+                json.loads(line)
+                for line in (root / "machine" / "source_index.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
 
         self.assertIn("raw/platform/data_fields/2026-07-22/index.md", text)
         self.assertIn("compare field ids and exact scopes", text)
         self.assertIn("wiki/20_semantics/data_ledger.md", text)
+        self.assertEqual(machine_rows, [
+            {
+                "path": "raw/platform/data_fields/2026-07-22/index.md",
+                "source_family": "data_fields",
+                "source_type": "platform_api",
+                "contents": "platform data-field capture manifest",
+                "update_check": "compare field ids and exact scopes",
+                "compiled_targets": ["wiki/20_semantics/data_ledger.md"],
+            }
+        ])
 
 
 if __name__ == "__main__":

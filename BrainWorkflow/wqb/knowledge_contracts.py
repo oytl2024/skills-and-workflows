@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import json
 from pathlib import Path
 from typing import Any
 
-from wqb.knowledge_paths import MACHINE_RESOURCE_FILES
+from wqb.knowledge_paths import MACHINE_RESOURCE_FILES, machine_resource_path
 
 RAW_CANONICAL_PREFIXES = (
     "raw/platform/learn",
@@ -212,9 +213,20 @@ def source_index_row_to_dict(row: SourceIndexRow) -> dict[str, Any]:
     return asdict(row)
 
 
+def write_machine_source_index(knowledge_root: str | Path, rows: list[SourceIndexRow]) -> Path:
+    """Input: vault root and source rows. Output: machine JSONL index path."""
+    output = machine_resource_path(knowledge_root, "source_index")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", encoding="utf-8") as handle:
+        for row in sorted(rows, key=lambda item: item.path):
+            handle.write(json.dumps(source_index_row_to_dict(row), ensure_ascii=False, sort_keys=True) + "\n")
+    return output
+
+
 def update_source_index(knowledge_root: str | Path, rows: list[SourceIndexRow]) -> Path:
     """Input: vault root and rows. Output: source index path. Write the raw source inventory."""
     root = Path(knowledge_root)
+    write_machine_source_index(root, rows)
     output = root / "raw" / "source_index.md"
     output.parent.mkdir(parents=True, exist_ok=True)
     lines = [
