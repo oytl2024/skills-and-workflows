@@ -909,6 +909,36 @@ class CliTests(unittest.TestCase):
         compiler.assert_called_once_with("custom_knowledge")
         self.assertEqual(json.loads(output.getvalue())["markdown_path"], "compile.md")
 
+    def test_capture_interaction_note_main_writes_raw_note_without_network(self):
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch(
+                "sys.argv",
+                [
+                    "wqb",
+                    "capture-interaction-note",
+                    "--knowledge-root",
+                    str(root),
+                    "--summary",
+                    "Keep a regression test for every fixed workflow bug.",
+                    "--category",
+                    "workflow_rule",
+                    "--tag",
+                    "maintenance",
+                    "--evidence-path",
+                    "milestone.md",
+                ],
+            ), redirect_stdout(output):
+                main()
+
+            result = json.loads(output.getvalue())
+            notes = (root / "raw" / "community" / "user_messages").rglob("interaction_notes.jsonl")
+            note_paths = list(notes)
+
+        self.assertEqual(len(note_paths), 1)
+        self.assertEqual(Path(result["path"]), note_paths[0])
+
     def test_capture_platform_data_fields_requires_live_api_flag(self):
         with patch("sys.argv", ["wqb", "capture-platform-data-fields"]):
             with self.assertRaises(SystemExit) as ctx:

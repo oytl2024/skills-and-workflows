@@ -334,6 +334,25 @@ def build_cli_command(action: str, paths: ConsolePaths, form: dict[str, Any] | N
         return [*base, "bootstrap-knowledge", "--knowledge-root", knowledge_root, "--knowledge-seed-root", str(paths.workflow_root / "docs" / "knowledge")]
     if action == "compile-research-records":
         return [*base, "compile-research-records", "--knowledge-root", knowledge_root]
+    if action == "capture-interaction-note":
+        command = [
+            *base,
+            "capture-interaction-note",
+            "--knowledge-root",
+            knowledge_root,
+            "--summary",
+            str(data.get("summary", "")),
+            "--category",
+            str(data.get("category", "")),
+        ]
+        for flag, key in (("--tag", "tag"), ("--evidence-path", "evidence_path")):
+            values = data.get(key, [])
+            if not isinstance(values, list):
+                values = [values]
+            for value in values:
+                if str(value).strip():
+                    command.extend([flag, str(value)])
+        return command
     if action == "capture-platform-data-fields":
         command = [
             *base,

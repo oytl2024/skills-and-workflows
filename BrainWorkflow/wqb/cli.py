@@ -35,6 +35,7 @@ from wqb.knowledge import fetch_knowledge_snapshot
 from wqb.knowledge_bootstrap import bootstrap_knowledge, bootstrap_summary_to_dict
 from wqb.knowledge_compile import compile_research_records
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest, write_freshness_report
+from wqb.interaction_memory import append_interaction_note
 from wqb.novelty import score_expression_novelty
 from wqb.optimizer import actions_for_check_summary
 from wqb.orchestrator import OrchestratorPaths, WorkflowOrchestrator
@@ -3385,6 +3386,7 @@ def parse_args() -> argparse.Namespace:
             "launch-console",
             "bootstrap-knowledge",
             "compile-research-records",
+            "capture-interaction-note",
             "schedule-research",
             "workflow-start",
             "workflow-continue",
@@ -3434,6 +3436,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--freshness-manifest", default="machine/freshness_manifest.json")
     parser.add_argument("--freshness-report", default="wiki/80_maintenance/freshness_report.md")
     parser.add_argument("--knowledge-root", default=str(default_knowledge_root()))
+    parser.add_argument("--summary", default="")
+    parser.add_argument("--category", default="")
+    parser.add_argument("--tag", action="append", default=[])
+    parser.add_argument("--evidence-path", action="append", default=[])
     parser.add_argument("--knowledge-seed-root", default="docs/knowledge")
     parser.add_argument("--data-capture-date", default="")
     parser.add_argument("--capture-region", default="")
@@ -3816,6 +3822,17 @@ def main() -> None:
     elif args.command == "compile-research-records":
         result = compile_research_records_command(args.knowledge_root)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "capture-interaction-note":
+        if not args.summary or not args.category:
+            raise SystemExit("--summary and --category are required for capture-interaction-note")
+        path = append_interaction_note(
+            args.knowledge_root,
+            args.summary,
+            args.category,
+            list(args.tag),
+            list(args.evidence_path),
+        )
+        print(json.dumps({"path": str(path)}, ensure_ascii=False, indent=2))
     elif args.command == "schedule-research":
         if not args.option_json:
             raise SystemExit("--option-json is required for schedule-research")

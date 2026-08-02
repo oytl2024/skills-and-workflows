@@ -90,6 +90,16 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn("Platform data capture", html)
         self.assertIn("Explain blocker.", html)
 
+    def test_render_dashboard_wires_interaction_capture_form(self):
+        html = render_dashboard({"active_workflow": {"exists": False}, "jobs": []})
+
+        self.assertIn('name="action" value="capture-interaction-note"', html)
+        self.assertIn('name="category"', html)
+        self.assertIn('value="workflow_rule"', html)
+        self.assertIn('value="engineering_lesson"', html)
+        self.assertIn('value="factor_lesson"', html)
+        self.assertIn('value="proposal_seed"', html)
+
     def test_runtime_fragments_include_refreshed_timeline_work_badges_and_jobs(self):
         state = {
             "readiness": {"passed": True},

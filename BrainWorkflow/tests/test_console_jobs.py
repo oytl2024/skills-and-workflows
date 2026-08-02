@@ -70,6 +70,26 @@ class ConsoleJobsTests(unittest.TestCase):
         self.assertIn("--enable-live-api", option_refresh)
         self.assertNotEqual(platform_compile, research_compile)
 
+    def test_build_cli_command_maps_interaction_capture_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            command = build_cli_command(
+                "capture-interaction-note",
+                paths,
+                {
+                    "summary": "Persist a repeated console blocker.",
+                    "category": "engineering_lesson",
+                    "tag": ["console", "blocker"],
+                    "evidence_path": ["runs/console_jobs/job/summary.md"],
+                },
+            )
+
+        self.assertEqual(command[3], "capture-interaction-note")
+        self.assertIn("--summary", command)
+        self.assertIn("Persist a repeated console blocker.", command)
+        self.assertEqual(command.count("--tag"), 2)
+        self.assertEqual(command.count("--evidence-path"), 1)
+
     def test_build_cli_command_maps_data_capture_and_compile(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = make_paths(Path(tmp))

@@ -325,6 +325,7 @@ def render_dashboard(state: dict[str, Any]) -> str:
 <form method="post" action="/actions/run"><input type="hidden" name="action" value="compile-research-records"><button>Compile research records</button></form>
 <form method="post" action="/actions/run"><input type="hidden" name="action" value="plan-research-options"><label><input type="checkbox" name="enable_live_api"> Enable live API</label><button>Refresh research options</button></form>
 <form method="post" action="/actions/run"><input type="hidden" name="action" value="knowledge-health-check"><button>Check knowledge health</button></form>
+<form method="post" action="/actions/run"><input type="hidden" name="action" value="capture-interaction-note"><textarea name="summary" required></textarea><select name="category"><option value="workflow_rule">workflow_rule</option><option value="engineering_lesson">engineering_lesson</option><option value="factor_lesson">factor_lesson</option><option value="proposal_seed">proposal_seed</option></select><input name="tag"><input name="evidence_path"><button>Capture interaction note</button></form>
 """
     body = f"""
 <div class="control-center">
