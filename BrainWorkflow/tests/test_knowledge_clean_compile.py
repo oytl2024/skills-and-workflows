@@ -17,6 +17,18 @@ class KnowledgeCleanCompileTests(unittest.TestCase):
         path.write_text(json.dumps(payload), encoding="utf-8")
         return path
 
+    def _successful_compile_evidence(self, root: Path, name: str) -> Path:
+        return self._write_compile_report(
+            root,
+            name,
+            {
+                "report_type": "knowledge_maintenance_pre_cleanup_evidence",
+                "status": "completed",
+                "compile": {"status": "completed"},
+                "pre_cleanup_health": {"blocking_issue_count": 0},
+            },
+        )
+
     def test_clean_structure_accepts_only_raw_machine_wiki(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -78,7 +90,7 @@ class KnowledgeCleanCompileTests(unittest.TestCase):
             self.assertEqual(actions["raw/learn/private/notes.md"], "refuse")
             self.assertEqual(actions["raw/learn/credentials/config.md"], "refuse")
 
-            report_path = self._write_compile_report(root, "compile.json", {"status": "completed"})
+            report_path = self._successful_compile_evidence(root, "compile.json")
             summary = apply_obsolete_active_cleanup(
                 root,
                 "2026-07-30T00:00:00+00:00",
@@ -131,16 +143,16 @@ class KnowledgeCleanCompileTests(unittest.TestCase):
             ordinary = root / "wiki" / "20_semantics" / "old.md"
             ordinary.parent.mkdir(parents=True)
             ordinary.write_text("# old\n", encoding="utf-8")
-            report_path = self._write_compile_report(root, "passed.json", {"passed": True})
+            report_path = self._successful_compile_evidence(root, "passed.json")
 
             summary = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=report_path)
             rows = [json.loads(line) for line in Path(summary["cleanup_log_path"]).read_text(encoding="utf-8").splitlines()]
 
             self.assertFalse(summary["blocked"])
-            self.assertEqual(summary["verification_status"], "passed")
+            self.assertEqual(summary["verification_status"], "completed")
             self.assertFalse(ordinary.exists())
             self.assertTrue(all(row["verification_report_path"] == str(report_path.resolve()) for row in rows))
-            self.assertTrue(all(row["verification_status"] == "passed" for row in rows))
+            self.assertTrue(all(row["verification_status"] == "completed" for row in rows))
 
     def test_cleanup_dry_run_remains_ungated_and_auditable(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -163,7 +175,7 @@ class KnowledgeCleanCompileTests(unittest.TestCase):
             for name in ("raw", "machine", "wiki"):
                 (root / name).mkdir()
 
-            report_path = self._write_compile_report(root, "compile.json", {"status": "passed"})
+            report_path = self._successful_compile_evidence(root, "compile.json")
             summary = apply_obsolete_active_cleanup(
                 root,
                 "2026-07-30T00:00:00+00:00",

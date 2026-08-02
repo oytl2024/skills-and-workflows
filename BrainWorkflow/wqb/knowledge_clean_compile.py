@@ -197,11 +197,20 @@ def _compile_verification_evidence(
         return {"verification_report_path": str(report_path), "verification_status": "invalid", "verified": False}
 
     status = report.get("status")
-    verified = status in {"completed", "passed"} or report.get("passed") is True
-    if isinstance(status, str):
+    compile_summary = report.get("compile")
+    pre_cleanup_health = report.get("pre_cleanup_health")
+    verified = (
+        report.get("report_type") == "knowledge_maintenance_pre_cleanup_evidence"
+        and status == "completed"
+        and isinstance(compile_summary, dict)
+        and compile_summary.get("status") == "completed"
+        and isinstance(pre_cleanup_health, dict)
+        and pre_cleanup_health.get("blocking_issue_count") == 0
+    )
+    if verified:
+        verification_status = "completed"
+    elif isinstance(status, str) and status not in {"completed", "passed"}:
         verification_status = status
-    elif report.get("passed") is True:
-        verification_status = "passed"
     else:
         verification_status = "invalid"
     return {
