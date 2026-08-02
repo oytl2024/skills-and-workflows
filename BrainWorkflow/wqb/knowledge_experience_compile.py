@@ -26,6 +26,12 @@ HUMAN_WIKI_FILES = {
 
 MAX_COMPILED_FROM = 24
 CASE_REPORT_DIR = Path("wiki") / "60_research_cases"
+CASE_REASON_PRIORITY = {
+    "submitted_or_approved": 0,
+    "near_miss": 1,
+    "repair_loop": 2,
+    "representative_failure": 3,
+}
 
 
 def _front_matter(generated_at: str, compiled_from: list[str], consumed_by: list[str]) -> str:
@@ -122,16 +128,43 @@ def _write_page(path: Path, front_matter: str, title: str, lines: list[str]) -> 
 
 def select_research_case_records(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     """Input: research ledger rows and limit. Output: selected rows. Pick learning-worthy research cases."""
-    ranked = [
-        row for row in rows
-        if str(row.get("case_reason", "")) in {
-            "submitted_or_approved",
-            "near_miss",
-            "repair_loop",
-            "representative_failure",
-        }
-    ]
-    return ranked[:max(int(limit), 0)]
+    latest_by_run: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        run_id = str(row.get("run_id", ""))
+        existing = latest_by_run.get(run_id)
+        if existing is None or _research_snapshot_key(row) > _research_snapshot_key(existing):
+            latest_by_run[run_id] = row
+    return sorted(
+        [
+            row
+            for row in latest_by_run.values()
+            if str(row.get("case_reason", "")) in CASE_REASON_PRIORITY
+        ],
+        key=lambda row: (
+            CASE_REASON_PRIORITY[str(row.get("case_reason", ""))],
+            -_research_synced_at_seconds(row),
+            str(row.get("run_id", "")),
+        ),
+    )[:max(int(limit), 0)]
+
+
+def _research_snapshot_key(row: dict[str, Any]) -> tuple[float, str]:
+    """Input: ledger row. Output: sortable key. Pick a deterministic latest snapshot for one run."""
+    return _research_synced_at_seconds(row), json.dumps(
+        row, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":")
+    )
+
+
+def _research_synced_at_seconds(row: dict[str, Any]) -> float:
+    """Input: ledger row. Output: UTC seconds. Normalize a sync timestamp for deterministic ordering."""
+    value = str(row.get("synced_at", "")).replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except (OSError, ValueError):
+        return float("-inf")
 
 
 def _lesson_from_case_reason(reason: str, failed: list[str]) -> str:
@@ -187,12 +220,19 @@ def compile_research_case_reports(
     root = Path(knowledge_root)
     rows = load_research_record_ledger(root)
     reports: list[Path] = []
+    selected_paths: set[Path] = set()
     for row in select_research_case_records(rows, limit):
         run_id = str(row.get("run_id", "")).replace("/", "_").replace("\\", "_")
         path = root / CASE_REPORT_DIR / f"{run_id}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(_case_report_text(row, generated_at), encoding="utf-8")
         reports.append(path)
+        selected_paths.add(path)
+    reports_dir = root / CASE_REPORT_DIR
+    if reports_dir.exists():
+        for path in reports_dir.rglob("*.md"):
+            if path not in selected_paths:
+                path.unlink()
     return reports
 
 

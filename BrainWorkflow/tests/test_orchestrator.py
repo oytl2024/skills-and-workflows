@@ -1227,6 +1227,8 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             state = load_run_state(run_dir / "run_state.json")
             events = read_workflow_events(run_dir)
             active = load_active_run(root / "runs")
+            machine_ledger = root / "knowledge" / "machine" / "research_records.jsonl"
+            ledger_rows = [json.loads(line) for line in machine_ledger.read_text(encoding="utf-8").splitlines()]
 
         self.assertEqual(completed["status"], "completed")
         self.assertEqual(completed["current_stage"], "complete")
@@ -1235,6 +1237,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertTrue(state.research_record_synced)
         self.assertEqual(active, {})
         self.assertEqual(events[-1].event_type, "workflow_completed")
+        self.assertEqual(ledger_rows[-1]["run_id"], started["run_id"])
 
     def test_candidate_gate_approval_persists_exact_subset_and_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:

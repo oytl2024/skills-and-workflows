@@ -7,6 +7,7 @@ from wqb.knowledge_contracts import canonical_source_family, parse_markdown_fron
 from wqb.knowledge_experience_compile import (
     compile_human_experience_wiki,
     compile_research_case_reports,
+    select_research_case_records,
 )
 
 
@@ -14,6 +15,26 @@ MAX_EXPECTED_COMPILED_FROM = 24
 
 
 class KnowledgeExperienceCompileTests(unittest.TestCase):
+    def test_select_research_cases_uses_latest_snapshot_then_priority_and_recency(self):
+        rows = [
+            {"run_id": "run-a", "case_reason": "submitted_or_approved", "synced_at": "2026-07-30T01:00:00+00:00"},
+            {"run_id": "run-b", "case_reason": "near_miss", "synced_at": "2026-07-30T03:00:00+00:00"},
+            {"run_id": "run-c", "case_reason": "submitted_or_approved", "synced_at": "2026-07-30T02:00:00+00:00"},
+            {"run_id": "run-d", "case_reason": "repair_loop", "synced_at": "2026-07-30T04:00:00+00:00"},
+            {"run_id": "run-e", "case_reason": "submitted_or_approved", "synced_at": "2026-07-30T06:00:00+00:00"},
+            {"run_id": "run-f", "case_reason": "submitted_or_approved", "synced_at": "2026-07-30T02:00:00+00:00"},
+            {"run_id": "run-a", "case_reason": "representative_failure", "synced_at": "2026-07-30T05:00:00+00:00"},
+            {"run_id": "run-z", "case_reason": "near_miss", "synced_at": "2026-07-30T01:00:00+00:00"},
+            {"run_id": "run-z", "case_reason": "", "synced_at": "2026-07-30T07:00:00+00:00"},
+        ]
+
+        selected = select_research_case_records(rows, limit=6)
+
+        self.assertEqual(
+            [row["run_id"] for row in selected],
+            ["run-e", "run-c", "run-f", "run-b", "run-d", "run-a"],
+        )
+
     def test_selected_near_miss_research_record_gets_case_report(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -40,6 +61,35 @@ class KnowledgeExperienceCompileTests(unittest.TestCase):
 
         self.assertIn("run-near-miss", text)
         self.assertIn("Reusable Lesson", text)
+
+    def test_compile_research_case_reports_removes_stale_markdown_reports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            machine = root / "machine"
+            reports_dir = root / "wiki" / "60_research_cases"
+            machine.mkdir()
+            reports_dir.mkdir(parents=True)
+            stale_report = reports_dir / "run-stale.md"
+            retained_note = reports_dir / "keep.txt"
+            stale_report.write_text("stale", encoding="utf-8")
+            retained_note.write_text("keep", encoding="utf-8")
+            (machine / "research_records.jsonl").write_text(
+                json.dumps(
+                    {
+                        "run_id": "run-current",
+                        "case_reason": "near_miss",
+                        "synced_at": "2026-07-30T00:00:00+00:00",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            reports = compile_research_case_reports(root, "2026-07-30T00:00:00+00:00", limit=5)
+
+            self.assertEqual(reports, [reports_dir / "run-current.md"])
+            self.assertFalse(stale_report.exists())
+            self.assertTrue(retained_note.exists())
 
     def test_compile_writes_only_target_human_pages(self):
         with tempfile.TemporaryDirectory() as tmp:
