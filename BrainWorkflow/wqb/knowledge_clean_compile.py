@@ -166,40 +166,88 @@ def _remove_empty_obsolete_directories(root: Path) -> None:
             base.rmdir()
 
 
+def _compile_verification_evidence(
+    root: Path,
+    verification_report_path: str | Path | None,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Input: root, report path, dry-run flag. Output: evidence dict. Validate compile report before deletion."""
+    if dry_run:
+        return {"verification_report_path": None, "verification_status": "not_required", "verified": True}
+    if verification_report_path is None:
+        return {"verification_report_path": None, "verification_status": "missing", "verified": False}
+
+    report_path = Path(verification_report_path).resolve()
+    report_root = (root / "raw" / "maintenance" / "compile_reports").resolve()
+    try:
+        report_path.relative_to(report_root)
+    except ValueError:
+        return {
+            "verification_report_path": str(report_path),
+            "verification_status": "outside_maintenance_directory",
+            "verified": False,
+        }
+    if not report_path.is_file():
+        return {"verification_report_path": str(report_path), "verification_status": "missing", "verified": False}
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {"verification_report_path": str(report_path), "verification_status": "invalid", "verified": False}
+    if not isinstance(report, dict):
+        return {"verification_report_path": str(report_path), "verification_status": "invalid", "verified": False}
+
+    status = report.get("status")
+    verified = status in {"completed", "passed"} or report.get("passed") is True
+    if isinstance(status, str):
+        verification_status = status
+    elif report.get("passed") is True:
+        verification_status = "passed"
+    else:
+        verification_status = "invalid"
+    return {
+        "verification_report_path": str(report_path),
+        "verification_status": verification_status,
+        "verified": verified,
+    }
+
+
 def apply_obsolete_active_cleanup(
     knowledge_root: str | Path,
     generated_at: str | None = None,
     dry_run: bool = True,
-    verified_compile: bool = False,
+    verification_report_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Input: root, timestamp, dry run, compile verification. Output: cleanup summary with audit log."""
+    """Input: root, timestamp, dry run, compile report path. Output: cleanup summary with audit log."""
     generated = generated_at or _now()
     root = Path(knowledge_root)
     candidates = plan_obsolete_active_cleanup(root)
-    blocked = not dry_run and not verified_compile
+    evidence = _compile_verification_evidence(root, verification_report_path, dry_run)
+    blocked = not evidence["verified"]
     rows: list[dict[str, Any]] = []
     for candidate in candidates:
         path = Path(candidate.path)
         row = asdict(candidate) | {
             "generated_at": generated,
             "dry_run": dry_run,
-            "verified_compile": verified_compile,
             "blocked": blocked,
+            "verification_report_path": evidence["verification_report_path"],
+            "verification_status": evidence["verification_status"],
         }
-        if candidate.action == "remove" and not dry_run and verified_compile:
+        if candidate.action == "remove" and not dry_run and not blocked:
             path.unlink(missing_ok=True)
             row["applied"] = True
         else:
             row["applied"] = False
         rows.append(row)
-    if not dry_run and verified_compile:
+    if not dry_run and not blocked:
         _remove_empty_obsolete_directories(root)
     summary_row = {
         "event": "cleanup_run",
         "generated_at": generated,
         "dry_run": dry_run,
-        "verified_compile": verified_compile,
         "blocked": blocked,
+        "verification_report_path": evidence["verification_report_path"],
+        "verification_status": evidence["verification_status"],
         "candidate_count": len(rows),
         "removed_count": sum(1 for row in rows if row.get("applied")),
         "refused_count": sum(1 for row in rows if row["action"] == "refuse"),
@@ -208,8 +256,9 @@ def apply_obsolete_active_cleanup(
     return {
         "generated_at": generated,
         "dry_run": dry_run,
-        "verified_compile": verified_compile,
         "blocked": blocked,
+        "verification_report_path": evidence["verification_report_path"],
+        "verification_status": evidence["verification_status"],
         "removed_count": summary_row["removed_count"],
         "refused_count": summary_row["refused_count"],
         "candidate_count": summary_row["candidate_count"],

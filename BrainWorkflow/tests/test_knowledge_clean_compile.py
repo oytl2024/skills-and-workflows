@@ -11,6 +11,12 @@ from wqb.knowledge_clean_compile import (
 
 
 class KnowledgeCleanCompileTests(unittest.TestCase):
+    def _write_compile_report(self, root: Path, name: str, payload: dict[str, object]) -> Path:
+        path = root / "raw" / "maintenance" / "compile_reports" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
     def test_clean_structure_accepts_only_raw_machine_wiki(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -72,16 +78,12 @@ class KnowledgeCleanCompileTests(unittest.TestCase):
             self.assertEqual(actions["raw/learn/private/notes.md"], "refuse")
             self.assertEqual(actions["raw/learn/credentials/config.md"], "refuse")
 
-            blocked = apply_obsolete_active_cleanup(root, "2026-07-30T00:00:00+00:00", dry_run=False)
-
-            self.assertTrue(blocked["blocked"])
-            self.assertTrue(ordinary.exists())
-
+            report_path = self._write_compile_report(root, "compile.json", {"status": "completed"})
             summary = apply_obsolete_active_cleanup(
                 root,
                 "2026-07-30T00:00:00+00:00",
                 dry_run=False,
-                verified_compile=True,
+                verification_report_path=report_path,
             )
 
             self.assertFalse(ordinary.exists())
@@ -93,17 +95,80 @@ class KnowledgeCleanCompileTests(unittest.TestCase):
             self.assertEqual(summary["refused_count"], 3)
             self.assertTrue((root / "raw" / "maintenance" / "cleanup_logs").exists())
 
+    def test_cleanup_blocks_non_dry_run_without_compile_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ordinary = root / "wiki" / "20_semantics" / "old.md"
+            ordinary.parent.mkdir(parents=True)
+            ordinary.write_text("# old\n", encoding="utf-8")
+
+            summary = apply_obsolete_active_cleanup(root, dry_run=False)
+
+            self.assertTrue(summary["blocked"])
+            self.assertEqual(summary["verification_status"], "missing")
+            self.assertTrue(ordinary.exists())
+
+    def test_cleanup_blocks_failed_compile_report_and_logs_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ordinary = root / "wiki" / "20_semantics" / "old.md"
+            ordinary.parent.mkdir(parents=True)
+            ordinary.write_text("# old\n", encoding="utf-8")
+            report_path = self._write_compile_report(root, "failed.json", {"status": "failed"})
+
+            summary = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=report_path)
+            rows = [json.loads(line) for line in Path(summary["cleanup_log_path"]).read_text(encoding="utf-8").splitlines()]
+
+            self.assertTrue(summary["blocked"])
+            self.assertEqual(summary["verification_status"], "failed")
+            self.assertTrue(ordinary.exists())
+            self.assertTrue(all(row["verification_report_path"] == str(report_path.resolve()) for row in rows))
+            self.assertTrue(all(row["verification_status"] == "failed" for row in rows))
+
+    def test_cleanup_removes_obsolete_files_with_successful_compile_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ordinary = root / "wiki" / "20_semantics" / "old.md"
+            ordinary.parent.mkdir(parents=True)
+            ordinary.write_text("# old\n", encoding="utf-8")
+            report_path = self._write_compile_report(root, "passed.json", {"passed": True})
+
+            summary = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=report_path)
+            rows = [json.loads(line) for line in Path(summary["cleanup_log_path"]).read_text(encoding="utf-8").splitlines()]
+
+            self.assertFalse(summary["blocked"])
+            self.assertEqual(summary["verification_status"], "passed")
+            self.assertFalse(ordinary.exists())
+            self.assertTrue(all(row["verification_report_path"] == str(report_path.resolve()) for row in rows))
+            self.assertTrue(all(row["verification_status"] == "passed" for row in rows))
+
+    def test_cleanup_dry_run_remains_ungated_and_auditable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ordinary = root / "wiki" / "20_semantics" / "old.md"
+            ordinary.parent.mkdir(parents=True)
+            ordinary.write_text("# old\n", encoding="utf-8")
+
+            summary = apply_obsolete_active_cleanup(root, dry_run=True)
+            rows = [json.loads(line) for line in Path(summary["cleanup_log_path"]).read_text(encoding="utf-8").splitlines()]
+
+            self.assertFalse(summary["blocked"])
+            self.assertEqual(summary["verification_status"], "not_required")
+            self.assertTrue(ordinary.exists())
+            self.assertTrue(all(row["verification_status"] == "not_required" for row in rows))
+
     def test_cleanup_writes_auditable_noop_log(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for name in ("raw", "machine", "wiki"):
                 (root / name).mkdir()
 
+            report_path = self._write_compile_report(root, "compile.json", {"status": "passed"})
             summary = apply_obsolete_active_cleanup(
                 root,
                 "2026-07-30T00:00:00+00:00",
                 dry_run=False,
-                verified_compile=True,
+                verification_report_path=report_path,
             )
             log_path = Path(summary["cleanup_log_path"])
 
