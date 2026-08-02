@@ -180,6 +180,33 @@ class DataFieldCaptureTests(unittest.TestCase):
         self.assertEqual(manifest["latest_scope_outcomes"][0]["sampling_mode"], "stratified")
         self.assertEqual(manifest["latest_scope_outcomes"][0]["field_budget"], 1)
 
+    def test_scope_field_budget_treats_truncation_as_intentional_partial_sampling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            with patch(
+                "wqb.data_field_capture.fetch_data_fields_with_metadata",
+                return_value=([{"id": "cash_field", "type": "MATRIX"}], True),
+            ):
+                summary = capture_platform_data_fields(
+                    FakeCaptureClient(), root, generated_at="2026-07-16T08:30:00+00:00",
+                    instrument_types=["EQUITY"], regions=["USA"], delays=[1], universes=["TOP3000"],
+                    fields_per_scope=1,
+                )
+            capture = Path(summary["capture_dir"])
+            errors = [
+                json.loads(line)
+                for line in (capture / "errors.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            outcome = summary["latest_scope_outcomes"][0]
+
+        self.assertEqual(summary["error_count"], 0)
+        self.assertEqual(summary["status"], "completed")
+        self.assertEqual(errors, [])
+        self.assertEqual(outcome["sampling_mode"], "stratified")
+        self.assertEqual(outcome["field_budget"], 1)
+        self.assertEqual(outcome["certification_status"], "partial")
+
     def test_unlimited_resume_retries_previously_limited_completed_scope_before_certification(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"

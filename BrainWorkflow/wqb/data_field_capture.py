@@ -338,7 +338,7 @@ def _capture_platform_data_fields_locked(
                 continue
             if fields_per_scope > 0:
                 remaining_scope_budget = max(0, remaining_scope_budget - len(fields))
-            if fields_truncated and max_fields_per_dataset == 0:
+            if fields_truncated and max_fields_per_dataset == 0 and fields_per_scope == 0:
                 error = ValueError(f"data-field pagination truncated at implicit cap for dataset {dataset_id}")
                 append("errors.jsonl", _error_row(scope, f"/data-fields?dataset.id={dataset_id}", error, generated))
                 field_errors.append(str(error))
