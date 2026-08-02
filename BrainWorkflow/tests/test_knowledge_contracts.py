@@ -66,10 +66,14 @@ class KnowledgeContractTests(unittest.TestCase):
             canonical = canonical_source_family(root / "raw" / "platform" / "learn" / "2026-07-22" / "index.md", root)
             legacy = canonical_source_family(root / "raw" / "learn" / "old.md", root)
             wiki = canonical_source_family(root / "wiki" / "20_semantics" / "operators.md", root)
+            machine = canonical_source_family(root / "machine" / "data_ledger.jsonl", root)
+            unknown_machine = canonical_source_family(root / "machine" / "untrusted.jsonl", root)
 
         self.assertEqual(canonical, "raw/platform/learn")
         self.assertEqual(legacy, "legacy")
         self.assertEqual(wiki, "wiki/20_semantics")
+        self.assertEqual(machine, "machine/data_ledger.jsonl")
+        self.assertEqual(unknown_machine, "external")
 
     def test_update_source_index_writes_stable_markdown_inventory(self):
         with tempfile.TemporaryDirectory() as tmp:

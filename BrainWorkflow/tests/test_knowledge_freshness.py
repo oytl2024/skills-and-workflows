@@ -23,13 +23,13 @@ class KnowledgeFreshnessTest(unittest.TestCase):
                 "---\nsource_type: platform_api\nsource_family: learn\nsource_path: /operators\n"
                 "captured_at: 2026-07-22T00:00:00Z\ncapture_tool: test\nrecord_count: 1\n"
                 "content_hash: abc\nupdate_check: compare operators\ncompiled_targets:\n"
-                "  - wiki/20_semantics/operators.md\n---\n# Operators\n",
+                "  - wiki/operators.md\n---\n# Operators\n",
                 encoding="utf-8",
             )
             index = root / "raw" / "source_index.md"
             index.parent.mkdir(parents=True, exist_ok=True)
             index.write_text("# Raw Source Index\n\n## `raw/platform/learn/2026-07-22/operators.md`\n", encoding="utf-8")
-            wiki = root / "wiki" / "20_semantics" / "operators.md"
+            wiki = root / "wiki" / "operators.md"
             wiki.parent.mkdir(parents=True)
             wiki.write_text(
                 "---\ncompiled_from:\n  - raw/platform/learn/2026-07-22/operators.md\n"
@@ -91,7 +91,35 @@ class KnowledgeFreshnessTest(unittest.TestCase):
             report = evaluate_knowledge_contract_health(root)
 
         codes = {issue["code"] for issue in report["issues"]}
-        self.assertIn("wiki_backlink_not_raw", codes)
+        self.assertIn("wiki_backlink_not_source_authority", codes)
+
+    def test_contract_health_accepts_machine_resource_backlink_for_compiled_wiki(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            machine = root / "machine"
+            machine.mkdir(parents=True)
+            ledger = machine / "data_ledger.jsonl"
+            ledger.write_text("{}\n", encoding="utf-8")
+            wiki = root / "wiki" / "20_data_semantics.md"
+            wiki.parent.mkdir(parents=True)
+            wiki.write_text(
+                "---\n"
+                "compiled_from:\n"
+                "  - machine/data_ledger.jsonl\n"
+                "compiled_at: 2026-07-30T00:00:00+00:00\n"
+                "trust_level: compiled_experience\n"
+                "stale_after_days: 14\n"
+                "update_trigger: compile-knowledge\n"
+                "consumed_by:\n"
+                "  - human_learning\n"
+                "---\n"
+                "# Data Semantics\n",
+                encoding="utf-8",
+            )
+
+            report = evaluate_knowledge_contract_health(root)
+
+        self.assertNotIn("wiki_backlink_not_source_authority", {issue["code"] for issue in report["issues"]})
 
     def test_load_freshness_manifest(self):
         row = {

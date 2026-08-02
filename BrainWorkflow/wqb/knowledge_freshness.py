@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from wqb.knowledge_clean_compile import evaluate_clean_knowledge_structure
 from wqb.knowledge_contracts import (
     canonical_source_family,
     parse_markdown_front_matter,
@@ -174,17 +175,18 @@ def evaluate_knowledge_contract_health(knowledge_root: str | Path) -> dict[str, 
                         )
                     )
                     continue
-                relative = _vault_relative(resolved, root)
-                if not (canonical_source_family(resolved, root).startswith("raw/") or relative.startswith("machine/")):
+                family = canonical_source_family(resolved, root)
+                if not (family.startswith("raw/") or family.startswith("machine/")):
                     issues.append(
                         KnowledgeHealthIssue(
-                            code="wiki_backlink_not_raw",
+                            code="wiki_backlink_not_source_authority",
                             path=str(path),
-                            message=f"compiled_from target is not a canonical raw or machine source: {value}",
+                            message=f"compiled_from target is not raw or machine source authority: {value}",
                             action="Replace the backlink with direct provenance under raw or machine.",
                         )
                     )
                     continue
+                relative = _vault_relative(resolved, root)
                 wiki_references.add(relative)
         for issue in validate_wiki_metadata(path):
             issues.append(
@@ -237,11 +239,23 @@ def evaluate_knowledge_contract_health(knowledge_root: str | Path) -> dict[str, 
                     action="Index the raw source and compile it into a wiki target, or mark it as migration-only.",
                 )
             )
+    clean_report = evaluate_clean_knowledge_structure(root)
+    for issue in clean_report["issues"]:
+        issues.append(
+            KnowledgeHealthIssue(
+                code=str(issue["code"]),
+                path=str(issue["path"]),
+                message=str(issue["message"]),
+                action=str(issue["action"]),
+            )
+        )
     return {
         "issue_count": len(issues),
         "legacy_count": legacy_count,
         "raw_source_count": len(raw_paths),
         "wiki_page_count": len(list(wiki_root.rglob("*.md"))) if wiki_root.exists() else 0,
+        "clean_structure": clean_report["clean"],
+        "clean_structure_issue_count": clean_report["issue_count"],
         "issues": [asdict(issue) for issue in issues],
     }
 

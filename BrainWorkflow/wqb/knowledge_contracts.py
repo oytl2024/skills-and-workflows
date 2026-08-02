@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from wqb.knowledge_paths import MACHINE_RESOURCE_FILES
 
 RAW_CANONICAL_PREFIXES = (
     "raw/platform/learn",
@@ -161,6 +162,8 @@ def canonical_source_family(path: str | Path, knowledge_root: str | Path) -> str
     for prefix in WIKI_CANONICAL_PREFIXES:
         if relative == prefix or relative.startswith(prefix + "/"):
             return prefix
+    if relative in {f"machine/{filename}" for filename in MACHINE_RESOURCE_FILES.values()}:
+        return relative
     if relative.startswith("raw/") or relative.startswith("wiki/"):
         return "legacy"
     return "external"
