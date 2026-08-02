@@ -17,6 +17,7 @@ class KnowledgeFreshnessTest(unittest.TestCase):
     def test_contract_health_accepts_indexed_raw_and_resolved_wiki_backlink(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
+            (root / "machine").mkdir(parents=True)
             raw = root / "raw" / "platform" / "learn" / "2026-07-22" / "operators.md"
             raw.parent.mkdir(parents=True)
             raw.write_text(

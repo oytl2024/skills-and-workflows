@@ -57,10 +57,13 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
 
 
-def _is_sensitive(path: Path) -> bool:
-    """Input: path. Output: bool. Identify files that must not be auto-deleted."""
-    lowered = path.name.lower()
-    return any(fragment in lowered for fragment in SENSITIVE_NAME_FRAGMENTS)
+def _is_sensitive(path: Path, root: Path) -> bool:
+    """Input: candidate path and knowledge root. Output: bool. Refuse sensitive relative path components."""
+    try:
+        parts = path.resolve().relative_to(root.resolve()).parts
+    except ValueError:
+        return True
+    return any(fragment in part.lower() for part in parts for fragment in SENSITIVE_NAME_FRAGMENTS)
 
 
 def evaluate_clean_knowledge_structure(knowledge_root: str | Path) -> dict[str, Any]:
@@ -68,6 +71,15 @@ def evaluate_clean_knowledge_structure(knowledge_root: str | Path) -> dict[str, 
     root = Path(knowledge_root)
     issues: list[KnowledgeCleanIssue] = []
     top_levels = active_top_level_names(root)
+    for name in sorted(ACTIVE_TOP_LEVELS - top_levels):
+        issues.append(
+            KnowledgeCleanIssue(
+                "missing_required_layer",
+                str(root / name),
+                "Required active knowledge layer is missing.",
+                "Create the raw, machine, and wiki active knowledge layers before compile.",
+            )
+        )
     for name in sorted(top_levels - ACTIVE_TOP_LEVELS):
         issues.append(
             KnowledgeCleanIssue(
@@ -118,7 +130,7 @@ def plan_obsolete_active_cleanup(knowledge_root: str | Path) -> list[CleanupCand
             continue
         for path in sorted(base.rglob("*")):
             if path.is_file():
-                action = "refuse" if _is_sensitive(path) else "remove"
+                action = "refuse" if _is_sensitive(path, root) else "remove"
                 rows.append(
                     CleanupCandidate(
                         str(path),
@@ -158,33 +170,48 @@ def apply_obsolete_active_cleanup(
     knowledge_root: str | Path,
     generated_at: str | None = None,
     dry_run: bool = True,
+    verified_compile: bool = False,
 ) -> dict[str, Any]:
-    """Input: root, timestamp, dry run. Output: cleanup summary. Remove ordinary obsolete files after verification."""
+    """Input: root, timestamp, dry run, compile verification. Output: cleanup summary with audit log."""
     generated = generated_at or _now()
     root = Path(knowledge_root)
     candidates = plan_obsolete_active_cleanup(root)
+    blocked = not dry_run and not verified_compile
     rows: list[dict[str, Any]] = []
     for candidate in candidates:
         path = Path(candidate.path)
-        row = asdict(candidate) | {"generated_at": generated, "dry_run": dry_run}
-        if candidate.action == "remove" and not dry_run:
+        row = asdict(candidate) | {
+            "generated_at": generated,
+            "dry_run": dry_run,
+            "verified_compile": verified_compile,
+            "blocked": blocked,
+        }
+        if candidate.action == "remove" and not dry_run and verified_compile:
             path.unlink(missing_ok=True)
             row["applied"] = True
         else:
             row["applied"] = False
         rows.append(row)
-    if not dry_run:
+    if not dry_run and verified_compile:
         _remove_empty_obsolete_directories(root)
-    log_path = (
-        write_cleanup_log(root, rows, generated)
-        if rows
-        else root / "raw" / "maintenance" / "cleanup_logs" / f"{generated[:10]}.jsonl"
-    )
+    summary_row = {
+        "event": "cleanup_run",
+        "generated_at": generated,
+        "dry_run": dry_run,
+        "verified_compile": verified_compile,
+        "blocked": blocked,
+        "candidate_count": len(rows),
+        "removed_count": sum(1 for row in rows if row.get("applied")),
+        "refused_count": sum(1 for row in rows if row["action"] == "refuse"),
+    }
+    log_path = write_cleanup_log(root, [*rows, summary_row], generated)
     return {
         "generated_at": generated,
         "dry_run": dry_run,
-        "removed_count": sum(1 for row in rows if row.get("applied")),
-        "refused_count": sum(1 for row in rows if row["action"] == "refuse"),
-        "candidate_count": len(rows),
+        "verified_compile": verified_compile,
+        "blocked": blocked,
+        "removed_count": summary_row["removed_count"],
+        "refused_count": summary_row["refused_count"],
+        "candidate_count": summary_row["candidate_count"],
         "cleanup_log_path": str(log_path),
     }

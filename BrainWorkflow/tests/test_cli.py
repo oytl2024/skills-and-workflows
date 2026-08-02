@@ -605,26 +605,29 @@ class CliTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            knowledge_root = root / "knowledge"
+            for name in ("raw", "machine", "wiki"):
+                (knowledge_root / name).mkdir(parents=True)
             manifest = root / "freshness.json"
-            report = root / "knowledge" / "wiki" / "80_maintenance" / "freshness_report.md"
+            report = root / "freshness_report.md"
             manifest.write_text(
                 json.dumps(
                     [
                         {
                             "name": "data_ledger",
-                            "path": "knowledge/wiki/20_semantics/data_ledger.jsonl",
+                            "path": "machine/data_ledger.jsonl",
                             "updated_at": "2026-07-08",
                             "max_age_days": 1,
                         },
-                        {"name": "template_library", "path": "knowledge/wiki/30_templates/template_library.jsonl", "updated_at": "2026-07-08", "max_age_days": 7},
-                        {"name": "benchmark_rules", "path": "knowledge/wiki/50_benchmarks", "updated_at": "2026-07-08", "max_age_days": 3},
-                        {"name": "activity_snapshot", "path": "knowledge/wiki/10_foundations/activity_snapshot.md", "updated_at": "2026-07-08", "max_age_days": 1},
+                        {"name": "template_library", "path": "machine/template_library.jsonl", "updated_at": "2026-07-08", "max_age_days": 7},
+                        {"name": "benchmark_rules", "path": "machine/benchmark_rules.jsonl", "updated_at": "2026-07-08", "max_age_days": 3},
+                        {"name": "activity_snapshot", "path": "raw/platform/activities/activity_snapshot.md", "updated_at": "2026-07-08", "max_age_days": 1},
                     ]
                 ),
                 encoding="utf-8",
             )
 
-            result = knowledge_health_check(root, manifest, report, today_value="2026-07-10")
+            result = knowledge_health_check(knowledge_root, manifest, report, today_value="2026-07-10")
 
             self.assertTrue(Path(result["report_path"]).exists())
             report_text = report.read_text(encoding="utf-8")
