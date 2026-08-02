@@ -3,10 +3,14 @@ import tempfile
 import unittest
 
 from wqb.knowledge_paths import (
+    ENGINEERING_LESSONS_WIKI_PATH,
     MACHINE_RESOURCE_FILES,
+    RAW_INTERACTION_ROOT,
     active_top_level_names,
+    engineering_lessons_wiki_path,
     ensure_knowledge_dirs,
     existing_machine_resource_path,
+    interaction_note_file_path,
     knowledge_paths,
     machine_resource_path,
     relative_to_knowledge_root,
@@ -14,6 +18,18 @@ from wqb.knowledge_paths import (
 
 
 class KnowledgePathsTests(unittest.TestCase):
+    def test_interaction_memory_paths_use_centralized_contracts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            self.assertEqual(RAW_INTERACTION_ROOT, Path("raw") / "community" / "user_messages")
+            self.assertEqual(ENGINEERING_LESSONS_WIKI_PATH, Path("wiki") / "50_engineering_lessons.md")
+            self.assertEqual(
+                interaction_note_file_path(root, "2026-07-30T00:00:00+00:00"),
+                root / "raw" / "community" / "user_messages" / "2026-07-30" / "interaction_notes.jsonl",
+            )
+            self.assertEqual(engineering_lessons_wiki_path(root), root / "wiki" / "50_engineering_lessons.md")
+
     def test_ensure_knowledge_dirs_creates_three_active_layers(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = ensure_knowledge_dirs(tmp)

@@ -8,10 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from wqb.knowledge_contracts import render_front_matter
-from wqb.knowledge_paths import relative_to_knowledge_root
+from wqb.knowledge_paths import (
+    engineering_lessons_wiki_path,
+    interaction_note_file_path,
+    interaction_note_root,
+    relative_to_knowledge_root,
+)
 
 
-RAW_INTERACTION_ROOT = Path("raw") / "community" / "user_messages"
 LESSON_CATEGORIES = {"workflow_rule", "engineering_lesson", "factor_lesson"}
 
 
@@ -43,7 +47,7 @@ def _hash_note(summary: str, category: str, tags: list[str]) -> str:
 
 def _interaction_note_paths(knowledge_root: str | Path) -> list[Path]:
     """Input: knowledge root. Output: sorted JSONL paths. Find canonical raw interaction fact files."""
-    root = Path(knowledge_root) / RAW_INTERACTION_ROOT
+    root = interaction_note_root(knowledge_root)
     return sorted(root.rglob("interaction_notes.jsonl")) if root.exists() else []
 
 
@@ -81,12 +85,13 @@ def append_interaction_note(
         evidence_paths=[str(path) for path in evidence_paths],
         note_hash=_hash_note(str(summary), str(category), clean_tags),
     )
-    path = Path(knowledge_root) / RAW_INTERACTION_ROOT / generated[:10] / "interaction_notes.jsonl"
+    for existing_path, row in _load_note_rows(knowledge_root):
+        if row.get("note_hash") == note.note_hash:
+            return existing_path
+    path = interaction_note_file_path(knowledge_root, generated)
     path.parent.mkdir(parents=True, exist_ok=True)
-    existing_hashes = {row.get("note_hash") for _, row in _load_note_rows(knowledge_root)}
-    if note.note_hash not in existing_hashes:
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(asdict(note), ensure_ascii=False, sort_keys=True) + "\n")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(asdict(note), ensure_ascii=False, sort_keys=True) + "\n")
     return path
 
 
@@ -103,8 +108,10 @@ def compile_interaction_lessons(knowledge_root: str | Path, generated_at: str) -
         for path, row in _load_note_rows(root)
         if str(row.get("category", "")) in LESSON_CATEGORIES
     ]
+    if not lesson_rows:
+        return {"generated_at": generated_at, "lesson_count": 0, "path": None}
     compiled_from = sorted({relative_to_knowledge_root(path, root) for path, _ in lesson_rows})
-    path = root / "wiki" / "50_engineering_lessons.md"
+    path = engineering_lessons_wiki_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     front_matter = render_front_matter(
         {

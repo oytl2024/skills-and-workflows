@@ -7,7 +7,7 @@ from wqb.knowledge_contracts import parse_markdown_front_matter
 
 
 class InteractionMemoryTests(unittest.TestCase):
-    def test_append_interaction_note_writes_raw_jsonl_and_dedupes_repeated_note(self):
+    def test_duplicate_capture_returns_the_existing_raw_note_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = append_interaction_note(
                 tmp,
@@ -30,10 +30,28 @@ class InteractionMemoryTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             note_count = len(load_interaction_notes(tmp))
 
-        self.assertTrue(path.as_posix().endswith("raw/community/user_messages/2026-07-30/interaction_notes.jsonl"))
-        self.assertTrue(duplicate_path.as_posix().endswith("raw/community/user_messages/2026-07-31/interaction_notes.jsonl"))
-        self.assertIn("problem_to_workflow", text)
-        self.assertEqual(note_count, 1)
+            self.assertTrue(path.as_posix().endswith("raw/community/user_messages/2026-07-30/interaction_notes.jsonl"))
+            self.assertEqual(duplicate_path, path)
+            self.assertTrue(duplicate_path.is_file())
+            self.assertIn("problem_to_workflow", text)
+            self.assertEqual(note_count, 1)
+
+    def test_compile_interaction_lessons_skips_wiki_page_without_eligible_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            append_interaction_note(
+                tmp,
+                summary="Consider a new console workflow after validating the operator need.",
+                category="proposal_seed",
+                tags=["console"],
+                evidence_paths=[],
+                captured_at="2026-07-30T00:00:00+00:00",
+            )
+
+            summary = compile_interaction_lessons(tmp, "2026-07-30T00:00:00+00:00")
+
+            self.assertEqual(summary["lesson_count"], 0)
+            self.assertIsNone(summary["path"])
+            self.assertFalse((Path(tmp) / "wiki" / "50_engineering_lessons.md").exists())
 
     def test_compile_interaction_lessons_uses_concrete_raw_note_provenance(self):
         with tempfile.TemporaryDirectory() as tmp:

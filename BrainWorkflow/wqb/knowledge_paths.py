@@ -25,6 +25,8 @@ LEGACY_MACHINE_RESOURCE_PATHS: dict[str, tuple[Path, ...]] = {
 }
 
 ACTIVE_TOP_LEVELS = {"raw", "machine", "wiki"}
+RAW_INTERACTION_ROOT = Path("raw") / "community" / "user_messages"
+ENGINEERING_LESSONS_WIKI_PATH = Path("wiki") / "50_engineering_lessons.md"
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,21 @@ def ensure_knowledge_dirs(knowledge_root: str | Path) -> KnowledgePaths:
     paths.machine.mkdir(parents=True, exist_ok=True)
     paths.wiki.mkdir(parents=True, exist_ok=True)
     return paths
+
+
+def interaction_note_root(knowledge_root: str | Path) -> Path:
+    """Input: knowledge root. Output: canonical interaction raw directory. Locate durable interaction facts."""
+    return Path(knowledge_root) / RAW_INTERACTION_ROOT
+
+
+def interaction_note_file_path(knowledge_root: str | Path, captured_at: str) -> Path:
+    """Input: knowledge root and timestamp. Output: canonical interaction JSONL path. Locate one capture day's facts."""
+    return interaction_note_root(knowledge_root) / str(captured_at)[:10] / "interaction_notes.jsonl"
+
+
+def engineering_lessons_wiki_path(knowledge_root: str | Path) -> Path:
+    """Input: knowledge root. Output: canonical engineering lessons page path. Locate compiled interaction lessons."""
+    return Path(knowledge_root) / ENGINEERING_LESSONS_WIKI_PATH
 
 
 def _require_resource_name(resource_name: str) -> str:
