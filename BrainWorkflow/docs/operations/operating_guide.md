@@ -228,15 +228,19 @@ Safety rules:
 Run this before considering the fixed workflow ready for routine operation:
 
 ```powershell
+python -m wqb.cli delivery-verify --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
 python -m wqb.cli delivery-gate --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --runs-root 'C:\Users\oytl\Desktop\pyproject\brain\runs'
 ```
 
-Run `compile-knowledge --apply-cleanup` immediately before this command. The
-gate requires a fresh successful maintenance report, applied cleanup evidence,
-full knowledge-contract health, non-empty parseable machine resources,
-non-live planning output, and a durable workflow event timeline. A planned
-pause is acceptable only when the report states the pause, stage, reason, and
-evidence path.
+Run `compile-knowledge --apply-cleanup` immediately before these commands.
+`delivery-verify` runs controller-compatible unittest discovery and compileall,
+then writes immutable machine-readable evidence under
+`raw/maintenance/delivery_checks`. The gate requires that fresh successful
+verification report, a fresh successful maintenance report, applied cleanup
+evidence, full knowledge-contract health, complete raw and machine source
+indexes, non-empty parseable machine resources, non-live planning output, and
+a durable workflow event timeline. A planned pause is acceptable only when the
+report states the pause, stage, reason, and evidence path.
 
 When the Console is running, also verify its documented endpoints:
 
@@ -246,16 +250,20 @@ python -m wqb.cli delivery-gate --knowledge-root 'C:\Users\oytl\Desktop\pyprojec
 
 Maintenance and delivery reports are immutable timestamped files. Console
 status reads `latest.json` pointers under `raw/maintenance/compile_reports`
-and `raw/maintenance/delivery_gates`.
+and `raw/maintenance/delivery_gates`. Local verification evidence keeps its
+latest pointer under `raw/maintenance/delivery_checks`.
 
 ## Minimum Verification
 
 On this Windows setup, direct unittest startup can hit a local `_overlapped` import issue. Use:
 
 ```powershell
-python -c "import sys, runpy; sys.platform='linux'; runpy.run_module('unittest', run_name='__main__')" discover -s tests -q
-python -m compileall -q wqb tests
+python -m wqb.cli delivery-verify --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
 ```
+
+The command records both the controller-compatible unittest discovery and
+`python -m compileall -q wqb tests` results. A failed command writes a failed
+report and cannot satisfy the delivery gate.
 
 ## Single-Page Workflow Console
 

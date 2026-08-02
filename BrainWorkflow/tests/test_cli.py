@@ -447,6 +447,23 @@ class CliTests(unittest.TestCase):
         gate.assert_called_once_with("knowledge", "runs", console_base_url="http://127.0.0.1:8765")
         self.assertEqual(json.loads(output.getvalue())["status"], "passed")
 
+    def test_delivery_verify_dispatches_local_verification_runner(self):
+        output = io.StringIO()
+        with patch(
+            "sys.argv",
+            ["wqb", "delivery-verify", "--knowledge-root", "knowledge"],
+        ), patch(
+            "wqb.cli.run_delivery_verification",
+            return_value={
+                "status": "passed",
+                "report_path": "knowledge/raw/maintenance/delivery_checks/20260730T000000Z.json",
+            },
+        ) as verify, redirect_stdout(output):
+            main()
+
+        verify.assert_called_once_with("knowledge")
+        self.assertEqual(json.loads(output.getvalue())["status"], "passed")
+
     def test_readiness_check_main_dispatches_without_simulation(self):
         output = io.StringIO()
         with patch("sys.argv", ["wqb", "readiness-check"]), patch(

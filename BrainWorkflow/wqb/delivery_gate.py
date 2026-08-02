@@ -12,6 +12,7 @@ from wqb.knowledge_freshness import (
     evaluate_knowledge_contract_health,
     load_freshness_manifest,
 )
+from wqb.knowledge_contracts import canonical_source_family
 from wqb.knowledge_paths import MACHINE_RESOURCE_FILES, machine_resource_path
 from wqb.research_planner import plan_research_options
 from wqb.run_readiness import evaluate_run_readiness
@@ -30,6 +31,11 @@ REQUIRED_HUMAN_WIKI_FILES = (
     "30_template_and_operator_patterns.md",
     "40_benchmark_and_repair_rules.md",
     "50_engineering_lessons.md",
+)
+LOCAL_VERIFICATION_MAX_AGE_HOURS = 24
+REQUIRED_LOCAL_VERIFICATION_CHECKS = (
+    "unittest_discovery",
+    "compileall",
 )
 
 
@@ -176,6 +182,97 @@ def _maintenance_evidence(
     return passed, message, str(report_path)
 
 
+def _load_latest_verification_report(
+    knowledge_root: Path,
+) -> tuple[dict[str, Any], Path | None]:
+    """Input: knowledge root. Output: immutable verification payload and path. Resolve the latest pointer safely."""
+    directory = knowledge_root / "raw" / "maintenance" / "delivery_checks"
+    pointer = directory / "latest.json"
+    try:
+        latest = json.loads(pointer.read_text(encoding="utf-8"))
+        if not isinstance(latest, dict):
+            return {}, None
+        report_path = Path(str(latest.get("report_path", "")))
+        if not report_path.is_absolute():
+            report_path = knowledge_root / report_path
+        report_path = report_path.resolve()
+        report_path.relative_to(directory.resolve())
+        if report_path == pointer.resolve():
+            return {}, None
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        if not isinstance(report, dict):
+            return {}, None
+        return report, report_path
+    except (OSError, UnicodeDecodeError, ValueError, TypeError, json.JSONDecodeError):
+        return {}, None
+
+
+def _local_verification_evidence(
+    knowledge_root: Path,
+    gate_generated_at: str,
+) -> tuple[bool, str, str]:
+    """Input: vault root and gate time. Output: status, message, report path. Validate fresh local checks."""
+    report, report_path = _load_latest_verification_report(knowledge_root)
+    if report_path is None:
+        return False, "Fresh local unittest discovery and compileall evidence is missing.", ""
+    gate_time = _parse_timestamp(gate_generated_at)
+    report_time = _parse_timestamp(str(report.get("generated_at", "")))
+    fresh = (
+        gate_time is not None
+        and report_time is not None
+        and timedelta(0) <= gate_time - report_time <= timedelta(hours=LOCAL_VERIFICATION_MAX_AGE_HOURS)
+    )
+    checks = report.get("checks", [])
+    checks_by_code = {
+        str(check.get("code", "")): check
+        for check in checks
+        if isinstance(check, dict)
+    } if isinstance(checks, list) else {}
+    unittest_check = checks_by_code.get("unittest_discovery", {})
+    compileall_check = checks_by_code.get("compileall", {})
+    unittest_command = unittest_check.get("command", [])
+    compileall_command = compileall_check.get("command", [])
+    unittest_command_ok = (
+        isinstance(unittest_command, list)
+        and unittest_command[-4:] == ["discover", "-s", "tests", "-q"]
+        and any(
+            isinstance(part, str)
+            and "sys.platform='linux'" in part
+            and "runpy.run_module('unittest'" in part
+            for part in unittest_command
+        )
+    )
+    compileall_command_ok = (
+        isinstance(compileall_command, list)
+        and compileall_command[1:] == ["-m", "compileall", "-q", "wqb", "tests"]
+    )
+    required_checks_passed = all(
+        isinstance(checks_by_code.get(code), dict)
+        and checks_by_code[code].get("status") == "passed"
+        and checks_by_code[code].get("returncode") == 0
+        for code in REQUIRED_LOCAL_VERIFICATION_CHECKS
+    )
+    passed = (
+        fresh
+        and report.get("report_type") == "delivery_verification"
+        and report.get("status") == "passed"
+        and required_checks_passed
+        and unittest_command_ok
+        and compileall_command_ok
+    )
+    if passed:
+        message = "Fresh successful unittest discovery and compileall evidence is present."
+    else:
+        missing = [
+            code
+            for code in REQUIRED_LOCAL_VERIFICATION_CHECKS
+            if code not in checks_by_code
+        ]
+        suffix = f" Missing checks: {', '.join(missing)}." if missing else ""
+        message = f"Local verification must be fresh and contain successful controller-compatible checks.{suffix}"
+    return passed, message, str(report_path)
+
+
 def _parse_machine_resource(
     knowledge_root: Path,
     resource_name: str,
@@ -207,20 +304,50 @@ def _source_index_evidence(
     knowledge_root: Path,
     rows: list[dict[str, Any]],
 ) -> tuple[bool, str]:
-    """Input: knowledge root and source-index rows. Output: status and message. Validate indexed sources."""
+    """Input: knowledge root and source-index rows. Output: status and message. Validate complete source coverage."""
     markdown_index = knowledge_root / "raw" / "source_index.md"
+    markdown_text = (
+        markdown_index.read_text(encoding="utf-8")
+        if markdown_index.is_file()
+        else ""
+    )
+    indexed_paths = {
+        str(row.get("path", "")).replace("\\", "/")
+        for row in rows
+        if isinstance(row.get("path"), str)
+    }
     valid_rows = bool(rows) and all(
         isinstance(row.get("path"), str)
         and bool(str(row.get("path", "")).strip())
         and (knowledge_root / str(row["path"])).is_file()
         for row in rows
     )
-    passed = markdown_index.is_file() and bool(markdown_index.read_text(encoding="utf-8").strip()) and valid_rows
+    canonical_sources = {
+        path.relative_to(knowledge_root).as_posix()
+        for path in (knowledge_root / "raw").rglob("*.md")
+        if path != markdown_index
+        and canonical_source_family(path, knowledge_root).startswith("raw/")
+    } if (knowledge_root / "raw").exists() else set()
+    missing_machine = sorted(canonical_sources - indexed_paths)
+    missing_markdown = sorted(path for path in canonical_sources if path not in markdown_text)
+    passed = (
+        markdown_index.is_file()
+        and bool(markdown_text.strip())
+        and valid_rows
+        and not missing_machine
+        and not missing_markdown
+    )
+    missing_details = []
+    if missing_machine:
+        missing_details.append(f"missing from machine index: {', '.join(missing_machine)}")
+    if missing_markdown:
+        missing_details.append(f"missing from raw index: {', '.join(missing_markdown)}")
     return (
         passed,
-        "Raw and machine source indexes resolve to existing source files."
+        "Raw and machine source indexes cover every canonical raw Markdown source."
         if passed
-        else "Source indexes are missing, empty, or reference missing source files.",
+        else "Source indexes are missing, invalid, or incomplete"
+        + (f": {'; '.join(missing_details)}." if missing_details else "."),
     )
 
 
@@ -334,6 +461,18 @@ def run_delivery_gate(
             "maintenance_evidence",
             maintenance_message,
             maintenance_path,
+        )
+    )
+    verification_ok, verification_message, verification_path = _local_verification_evidence(
+        knowledge,
+        generated,
+    )
+    checks.append(
+        _check(
+            verification_ok,
+            "local_verification_evidence",
+            verification_message,
+            verification_path,
         )
     )
     clean = evaluate_clean_knowledge_structure(knowledge)

@@ -1307,3 +1307,35 @@
 - Final non-live verification: 713 tests passed; `compileall` passed; `git diff --check f7ae8cb` passed.
 - Real local knowledge-vault maintenance/delivery was not run or claimed; it must produce fresh applied maintenance evidence before its delivery gate can pass.
 - Report: `.superpowers/sdd/2026-07-30-simplified-knowledge-structure-delivery-contract-implementation/final-review-fix-report.md`.
+
+## 2026-08-02 Simplified Knowledge Contract Residual Delivery Fix
+
+### Requirement Summary
+- Base the narrow residual remediation on commit `790bde1`.
+- Require fresh machine-readable local unittest-discovery and compileall evidence in the delivery-gate pass predicate.
+- Require `machine/source_index.jsonl` and `raw/source_index.md` to cover every canonical raw Markdown source, excluding the raw index and maintenance evidence.
+- Add RED tests first, preserve existing non-live workflow behavior, run the controller-specified verification, commit with the required message, and write the final residual report.
+- Do not edit controller-owned root planning/recovery files or the SDD progress ledger.
+
+### Confirmed Details
+- Use the current Python environment and the controller-compatible unittest wrapper with `sys.platform='linux'`.
+- Persist immutable timestamped delivery verification reports plus `latest.json` under `knowledge/raw/maintenance/delivery_checks/`.
+- Add a `delivery-verify` CLI command only if it remains a small focused integration; update CLI tests and the operating guide when added.
+- Do not run live WQB calls, simulations, repair workflows, or submissions.
+
+### Plan
+1. Inspect the existing delivery gate, source-index contracts, CLI patterns, and focused test fixtures.
+2. Add focused RED tests for missing verification evidence, complete successful verification evidence, and uncovered canonical raw Markdown.
+3. Implement the minimal verification runner/report persistence and delivery-gate evidence/coverage checks.
+4. Add CLI regressions and operating-guide instructions for generating evidence before running the delivery gate.
+5. Run focused tests, the full non-live verification commands, compileall, and the required range diff check.
+6. Record results here and in the requested residual fix report, then commit the intended files with the required message.
+
+### Result
+- RED: an otherwise passing vault still passed with no local verification report, ignored a report containing only unittest discovery, and passed when an indexed Markdown inventory mentioned a canonical raw source omitted from `machine/source_index.jsonl`.
+- Added `delivery-verify`, which runs controller-compatible unittest discovery and compileall and writes immutable timestamped reports plus `latest.json` under `raw/maintenance/delivery_checks`.
+- Delivery gate now requires a fresh successful report with both exact checks and rejects missing, incomplete, failed, malformed, stale, or non-controller-compatible evidence.
+- Source-index evidence now compares every canonical raw Markdown path against both machine and Markdown indexes while excluding `raw/source_index.md` and maintenance evidence.
+- Added CLI and operating-guide coverage for the required `compile-knowledge` -> `delivery-verify` -> `delivery-gate` sequence.
+- Final focused verification passed 216 tests; changed-module verification passed 137 tests; full non-live discovery passed 720 tests; compileall and pre-commit `git diff --check` passed.
+- No live WQB call, simulation, repair, submission, or real-vault delivery-pass claim was made.
