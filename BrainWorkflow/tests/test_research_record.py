@@ -7,17 +7,39 @@ from unittest.mock import patch
 
 from wqb.research_record import (
     empty_research_record,
+    load_research_record_ledger,
     load_research_record,
     record_alpha_result,
     record_candidate_gate,
     record_repair_version,
     render_research_record_markdown,
+    sync_research_record_to_machine,
     sync_research_record_to_raw,
     write_research_record,
 )
 
 
 class ResearchRecordTests(unittest.TestCase):
+    def test_sync_research_record_to_machine_appends_latest_run_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            record = empty_research_record("run-a", "Power Pool breadth-first scout")
+            record = record_alpha_result(record, {
+                "alpha_id": "alpha-a",
+                "expression_hash": "hash-a",
+                "hard_pass": False,
+                "benchmark_label": "near_miss",
+                "metrics": {"sharpe": 1.3},
+                "failed": ["prod_correlation"],
+            })
+
+            path = sync_research_record_to_machine(record, tmp, "2026-07-30T00:00:00+00:00")
+            rows = load_research_record_ledger(tmp)
+
+        self.assertEqual(path, Path(tmp) / "machine" / "research_records.jsonl")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["run_id"], "run-a")
+        self.assertEqual(rows[0]["final_state"], "in_progress")
+
     def test_json_roundtrip_and_markdown_include_all_contract_sections(self):
         from wqb.research_record import ResearchRecord
         from wqb.workflow_contract import RESEARCH_RECORD_SECTIONS

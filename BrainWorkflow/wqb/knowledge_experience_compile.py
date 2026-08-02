@@ -12,6 +12,7 @@ from wqb.knowledge_paths import (
     machine_resource_path,
     relative_to_knowledge_root,
 )
+from wqb.research_record import load_research_record_ledger
 
 
 HUMAN_WIKI_FILES = {
@@ -24,6 +25,7 @@ HUMAN_WIKI_FILES = {
 }
 
 MAX_COMPILED_FROM = 24
+CASE_REPORT_DIR = Path("wiki") / "60_research_cases"
 
 
 def _front_matter(generated_at: str, compiled_from: list[str], consumed_by: list[str]) -> str:
@@ -118,13 +120,88 @@ def _write_page(path: Path, front_matter: str, title: str, lines: list[str]) -> 
     return path
 
 
+def select_research_case_records(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Input: research ledger rows and limit. Output: selected rows. Pick learning-worthy research cases."""
+    ranked = [
+        row for row in rows
+        if str(row.get("case_reason", "")) in {
+            "submitted_or_approved",
+            "near_miss",
+            "repair_loop",
+            "representative_failure",
+        }
+    ]
+    return ranked[:max(int(limit), 0)]
+
+
+def _lesson_from_case_reason(reason: str, failed: list[str]) -> str:
+    """Input: case reason and failed checks. Output: reusable lesson text. Convert one record outcome into bounded guidance."""
+    failed_text = ", ".join(failed) if failed else "the recorded checks"
+    if reason == "submitted_or_approved":
+        return "Record the submitted or approved result so later work can distinguish validated ideas from untested variants."
+    if reason == "near_miss":
+        return f"Treat a stable near miss as a bounded repair candidate; address {failed_text} before expanding the family."
+    if reason == "repair_loop":
+        return "Change one repair lever at a time and retain every version so the next decision has comparable evidence."
+    return f"Convert repeated failure on {failed_text} into a named workflow rule instead of recreating the same candidate."
+
+
+def _case_report_text(row: dict[str, Any], generated_at: str) -> str:
+    """Input: research row and timestamp. Output: compact Markdown case report."""
+    run_id = str(row.get("run_id", ""))
+    objective = str(row.get("objective", ""))
+    reason = str(row.get("case_reason", ""))
+    failed = sorted({
+        str(item)
+        for triage in row.get("triage", [])
+        if isinstance(triage, dict)
+        for item in triage.get("failed", [])
+    })
+    front = _front_matter(
+        generated_at,
+        ["machine/research_records.jsonl"],
+        ["human_learning", "workflow_review"],
+    )
+    return "\n".join([
+        front.rstrip(),
+        f"# Research Case {run_id}",
+        "",
+        f"- Objective: {objective}",
+        f"- Case Reason: {reason}",
+        f"- Failed Checks: {', '.join(failed) if failed else 'none recorded'}",
+        f"- Run ID: `{run_id}`",
+        "",
+        "## Reusable Lesson",
+        "",
+        _lesson_from_case_reason(reason, failed),
+        "",
+    ]) + "\n"
+
+
+def compile_research_case_reports(
+    knowledge_root: str | Path,
+    generated_at: str,
+    limit: int,
+) -> list[Path]:
+    """Input: knowledge root, timestamp, limit. Output: report paths. Compile selected research cases for humans."""
+    root = Path(knowledge_root)
+    rows = load_research_record_ledger(root)
+    reports: list[Path] = []
+    for row in select_research_case_records(rows, limit):
+        run_id = str(row.get("run_id", "")).replace("/", "_").replace("\\", "_")
+        path = root / CASE_REPORT_DIR / f"{run_id}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_case_report_text(row, generated_at), encoding="utf-8")
+        reports.append(path)
+    return reports
+
+
 def compile_human_experience_wiki(
     knowledge_root: str | Path,
     generated_at: str | None = None,
     max_case_reports: int = 20,
 ) -> dict[str, Any]:
     """Input: knowledge root, timestamp, case limit. Output: compact human wiki compile summary."""
-    del max_case_reports
     root = Path(knowledge_root)
     generated = generated_at or _now()
     ledger_rows = _read_jsonl_rows(existing_machine_resource_path(root, "data_ledger"))
@@ -240,9 +317,11 @@ def compile_human_experience_wiki(
             ],
         ),
     ]
+    case_report_paths = compile_research_case_reports(root, generated, max_case_reports)
     return {
         "generated_at": generated,
         "page_count": len(page_paths),
         "page_paths": [str(path) for path in page_paths],
-        "case_report_count": 0,
+        "case_report_count": len(case_report_paths),
+        "case_report_paths": [str(path) for path in case_report_paths],
     }

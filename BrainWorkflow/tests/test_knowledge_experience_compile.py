@@ -4,13 +4,43 @@ import tempfile
 import unittest
 
 from wqb.knowledge_contracts import canonical_source_family, parse_markdown_front_matter
-from wqb.knowledge_experience_compile import compile_human_experience_wiki
+from wqb.knowledge_experience_compile import (
+    compile_human_experience_wiki,
+    compile_research_case_reports,
+)
 
 
 MAX_EXPECTED_COMPILED_FROM = 24
 
 
 class KnowledgeExperienceCompileTests(unittest.TestCase):
+    def test_selected_near_miss_research_record_gets_case_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "machine").mkdir()
+            row = {
+                "run_id": "run-near-miss",
+                "objective": "Explore new analyst data",
+                "final_state": "paused",
+                "case_reason": "near_miss",
+                "backtest": [{"alpha_id": "a1", "metrics": {"sharpe": 1.2}}],
+                "triage": [{"failed": ["prod_correlation"], "benchmark_label": "near_miss"}],
+                "repair": {},
+                "candidate_gate": [],
+                "synced_at": "2026-07-30T00:00:00+00:00",
+            }
+            (root / "machine" / "research_records.jsonl").write_text(
+                json.dumps(row) + "\n", encoding="utf-8"
+            )
+
+            reports = compile_research_case_reports(root, "2026-07-30T00:00:00+00:00", limit=5)
+
+            self.assertEqual(len(reports), 1)
+            text = reports[0].read_text(encoding="utf-8")
+
+        self.assertIn("run-near-miss", text)
+        self.assertIn("Reusable Lesson", text)
+
     def test_compile_writes_only_target_human_pages(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

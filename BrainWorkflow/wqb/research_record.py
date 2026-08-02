@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
+
+from wqb.knowledge_paths import machine_resource_path
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,75 @@ class ResearchRecord:
 def empty_research_record(run_id: str, objective: str) -> ResearchRecord:
     """Input: run id and objective. Output: ResearchRecord. Create an empty research record."""
     return ResearchRecord(run_id=str(run_id), objective=str(objective))
+
+
+def research_record_to_dict(record: ResearchRecord) -> dict[str, Any]:
+    """Input: ResearchRecord. Output: dict. Convert a run record into a machine-ledger row."""
+    return asdict(record)
+
+
+def _research_record_final_state(record: ResearchRecord) -> str:
+    """Input: ResearchRecord. Output: state label. Derive a compact run outcome for ledger filtering."""
+    if record.manual_submission_status:
+        return str(record.manual_submission_status[-1].get("status", "submitted"))
+    if record.approved_queue:
+        return str(record.approved_queue[-1].get("status", "approved_queue"))
+    if record.candidate_gate:
+        return "candidate_gate"
+    if record.repair:
+        return "repair"
+    if record.backtest:
+        return "in_progress"
+    return "created"
+
+
+def _case_reason(record: ResearchRecord) -> str:
+    """Input: ResearchRecord. Output: case reason. Mark learning-worthy records for human case compilation."""
+    if record.manual_submission_status or record.approved_queue:
+        return "submitted_or_approved"
+    if any(row.get("benchmark_label") == "near_miss" for row in record.triage):
+        return "near_miss"
+    if record.repair:
+        return "repair_loop"
+    if record.triage:
+        return "representative_failure"
+    return ""
+
+
+def append_research_record_jsonl(
+    knowledge_root: str | Path,
+    record: ResearchRecord,
+    synced_at: str,
+) -> Path:
+    """Input: knowledge root, record, timestamp. Output: machine JSONL path. Append a compact authoritative run row."""
+    path = machine_resource_path(knowledge_root, "research_records")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = research_record_to_dict(record) | {
+        "synced_at": synced_at,
+        "final_state": _research_record_final_state(record),
+        "case_reason": _case_reason(record),
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    return path
+
+
+def load_research_record_ledger(knowledge_root: str | Path) -> list[dict[str, Any]]:
+    """Input: knowledge root. Output: research record rows. Load the machine research-record ledger."""
+    path = machine_resource_path(knowledge_root, "research_records")
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def sync_research_record_to_machine(
+    record: ResearchRecord,
+    knowledge_root: str | Path,
+    synced_at: str | None = None,
+) -> Path:
+    """Input: record, knowledge root, timestamp. Output: machine path. Sync one research record into the machine ledger."""
+    generated = synced_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return append_research_record_jsonl(knowledge_root, record, generated)
 
 
 def record_alpha_result(record: ResearchRecord, alpha_row: dict[str, object]) -> ResearchRecord:

@@ -27,6 +27,7 @@ from wqb.research_record import (
     record_candidate_gate,
     record_manual_submission_status,
     record_queue_update,
+    sync_research_record_to_machine,
     sync_research_record_to_raw,
     write_research_record,
 )
@@ -771,6 +772,7 @@ class WorkflowOrchestrator:
         advance_stage = state.current_stage == "research_record_sync"
         try:
             raw_path = sync_research_record_to_raw(record, self.paths.knowledge_root / "raw")
+            sync_research_record_to_machine(record, self.paths.knowledge_root, now)
         except Exception as exc:
             if not advance_stage:
                 raise
@@ -844,6 +846,7 @@ class WorkflowOrchestrator:
         run_dir = Path(state.run_dir)
         try:
             raw_path = sync_research_record_to_raw(record, self.paths.knowledge_root / "raw")
+            sync_research_record_to_machine(record, self.paths.knowledge_root, now)
         except Exception as exc:
             warning = f"{type(exc).__name__}: {exc}"
             warning_state = self._set_stage(
