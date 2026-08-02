@@ -27,6 +27,7 @@ class ConsoleTimelineTests(unittest.TestCase):
                 }
             ],
             "freshness": {"stale_count": 1, "missing_count": 0},
+            "knowledge_maintenance": {"status": "completed"},
             "data_coverage": {"exists": True, "field_count": 120},
             "option_cards": [],
         }
@@ -41,6 +42,8 @@ class ConsoleTimelineTests(unittest.TestCase):
         self.assertEqual(ai_rows[0]["source"], "ai_judgment")
         self.assertEqual(current["title"], "Platform data capture")
         self.assertIn("12", current["details"][0])
+        maintenance_rows = [row for row in rows if row["stage_id"] == "knowledge_compile"]
+        self.assertEqual(maintenance_rows[0]["status"], "completed")
 
     def test_timeline_uses_active_workflow_stage_as_current_work(self):
         state = {

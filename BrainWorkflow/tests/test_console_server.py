@@ -227,6 +227,7 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn('name="fields_per_scope" type="number" min="0" value="100"', html)
         self.assertIn('name="max_scopes" type="number" min="0" value="40"', html)
         self.assertIn('value="compile-data-ledger"', html)
+        self.assertIn('value="compile-knowledge"', html)
         self.assertIn('name="enable_live_api"', html)
         self.assertIn("120", html)
 
@@ -799,7 +800,7 @@ class ConsoleServerTests(unittest.TestCase):
         start_async.assert_called_once()
 
     def test_run_console_action_starts_all_long_maintenance_actions_async_and_records_terminal_context(self):
-        actions = ("compile-data-ledger", "compile-research-records", "bootstrap-knowledge", "plan-research-options")
+        actions = ("compile-data-ledger", "compile-research-records", "compile-knowledge", "bootstrap-knowledge", "plan-research-options")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             paths = make_paths(root)

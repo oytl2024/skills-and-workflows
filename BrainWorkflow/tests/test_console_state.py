@@ -75,6 +75,20 @@ class ConsoleStateTests(unittest.TestCase):
         self.assertTrue(state["timeline"])
         self.assertIn("current_work", state)
 
+    def test_load_console_state_includes_latest_knowledge_maintenance_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            report = paths.knowledge_root / "raw" / "maintenance" / "compile_reports" / "2026-07-30.json"
+            report.parent.mkdir(parents=True)
+            report.write_text(json.dumps({"status": "completed", "generated_at": "2026-07-30T00:00:00+00:00"}), encoding="utf-8")
+
+            state = load_console_state(paths)
+
+        self.assertTrue(state["knowledge_maintenance"]["exists"])
+        self.assertEqual(state["knowledge_maintenance"]["status"], "completed")
+        self.assertEqual(state["knowledge_maintenance"]["path"], str(report))
+
     def test_console_state_summarizes_semantic_ledgers_and_normalizes_legacy_proposals(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -41,6 +41,7 @@ from wqb.knowledge import fetch_knowledge_snapshot
 from wqb.knowledge_bootstrap import bootstrap_knowledge, bootstrap_summary_to_dict
 from wqb.knowledge_compile import compile_research_records
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest, write_freshness_report
+from wqb.knowledge_maintenance import run_knowledge_maintenance
 from wqb.knowledge_paths import machine_resource_path
 from wqb.interaction_memory import append_interaction_note
 from wqb.novelty import score_expression_novelty
@@ -3445,6 +3446,7 @@ def parse_args() -> argparse.Namespace:
             "launch-console",
             "bootstrap-knowledge",
             "compile-research-records",
+            "compile-knowledge",
             "capture-interaction-note",
             "schedule-research",
             "workflow-start",
@@ -3500,6 +3502,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tag", action="append", default=[])
     parser.add_argument("--evidence-path", action="append", default=[])
     parser.add_argument("--knowledge-seed-root", default="docs/knowledge")
+    parser.add_argument("--apply-cleanup", action="store_true", default=False)
+    parser.add_argument("--max-case-reports", type=int, default=20)
     parser.add_argument("--data-capture-date", default="")
     parser.add_argument("--capture-region", default="")
     parser.add_argument("--capture-delay", default="")
@@ -3904,6 +3908,13 @@ def main() -> None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "compile-research-records":
         result = compile_research_records_command(args.knowledge_root)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "compile-knowledge":
+        result = run_knowledge_maintenance(
+            args.knowledge_root,
+            apply_cleanup=bool(args.apply_cleanup),
+            max_case_reports=int(args.max_case_reports),
+        )
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "capture-interaction-note":
         if not args.summary or not args.category:

@@ -5,6 +5,7 @@ from typing import Any
 
 WORKFLOW_STAGE_LABELS = {
     "knowledge_health": "Knowledge health",
+    "knowledge_compile": "Knowledge maintenance",
     "platform_data_capture": "Platform data capture",
     "data_ledger_compile": "Data ledger compile",
     "research_options": "Research options",
@@ -67,6 +68,7 @@ def _stage_status_from_workflow(state: dict[str, Any], stage_id: str) -> str:
 def build_timeline_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
     """Input: console state. Output: timeline rows. Build the one-page workflow run tape."""
     freshness = state.get("freshness", {}) if isinstance(state.get("freshness"), dict) else {}
+    maintenance = state.get("knowledge_maintenance", {}) if isinstance(state.get("knowledge_maintenance"), dict) else {}
     data_coverage = state.get("data_coverage", {}) if isinstance(state.get("data_coverage"), dict) else {}
     capture_job = _running_job_for_action(state, "capture-platform-data-fields")
     compile_job = _running_job_for_action(state, "compile-data-ledger")
@@ -76,6 +78,13 @@ def build_timeline_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
             "blocked" if int(freshness.get("stale_count", 0) or 0) or int(freshness.get("missing_count", 0) or 0) else "completed",
             "deterministic",
             "Checks raw/wiki freshness and maintenance contract state.",
+        ),
+        _row(
+            "knowledge_compile",
+            "completed" if maintenance.get("status") == "completed" else "waiting",
+            "knowledge maintenance",
+            "Compile raw facts into machine resources and compact human wiki.",
+            str(maintenance.get("path", maintenance.get("report_path", ""))),
         ),
         _row(
             "platform_data_capture",

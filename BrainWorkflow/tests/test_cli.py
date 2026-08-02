@@ -422,6 +422,17 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.readiness_mode, "research")
         self.assertTrue(args.enable_live_api)
 
+    def test_compile_knowledge_dispatches_maintenance_pipeline(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "compile-knowledge", "--knowledge-root", "knowledge", "--apply-cleanup", "--max-case-reports", "7"]), patch(
+            "wqb.cli.run_knowledge_maintenance",
+            return_value={"status": "completed", "report_path": "knowledge/raw/maintenance/compile_reports/2026-07-30.json"},
+        ) as maintenance, redirect_stdout(output):
+            main()
+
+        maintenance.assert_called_once_with("knowledge", apply_cleanup=True, max_case_reports=7)
+        self.assertEqual(json.loads(output.getvalue())["status"], "completed")
+
     def test_readiness_check_main_dispatches_without_simulation(self):
         output = io.StringIO()
         with patch("sys.argv", ["wqb", "readiness-check"]), patch(
