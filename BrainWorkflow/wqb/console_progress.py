@@ -73,18 +73,22 @@ def process_is_alive(pid: int | None) -> bool:
     return True
 
 
-def _read_manifest_status(capture_dir: Path) -> str:
-    """Input: capture directory. Output: manifest status string. Read terminal capture state when present."""
+def _read_manifest_summary(capture_dir: Path) -> dict[str, Any]:
+    """Input: capture directory. Output: manifest summary. Read persisted capture coverage state for Console progress."""
     manifest = capture_dir / "manifest.json"
     if not manifest.exists():
-        return ""
+        return {"manifest_status": "", "certification_status": "", "sampling_mode": ""}
     try:
         payload = json.loads(manifest.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        return "malformed"
+        return {"manifest_status": "malformed", "certification_status": "", "sampling_mode": ""}
     if not isinstance(payload, dict):
-        return "malformed"
-    return str(payload.get("status", ""))
+        return {"manifest_status": "malformed", "certification_status": "", "sampling_mode": ""}
+    return {
+        "manifest_status": str(payload.get("status", "")),
+        "certification_status": str(payload.get("certification_status", "")),
+        "sampling_mode": "stratified" if payload.get("capture_plan_path") or int(payload.get("fields_per_scope", 0) or 0) > 0 else "full_scope",
+    }
 
 
 def _max_write_time(*paths: Path) -> str:
@@ -117,6 +121,7 @@ def probe_data_capture_progress(
     data_sets = capture / "data_sets.jsonl"
     data_fields = capture / "data_fields.jsonl"
     errors = capture / "errors.jsonl"
+    manifest_summary = _read_manifest_summary(capture)
     return {
         "capture_dir": str(capture),
         "scope_rows": count_jsonl_rows(scopes),
@@ -125,5 +130,5 @@ def probe_data_capture_progress(
         "error_rows": count_jsonl_rows(errors),
         "data_fields_bytes": file_snapshot(data_fields)["bytes"],
         "last_write_at": _max_write_time(scopes, data_sets, data_fields, errors),
-        "manifest_status": _read_manifest_status(capture),
+        **manifest_summary,
     }

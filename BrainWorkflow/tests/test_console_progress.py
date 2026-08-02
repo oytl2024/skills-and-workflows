@@ -59,7 +59,7 @@ class ConsoleCaptureProgressTests(unittest.TestCase):
                 '{"id":"f1"}\n{"id":"f2"}\n{"id":"f3"}\n', encoding="utf-8"
             )
             (capture / "errors.jsonl").write_text('{"error":"rate"}\n', encoding="utf-8")
-            (capture / "manifest.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+            (capture / "manifest.json").write_text(json.dumps({"status": "completed", "certification_status": "partial", "fields_per_scope": 100}), encoding="utf-8")
 
             latest = latest_data_capture_dir(knowledge)
             progress = probe_data_capture_progress(knowledge)
@@ -72,3 +72,5 @@ class ConsoleCaptureProgressTests(unittest.TestCase):
         self.assertEqual(progress["error_rows"], 1)
         self.assertGreater(progress["data_fields_bytes"], 0)
         self.assertEqual(progress["manifest_status"], "completed")
+        self.assertEqual(progress["certification_status"], "partial")
+        self.assertEqual(progress["sampling_mode"], "stratified")

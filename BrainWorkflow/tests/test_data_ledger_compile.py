@@ -430,6 +430,21 @@ class DataLedgerCompileTests(unittest.TestCase):
 
         self.assertEqual(summary["source_status"], "partial")
 
+    def test_compile_marks_stratified_scope_partial_even_when_scope_row_claims_complete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
+            scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+            write_jsonl(capture / "data_fields.jsonl", [{"scope": scope, "data_set": {"id": "fundamental3"}, "field": {"id": "cash_field", "type": "MATRIX"}}])
+            write_jsonl(capture / "scopes.jsonl", [{"scope": scope, "status": "completed", "certification_status": "complete", "sampling_mode": "stratified", "field_budget": 100}])
+            (capture / "manifest.json").write_text(json.dumps({"status": "completed", "certification_status": "complete", "requested_matrix": [scope]}), encoding="utf-8")
+
+            summary = compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
+            row = json.loads((root / "machine" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertEqual(summary["source_status"], "partial")
+        self.assertEqual(row["coverage_status"], "partial")
+
     def test_compile_marks_negative_delay_scope_partial(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"

@@ -960,6 +960,28 @@ class CliTests(unittest.TestCase):
         self.assertEqual(kwargs["max_scopes"], 2)
         self.assertEqual(json.loads(output.getvalue())["field_count"], 7)
 
+    def test_stratified_capture_commands_dispatch_without_live_field_capture(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "plan-stratified-data-capture", "--knowledge-root", "knowledge", "--fields-per-scope", "25", "--max-scopes", "4"]):
+            with patch("wqb.cli.plan_stratified_data_capture_command", return_value={"scope_count": 4}) as command:
+                with redirect_stdout(output):
+                    main()
+
+        self.assertEqual(command.call_args.args[0], "knowledge")
+        self.assertEqual(command.call_args.kwargs["fields_per_scope"], 25)
+        self.assertEqual(command.call_args.kwargs["max_scopes"], 4)
+        self.assertEqual(json.loads(output.getvalue())["scope_count"], 4)
+
+    def test_capture_platform_data_fields_forwards_stratified_plan_arguments(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "capture-platform-data-fields", "--enable-live-api", "--capture-plan-path", "plan.jsonl", "--fields-per-scope", "25"]):
+            with patch("wqb.cli.capture_platform_data_fields_command", return_value={"field_count": 2}) as command:
+                with redirect_stdout(output):
+                    main()
+
+        self.assertEqual(command.call_args.kwargs["capture_plan_path"], "plan.jsonl")
+        self.assertEqual(command.call_args.kwargs["fields_per_scope"], 25)
+
     def test_compile_data_ledger_dispatches_without_live_api(self):
         output = io.StringIO()
         with patch("sys.argv", ["wqb", "compile-data-ledger", "--knowledge-root", "knowledge"]):

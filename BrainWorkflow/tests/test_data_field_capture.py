@@ -158,6 +158,28 @@ class DataFieldCaptureTests(unittest.TestCase):
         self.assertEqual(manifest["latest_scope_outcomes"][0]["status"], "completed")
         self.assertEqual(manifest["latest_scope_outcomes"][0]["certification_status"], "partial")
 
+    def test_capture_plan_applies_scope_field_budget_and_marks_partial_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            plan = root / "raw" / "platform" / "data_fields" / "capture_plans" / "2026-07-16.jsonl"
+            plan.parent.mkdir(parents=True)
+            plan.write_text(
+                json.dumps({"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000", "field_budget": 1, "status": "planned"}) + "\n",
+                encoding="utf-8",
+            )
+
+            summary = capture_platform_data_fields(
+                FakeCaptureClient(), root, generated_at="2026-07-16T08:30:00+00:00",
+                capture_plan_path=plan, fields_per_scope=1,
+            )
+            capture = Path(summary["capture_dir"])
+            manifest = json.loads((capture / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(summary["field_count"], 1)
+        self.assertEqual(manifest["certification_status"], "partial")
+        self.assertEqual(manifest["latest_scope_outcomes"][0]["sampling_mode"], "stratified")
+        self.assertEqual(manifest["latest_scope_outcomes"][0]["field_budget"], 1)
+
     def test_unlimited_resume_retries_previously_limited_completed_scope_before_certification(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"

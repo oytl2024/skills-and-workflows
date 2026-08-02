@@ -169,6 +169,12 @@ def _capture_certification_complete(
     """Input: capture manifest and latest scope outcomes. Output: bool. Validate manifest-level certification."""
     if not manifest:
         return False
+    if any(
+        str(outcome.get("sampling_mode", "")) == "stratified"
+        or int(outcome.get("field_budget", 0) or 0) > 0
+        for outcome in scope_outcomes.values()
+    ):
+        return False
     if "requested_matrix" in manifest:
         requested = manifest.get("requested_matrix")
         if not isinstance(requested, list) or not requested:
@@ -456,6 +462,8 @@ def compile_data_ledger_from_raw(
                     and (outcome := scope_outcomes.get(scope_key)) is not None
                     and outcome.get("status") == "completed"
                     and outcome.get("certification_status") == "complete"
+                    and str(outcome.get("sampling_mode", "")) != "stratified"
+                    and int(outcome.get("field_budget", 0) or 0) == 0
                     and all(_row_matches_outcome_generation(row, outcome) for row in grouped[key])
                     for scope_key in row_scope_keys
                 )

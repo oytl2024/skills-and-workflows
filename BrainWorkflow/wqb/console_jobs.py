@@ -368,6 +368,10 @@ def build_cli_command(action: str, paths: ConsolePaths, form: dict[str, Any] | N
             command.extend(["--max-datasets-per-scope", str(data.get("max_datasets_per_scope"))])
         if data.get("max_fields_per_dataset"):
             command.extend(["--max-fields-per-dataset", str(data.get("max_fields_per_dataset"))])
+        if data.get("fields_per_scope"):
+            command.extend(["--fields-per-scope", str(data.get("fields_per_scope"))])
+        if data.get("capture_plan_path"):
+            command.extend(["--capture-plan-path", str(data.get("capture_plan_path"))])
         if data.get("resume_capture"):
             command.append("--resume-capture")
         if data.get("data_capture_date"):

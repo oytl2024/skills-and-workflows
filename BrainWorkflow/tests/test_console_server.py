@@ -224,6 +224,8 @@ class ConsoleServerTests(unittest.TestCase):
         html = render_dashboard(state)
 
         self.assertIn('value="capture-platform-data-fields"', html)
+        self.assertIn('name="fields_per_scope" type="number" min="0" value="100"', html)
+        self.assertIn('name="max_scopes" type="number" min="0" value="40"', html)
         self.assertIn('value="compile-data-ledger"', html)
         self.assertIn('name="enable_live_api"', html)
         self.assertIn("120", html)

@@ -102,6 +102,8 @@ class ConsoleJobsTests(unittest.TestCase):
                     "max_scopes": "4",
                     "max_datasets_per_scope": "5",
                     "max_fields_per_dataset": "6",
+                    "fields_per_scope": "100",
+                    "capture_plan_path": "knowledge/raw/platform/data_fields/capture_plans/2026-07-30.jsonl",
                     "resume_capture": True,
                 },
             )
@@ -115,6 +117,9 @@ class ConsoleJobsTests(unittest.TestCase):
         self.assertIn("5", capture)
         self.assertIn("--max-fields-per-dataset", capture)
         self.assertIn("6", capture)
+        self.assertIn("--fields-per-scope", capture)
+        self.assertIn("100", capture)
+        self.assertIn("--capture-plan-path", capture)
         self.assertIn("--resume-capture", capture)
         self.assertIn("compile-data-ledger", compile_cmd)
         self.assertNotIn("--enable-live-api", compile_cmd)

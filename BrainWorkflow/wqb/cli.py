@@ -25,6 +25,12 @@ from wqb.data_catalog import (
     filter_fields_by_suffix,
     select_seed_fields,
 )
+from wqb.data_capture_plan import (
+    build_stratified_capture_plan,
+    discover_scope_matrix,
+    load_capture_plan,
+    write_capture_plan,
+)
 from wqb.data_field_capture import capture_platform_data_fields
 from wqb.data_ledger import load_data_ledger, load_data_ledger_from_knowledge
 from wqb.data_ledger_compile import compile_data_ledger_from_raw
@@ -35,6 +41,7 @@ from wqb.knowledge import fetch_knowledge_snapshot
 from wqb.knowledge_bootstrap import bootstrap_knowledge, bootstrap_summary_to_dict
 from wqb.knowledge_compile import compile_research_records
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest, write_freshness_report
+from wqb.knowledge_paths import machine_resource_path
 from wqb.interaction_memory import append_interaction_note
 from wqb.novelty import score_expression_novelty
 from wqb.optimizer import actions_for_check_summary
@@ -213,6 +220,8 @@ def capture_platform_data_fields_command(
     max_fields_per_dataset: int = 0,
     resume_capture: bool = False,
     generated_at: str | None = None,
+    capture_plan_path: str | Path | None = None,
+    fields_per_scope: int = 0,
 ) -> dict[str, Any]:
     """Input: config, vault root, filters, limits. Output: capture summary. Fetch platform data fields into raw."""
     client = build_client(config)
@@ -229,7 +238,55 @@ def capture_platform_data_fields_command(
         max_datasets_per_scope=max_datasets_per_scope,
         max_fields_per_dataset=max_fields_per_dataset,
         resume_capture=resume_capture,
+        capture_plan_path=capture_plan_path,
+        fields_per_scope=fields_per_scope,
     )
+
+
+def discover_data_scope_matrix_command(
+    config: dict[str, Any],
+    knowledge_root: str | Path,
+    instrument_types: list[str] | None = None,
+    regions: list[str] | None = None,
+    delays: list[int] | None = None,
+    universes: list[str] | None = None,
+    max_scopes: int = 0,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Input: config, knowledge root, scope filters. Output: discovery summary. Probe platform scope availability."""
+    client = build_client(config)
+    client.authenticate()
+    return discover_scope_matrix(
+        client,
+        knowledge_root,
+        generated_at=generated_at,
+        instrument_types=instrument_types,
+        regions=regions,
+        delays=delays,
+        universes=universes,
+        max_scopes=max_scopes,
+    )
+
+
+def plan_stratified_data_capture_command(
+    knowledge_root: str | Path,
+    fields_per_scope: int = 100,
+    max_scopes: int = 0,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Input: knowledge root and sampling limits. Output: plan summary. Build a bounded plan from scope discovery."""
+    generated = generated_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    scope_matrix_path = machine_resource_path(knowledge_root, "scope_matrix")
+    rows = load_capture_plan(scope_matrix_path)
+    plan = build_stratified_capture_plan(rows, fields_per_scope=fields_per_scope, max_scopes=max_scopes)
+    path = write_capture_plan(knowledge_root, plan, generated)
+    return {
+        "generated_at": generated,
+        "scope_matrix_path": str(scope_matrix_path),
+        "capture_plan_path": str(path),
+        "scope_count": len(plan),
+        "fields_per_scope": int(fields_per_scope),
+    }
 
 
 def compile_data_ledger_command(knowledge_root: str | Path, capture_dir: str | Path | None = None) -> dict[str, Any]:
@@ -3376,6 +3433,8 @@ def parse_args() -> argparse.Namespace:
             "retry-planned",
             "run-expression-file",
             "plan-research-options",
+            "discover-data-scope-matrix",
+            "plan-stratified-data-capture",
             "capture-platform-data-fields",
             "compile-data-ledger",
             "compile-operator-semantics",
@@ -3448,6 +3507,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-scopes", type=int, default=0)
     parser.add_argument("--max-datasets-per-scope", type=int, default=0)
     parser.add_argument("--max-fields-per-dataset", type=int, default=0)
+    parser.add_argument("--fields-per-scope", type=int, default=0)
+    parser.add_argument("--capture-plan-path", default="")
     parser.add_argument("--resume-capture", action="store_true", default=False)
     parser.add_argument("--capture-dir", default="")
     parser.add_argument("--readiness-output-dir", default="")
@@ -3754,6 +3815,26 @@ def main() -> None:
             raise SystemExit("--enable-live-api is required for plan-research-options")
         result = plan_research_options(config, args.max_options, args.option_output_dir)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "discover-data-scope-matrix":
+        if not args.enable_live_api:
+            raise SystemExit("--enable-live-api is required for discover-data-scope-matrix")
+        result = discover_data_scope_matrix_command(
+            config,
+            args.knowledge_root,
+            instrument_types=None,
+            regions=parse_optional_csv(args.capture_region),
+            delays=parse_optional_int_csv(args.capture_delay),
+            universes=parse_optional_csv(args.capture_universe),
+            max_scopes=args.max_scopes,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "plan-stratified-data-capture":
+        result = plan_stratified_data_capture_command(
+            args.knowledge_root,
+            fields_per_scope=args.fields_per_scope or 100,
+            max_scopes=args.max_scopes,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "capture-platform-data-fields":
         if not args.enable_live_api:
             raise SystemExit("--enable-live-api is required for capture-platform-data-fields")
@@ -3772,6 +3853,8 @@ def main() -> None:
             max_fields_per_dataset=args.max_fields_per_dataset,
             resume_capture=args.resume_capture,
             generated_at=generated_at,
+            capture_plan_path=args.capture_plan_path or None,
+            fields_per_scope=args.fields_per_scope,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "compile-data-ledger":

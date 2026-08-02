@@ -192,6 +192,8 @@ def capture_platform_data_fields(
     max_datasets_per_scope: int = 0,
     max_fields_per_dataset: int = 0,
     resume_capture: bool = False,
+    capture_plan_path: str | Path | None = None,
+    fields_per_scope: int = 0,
 ) -> dict[str, Any]:
     """Input: client, vault root, scope filters, limits. Output: summary dict. Capture platform data fields into raw."""
     root = Path(knowledge_root)
@@ -205,6 +207,7 @@ def capture_platform_data_fields(
         return _capture_platform_data_fields_locked(
             client, knowledge_root, generated_at, instrument_types, regions, delays, universes,
             max_scopes, max_datasets_per_scope, max_fields_per_dataset, resume_capture,
+            capture_plan_path, fields_per_scope,
         )
 
 
@@ -220,6 +223,8 @@ def _capture_platform_data_fields_locked(
     max_datasets_per_scope: int = 0,
     max_fields_per_dataset: int = 0,
     resume_capture: bool = False,
+    capture_plan_path: str | Path | None = None,
+    fields_per_scope: int = 0,
 ) -> dict[str, Any]:
     """Input: capture settings while holding the shared lock. Output: summary dict. Write one non-interleaved raw generation."""
     generated = generated_at or _now()
@@ -230,8 +235,8 @@ def _capture_platform_data_fields_locked(
     if not resume_capture:
         _clear_outputs(capture_dir)
     certification_complete = not any(
-        limit > 0 for limit in (max_scopes, max_datasets_per_scope, max_fields_per_dataset)
-    )
+        limit > 0 for limit in (max_scopes, max_datasets_per_scope, max_fields_per_dataset, fields_per_scope)
+    ) and capture_plan_path is None
     completed_scopes = _completed_scope_keys(capture_dir) if resume_capture else set()
 
     def append(name: str, row: dict[str, Any]) -> None:
@@ -249,11 +254,32 @@ def _capture_platform_data_fields_locked(
         _write_json(capture_dir / "operators.json", {"generated_at": generated, "operators": []})
 
     requested_scopes = build_capture_scopes(instrument_types, regions, delays, universes)
-    scopes = requested_scopes[: int(max_scopes)] if max_scopes > 0 else requested_scopes
+    plan_rows: list[dict[str, Any]] = []
+    if capture_plan_path is not None:
+        from wqb.data_capture_plan import load_capture_plan
+
+        plan_rows = load_capture_plan(capture_plan_path)
+        scopes = [
+            CaptureScope(*_scope_key(row))
+            for row in plan_rows
+        ]
+        requested_scopes = list(scopes)
+    else:
+        scopes = requested_scopes[: int(max_scopes)] if max_scopes > 0 else requested_scopes
+    plan_by_key = {_scope_key(row): row for row in plan_rows}
     for scope in scopes:
         if _scope_key(scope) in completed_scopes:
             continue
-        scope_row = {"generated_at": generated, "scope": _scope_dict(scope), "status": "started"}
+        plan_row = plan_by_key.get(_scope_key(scope), {})
+        field_budget = int(plan_row.get("field_budget", fields_per_scope)) if fields_per_scope > 0 else 0
+        sampling_mode = "stratified" if fields_per_scope > 0 or capture_plan_path else "full_scope"
+        scope_row = {
+            "generated_at": generated,
+            "scope": _scope_dict(scope),
+            "status": "started",
+            "sampling_mode": sampling_mode,
+            "field_budget": field_budget,
+        }
         append("scopes.jsonl", scope_row)
         try:
             data_sets, data_sets_truncated = fetch_data_sets_with_metadata(
@@ -277,7 +303,10 @@ def _capture_platform_data_fields_locked(
             error = ValueError("data-set pagination truncated at implicit cap")
             append("errors.jsonl", _error_row(scope, "/data-sets", error, generated))
             field_errors.append(str(error))
+        remaining_scope_budget = field_budget
         for data_set in data_sets:
+            if remaining_scope_budget == 0 and fields_per_scope > 0:
+                break
             dataset_id = str(data_set.get("id", ""))
             append(
                 "data_sets.jsonl",
@@ -297,12 +326,18 @@ def _capture_platform_data_fields_locked(
                     scope.universe,
                     dataset_id=dataset_id,
                     limit=SAFE_PAGE_LIMIT,
-                    max_records=max_fields_per_dataset if max_fields_per_dataset > 0 else 1000000,
+                    max_records=(
+                        min(max(remaining_scope_budget, 1), SAFE_PAGE_LIMIT)
+                        if fields_per_scope > 0
+                        else max_fields_per_dataset if max_fields_per_dataset > 0 else 1000000
+                    ),
                 )
             except Exception as error:
                 append("errors.jsonl", _error_row(scope, f"/data-fields?dataset.id={dataset_id}", error, generated))
                 field_errors.append(str(error))
                 continue
+            if fields_per_scope > 0:
+                remaining_scope_budget = max(0, remaining_scope_budget - len(fields))
             if fields_truncated and max_fields_per_dataset == 0:
                 error = ValueError(f"data-field pagination truncated at implicit cap for dataset {dataset_id}")
                 append("errors.jsonl", _error_row(scope, f"/data-fields?dataset.id={dataset_id}", error, generated))
@@ -321,7 +356,11 @@ def _capture_platform_data_fields_locked(
         if field_errors:
             scope_row.update({"status": "partial", "data_set_count": len(data_sets), "error_count": len(field_errors), "message": "; ".join(field_errors), "certification_status": "partial"})
         else:
-            scope_row.update({"status": "completed", "data_set_count": len(data_sets), "certification_status": "complete" if certification_complete else "partial"})
+            scope_row.update({
+                "status": "completed",
+                "data_set_count": len(data_sets),
+                "certification_status": "partial" if fields_per_scope > 0 or capture_plan_path else "complete" if certification_complete else "partial",
+            })
         append("scopes.jsonl", scope_row)
 
     latest_scope_rows = _latest_scope_rows(capture_dir)
@@ -354,6 +393,8 @@ def _capture_platform_data_fields_locked(
             "max_datasets_per_scope": int(max_datasets_per_scope),
             "max_fields_per_dataset": int(max_fields_per_dataset),
         },
+        "fields_per_scope": int(fields_per_scope),
+        "capture_plan_path": str(capture_plan_path or ""),
         "latest_scope_outcomes": [latest_scope_rows[key] for key in sorted(latest_scope_rows)],
         "certification_status": "complete" if all_requested_scopes_certified else "partial",
     }
