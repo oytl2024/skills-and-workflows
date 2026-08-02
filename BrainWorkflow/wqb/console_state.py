@@ -155,7 +155,7 @@ def _data_authority_summary(knowledge_root: Path) -> dict[str, Any]:
     """Input: knowledge root. Output: data authority summary. Summarize ledger provenance for dashboard."""
     ledger_path = knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
     try:
-        return summarize_data_ledger_authority(load_data_ledger(ledger_path), knowledge_root)
+        return _data_authority_summary_from_rows(_read_jsonl(ledger_path))
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return {
             "record_count": 0,
@@ -164,6 +164,37 @@ def _data_authority_summary(knowledge_root: Path) -> dict[str, Any]:
             "unclassified_count": 0,
             "authoritative_ready": False,
         }
+
+
+def _ledger_row_authority(row: dict[str, Any]) -> str:
+    """Input: data-ledger JSON row. Output: authority label. Classify dashboard provenance without raw-file scans."""
+    if (
+        row.get("source_quality") == "platform_raw_capture"
+        and row.get("coverage_status") == "measured_raw"
+    ):
+        try:
+            date.fromisoformat(str(row.get("source_updated_at", "")))
+        except (TypeError, ValueError):
+            return "unclassified"
+        return "authoritative_measured"
+    if row.get("source_quality") in {"platform_metadata_cache", "schema_seed", "bootstrap_seed"}:
+        return "seed_cache"
+    if row.get("coverage_status") in {"measured_cache", "schema_seeded", "partial"}:
+        return "seed_cache"
+    return "unclassified"
+
+
+def _data_authority_summary_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Input: data-ledger JSON rows. Output: authority summary. Count metadata classes for the dashboard."""
+    counts = Counter(_ledger_row_authority(row) for row in rows if isinstance(row, dict))
+    record_count = len([row for row in rows if isinstance(row, dict)])
+    return {
+        "record_count": record_count,
+        "authoritative_measured_count": counts.get("authoritative_measured", 0),
+        "seed_cache_count": counts.get("seed_cache", 0),
+        "unclassified_count": counts.get("unclassified", 0),
+        "authoritative_ready": record_count > 0 and counts.get("authoritative_measured", 0) == record_count,
+    }
 
 
 def _semantic_ledger_summary(knowledge_root: Path) -> dict[str, Any]:
@@ -215,9 +246,8 @@ def _row_is_startable(row: dict[str, Any], current: date, max_age_days: int | No
     return (current - source_date).days <= max_age_days
 
 
-def _startable_scopes(knowledge_root: Path) -> list[dict[str, Any]]:
-    """Input: knowledge root. Output: concrete scope rows. Read measured ledger scopes suitable for console selection."""
-    rows = _read_jsonl(knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl")
+def _startable_scopes_from_rows(knowledge_root: Path, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Input: knowledge root and ledger rows. Output: concrete scope rows. Select measured scopes for workflow start."""
     scopes: set[tuple[str, int, str]] = set()
     current = date.today()
     max_age_days = _data_ledger_max_age_days(knowledge_root)
@@ -256,6 +286,14 @@ def _startable_scopes(knowledge_root: Path) -> list[dict[str, Any]]:
         {"region": region, "delay": delay, "universe": universe}
         for region, delay, universe in sorted(scopes)
     ]
+
+
+def _startable_scopes(knowledge_root: Path) -> list[dict[str, Any]]:
+    """Input: knowledge root. Output: concrete scope rows. Read measured ledger scopes suitable for console selection."""
+    return _startable_scopes_from_rows(
+        knowledge_root,
+        _read_jsonl(knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"),
+    )
 
 
 def _schedule_summary(knowledge_root: Path) -> dict[str, Any]:
@@ -367,6 +405,7 @@ def _research_record_summary(run_dir: Path | None) -> dict[str, Any]:
 def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
     """Input: console paths. Output: JSON-safe state dict. Aggregate dashboard data."""
     decisions = paths.knowledge_root / "wiki" / "70_decisions"
+    data_ledger_rows = _read_jsonl(paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl")
     proposals = load_workflow_proposals(decisions)
     proposal_counts = Counter(str(row.get("status", "unclassified")) for row in proposals)
     active_workflow, active_run_dir = _active_workflow_summary(paths.runs_root)
@@ -378,9 +417,9 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
         "freshness": _freshness_summary(paths.knowledge_root),
         "knowledge_contracts": evaluate_knowledge_contract_health(paths.knowledge_root),
         "data_coverage": _data_coverage_summary(paths.knowledge_root),
-        "data_authority": _data_authority_summary(paths.knowledge_root),
+        "data_authority": _data_authority_summary_from_rows(data_ledger_rows),
         "semantic_ledgers": _semantic_ledger_summary(paths.knowledge_root),
-        "startable_scopes": _startable_scopes(paths.knowledge_root),
+        "startable_scopes": _startable_scopes_from_rows(paths.knowledge_root, data_ledger_rows),
         "option_cards": _read_jsonl(decisions / "research_option_cards.jsonl"),
         "schedule": _schedule_summary(paths.knowledge_root),
         "jobs": _job_rows(paths.job_root, paths.knowledge_root),

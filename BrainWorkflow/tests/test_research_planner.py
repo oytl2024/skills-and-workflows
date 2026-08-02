@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from wqb.principle_model import IncentiveSnapshot, SourceEvidence
 from wqb.research_planner import generate_research_options, plan_research_options
@@ -170,6 +171,50 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertIn("authoritative data ledger", " ".join(option["maintenance_blockers"]).lower())
         self.assertTrue(all(item["stale"] for item in option["evidence"]))
         self.assertIn("refresh", option["title"].lower())
+
+    def test_plan_research_options_summarizes_data_authority_without_raw_evidence_scan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            write_seed_knowledge(root)
+            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger.write_text(
+                json.dumps(
+                    {
+                        "dataset_id": "fundamental3",
+                        "dataset_name": "Fundamentals",
+                        "field_id": "cash_field",
+                        "field_type": "MATRIX",
+                        "region": "USA",
+                        "delay": 1,
+                        "universe": "TOP3000",
+                        "semantic_tags": ["power_pool"],
+                        "coverage": 0.8,
+                        "alpha_count": 0,
+                        "user_count": 0,
+                        "simulation_usage_count": 0,
+                        "submitted_usage_count": 0,
+                        "last_used_at": "",
+                        "best_result_label": "unexplored",
+                        "correlation_risk": "low",
+                        "source_paths": ["raw/platform/data_fields/2026-07-22/data_fields.jsonl"],
+                        "source_quality": "platform_raw_capture",
+                        "coverage_status": "measured_raw",
+                        "source_updated_at": "2026-07-22",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch("wqb.data_ledger._has_authoritative_capture_evidence", side_effect=AssertionError("raw scan should not run")):
+                result = plan_research_options(
+                    knowledge_root=root,
+                    generated_at="2026-07-22T00:00:00+00:00",
+                    max_options=1,
+                    snapshot=visible_incentive_snapshot(),
+                )
+
+        self.assertEqual(result["options"][0]["data_authority"]["authoritative_measured_count"], 1)
 
     def test_generate_research_options_prioritizes_visible_incentives(self):
         snapshot = IncentiveSnapshot(

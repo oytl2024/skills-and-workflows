@@ -15,6 +15,7 @@ SUBMITTED_USAGE_PENALTY = 1.5
 SIM_USAGE_PENALTY = 0.08
 REPAIRABLE_SIGNAL_BONUS = 1.0
 PROD_CORR_PENALTY = 2.0
+DATA_LEDGER_MARKDOWN_PREVIEW_LIMIT = 200
 
 
 @dataclass(frozen=True)
@@ -411,15 +412,25 @@ def _record_matches_scope(
 def write_data_ledger_markdown(path: Path, records: list[DataLedgerRecord], generated_at: str) -> Path:
     """Input: output path, records, timestamp. Output: path. Write reviewable Markdown data ledger."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    preview_records = records[:DATA_LEDGER_MARKDOWN_PREVIEW_LIMIT]
+    preview_count = len(preview_records)
     lines = [
         "# Data Ledger",
         "",
         f"Generated at: `{generated_at}`",
         "",
+        "This Markdown file is a compact Obsidian entry point. The full machine-readable ledger stays in the adjacent JSONL file.",
+        "",
+        f"Total records: `{len(records)}`",
+        f"Preview records: `{preview_count}`",
+        "Full machine ledger: `data_ledger.jsonl`",
+        "",
+        "## Preview",
+        "",
         "| Dataset | Field | Scope | Authority | Tags | Usage | Best Result | Risk |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
-    for record in records:
+    for record in preview_records:
         scope = f"{record.region} D{record.delay} {record.universe}"
         authority = data_record_authority(record)
         tags = ", ".join(record.semantic_tags)
@@ -427,5 +438,7 @@ def write_data_ledger_markdown(path: Path, records: list[DataLedgerRecord], gene
         lines.append(
             f"| {record.dataset_id} | `{record.field_id}` | {scope} | {authority} | {tags} | {usage} | {record.best_result_label} | {record.correlation_risk} |"
         )
+    if len(records) > preview_count:
+        lines.extend(["", f"Preview truncated after `{preview_count}` records to keep Obsidian responsive."])
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path

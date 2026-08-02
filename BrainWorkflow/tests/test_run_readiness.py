@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from wqb.run_readiness import evaluate_run_readiness, write_readiness_reports
 
@@ -348,6 +349,31 @@ class RunReadinessTests(unittest.TestCase):
         self.assertFalse(report.passed)
         self.assertIn("insufficient_data_coverage", {issue.code for issue in report.issues})
 
+    def test_research_ignores_zero_coverage_rows_when_positive_measured_fields_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.create_scope_ready_artifacts(root)
+            path = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            positive = json.loads(path.read_text(encoding="utf-8"))
+            zero = {**positive, "field_id": "zero_coverage_field", "coverage": 0.0}
+            path.write_text(json.dumps(zero) + "\n" + json.dumps(positive) + "\n", encoding="utf-8")
+
+            report = evaluate_run_readiness(
+                root,
+                mode="research",
+                batch_size=30,
+                live_api_enabled=True,
+                region="USA",
+                universe="TOP3000",
+                delay=1,
+                today_value="2026-07-10",
+            )
+
+        issue_codes = {issue.code for issue in report.issues}
+        self.assertTrue(report.passed)
+        self.assertNotIn("insufficient_data_coverage", issue_codes)
+        self.assertNotIn("cache_only_data_ledger", issue_codes)
+
     def test_research_blocks_schema_seed_even_with_positive_coverage(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -503,6 +529,37 @@ class RunReadinessTests(unittest.TestCase):
                 delay=1,
                 today_value="2026-07-10",
             )
+
+        self.assertTrue(report.passed)
+        self.assertFalse(report.blocked)
+
+    def test_research_certifies_scope_rows_in_batch_without_per_record_raw_scans(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.create_scope_ready_artifacts(root)
+            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            first = json.loads(ledger.read_text(encoding="utf-8"))
+            second = {**first, "field_id": "news_field_two"}
+            ledger.write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n", encoding="utf-8")
+            raw = root / "raw" / "platform" / "data_fields" / "2026-07-10" / "data_fields.jsonl"
+            scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+            raw.write_text(
+                json.dumps({"scope": scope, "data_set": {"id": "news12"}, "field": {"id": "news_field"}}) + "\n"
+                + json.dumps({"scope": scope, "data_set": {"id": "news12"}, "field": {"id": "news_field_two"}}) + "\n",
+                encoding="utf-8",
+            )
+
+            with patch("wqb.run_readiness.is_authoritative_data_record", side_effect=AssertionError("per-record raw scan should not run")):
+                report = evaluate_run_readiness(
+                    root,
+                    mode="research",
+                    batch_size=30,
+                    live_api_enabled=True,
+                    region="USA",
+                    universe="TOP3000",
+                    delay=1,
+                    today_value="2026-07-10",
+                )
 
         self.assertTrue(report.passed)
         self.assertFalse(report.blocked)

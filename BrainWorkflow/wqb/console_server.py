@@ -5,6 +5,8 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import threading
+import time
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 import webbrowser
@@ -36,6 +38,9 @@ ASYNC_CONSOLE_ACTIONS = {
     "compile-research-records",
     "plan-research-options",
 }
+
+CONSOLE_STATE_CACHE_TTL_SECONDS = 15.0
+CONSOLE_REFRESH_INTERVAL_MS = 15000
 
 
 def _fallback_option_id(index: int) -> str:
@@ -333,16 +338,23 @@ def render_dashboard(state: dict[str, Any]) -> str:
 <section class="wide"><h2>Recent Jobs</h2><div data-runtime-fragment='recent_jobs'>{fragments["recent_jobs"]}</div></section>
 </div>
 <script>
+let refreshInFlight = false;
 async function refreshState(){{
-  const response = await fetch('/api/fragments');
-  if (!response.ok) return;
-  const fragments = await response.json();
-  for (const [name, html] of Object.entries(fragments)) {{
-    const target = document.querySelector('[data-runtime-fragment="' + name + '"]');
-    if (target) target.innerHTML = html;
+  if (refreshInFlight) return;
+  refreshInFlight = true;
+  try {{
+    const response = await fetch('/api/fragments');
+    if (!response.ok) return;
+    const fragments = await response.json();
+    for (const [name, html] of Object.entries(fragments)) {{
+      const target = document.querySelector('[data-runtime-fragment="' + name + '"]');
+      if (target) target.innerHTML = html;
+    }}
+  }} finally {{
+    refreshInFlight = false;
   }}
 }}
-setInterval(refreshState, 5000);
+setInterval(refreshState, {CONSOLE_REFRESH_INTERVAL_MS});
 </script>
 """
     return _html_page("BrainWorkflow Control Center", body)
@@ -574,18 +586,32 @@ def _validate_option_data_coverage(paths: ConsolePaths, option: dict[str, Any], 
                 matching_rows.append(row)
     if not matching_rows:
         raise ValueError("data coverage ledger has no records matching the selected option scope")
-    if any(row.get("source_quality") != "platform_raw_capture" or row.get("coverage_status") != "measured_raw" for row in matching_rows):
+    research_rows = []
+    for row in matching_rows:
+        if row.get("source_quality") != "platform_raw_capture" or row.get("coverage_status") != "measured_raw":
+            continue
+        try:
+            if float(row.get("coverage", 0.0)) <= 0.0:
+                continue
+        except (TypeError, ValueError):
+            continue
+        research_rows.append(row)
+    if not research_rows:
         raise ValueError("data coverage ledger for the selected scope is not certified measured platform coverage")
     template_path = paths.knowledge_root / "wiki" / "30_templates" / "template_library.jsonl"
     templates = load_template_library(template_path)
     incentive = str(option.get("primary_incentive", ""))
-    for row in matching_rows:
+    has_template_match = False
+    for row in research_rows:
         compatible_ids = row.get("compatible_template_ids")
         if not isinstance(compatible_ids, list) or not compatible_ids:
-            raise ValueError("data coverage ledger for the selected scope has no compatible templates")
+            continue
         selected = select_templates_for_data(templates, _ledger_record(row, scope), incentive, len(templates), **scope)
-        if not set(str(item) for item in compatible_ids) & {template.template_id for template in selected}:
-            raise ValueError("data coverage ledger for the selected scope has no compatible templates in the template library")
+        if set(str(item) for item in compatible_ids) & {template.template_id for template in selected}:
+            has_template_match = True
+            break
+    if not has_template_match:
+        raise ValueError("data coverage ledger for the selected scope has no compatible templates in the template library")
     _require_scoped_readiness(paths, scope)
 
 
@@ -671,6 +697,35 @@ def update_console_proposal_decision(paths: ConsolePaths, form: dict[str, Any]) 
         return completed
 
 
+def _load_cached_console_state(server: Any, paths: ConsolePaths) -> dict[str, Any]:
+    """Input: Console server and paths. Output: state dict. Reuse expensive state snapshots during poll bursts."""
+    now = time.monotonic()
+    lock = getattr(server, "console_state_cache_lock", None)
+    cache = getattr(server, "console_state_cache", None)
+    if lock is None or cache is None:
+        return load_console_state(paths)
+    with lock:
+        cached_state = cache.get("state")
+        loaded_at = float(cache.get("loaded_at", 0.0))
+        if isinstance(cached_state, dict) and now - loaded_at < CONSOLE_STATE_CACHE_TTL_SECONDS:
+            return cached_state
+        fresh_state = load_console_state(paths)
+        cache["state"] = fresh_state
+        cache["loaded_at"] = time.monotonic()
+        return fresh_state
+
+
+def _invalidate_cached_console_state(server: Any) -> None:
+    """Input: Console server. Output: none. Force the next poll to observe a posted action or proposal change."""
+    lock = getattr(server, "console_state_cache_lock", None)
+    cache = getattr(server, "console_state_cache", None)
+    if lock is None or cache is None:
+        return
+    with lock:
+        cache["state"] = None
+        cache["loaded_at"] = 0.0
+
+
 class ConsoleRequestHandler(BaseHTTPRequestHandler):
     def _send_html(self, html: str, status: int = 200) -> None:
         """Input: HTML and status. Output: none. Send one HTML response."""
@@ -701,7 +756,7 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
         """Input: HTTP GET. Output: response. Route read-only console pages."""
         parsed = urlparse(self.path)
         paths: ConsolePaths = self.server.console_paths  # type: ignore[attr-defined]
-        state = load_console_state(paths)
+        state = _load_cached_console_state(self.server, paths)
         if parsed.path == "/api/fragments":
             self._send_json(render_runtime_fragments(state))
             return
@@ -721,14 +776,17 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
         try:
             if parsed.path == "/proposals/create":
                 completed = create_console_proposal(paths, form)
+                _invalidate_cached_console_state(self.server)
                 self._send_html(f"<html><body>Proposal job {escape(completed.status)}. <a href='/proposals'>Back</a></body></html>")
                 return
             if parsed.path == "/proposals/decision":
                 completed = update_console_proposal_decision(paths, form)
+                _invalidate_cached_console_state(self.server)
                 self._send_html(f"<html><body>Decision job {escape(completed.status)}. <a href='/proposals'>Back</a></body></html>")
                 return
             if parsed.path == "/actions/run":
                 completed = run_console_action(paths, form)
+                _invalidate_cached_console_state(self.server)
                 if completed.status == "running":
                     self.send_response(303)
                     self.send_header("Location", "/")
@@ -750,6 +808,8 @@ def make_console_server(host: str, port: int, paths: ConsolePaths) -> ThreadingH
     """Input: host, port, paths. Output: HTTP server. Construct a local Workflow Console server."""
     server = ThreadingHTTPServer((host, port), ConsoleRequestHandler)
     server.console_paths = paths  # type: ignore[attr-defined]
+    server.console_state_cache = {"loaded_at": 0.0, "state": None}  # type: ignore[attr-defined]
+    server.console_state_cache_lock = threading.Lock()  # type: ignore[attr-defined]
     return server
 
 

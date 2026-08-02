@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from wqb.workflow_stage_adapters import create_start_snapshot, schedule_research_stage, summarize_stage_artifacts
 
@@ -26,8 +27,8 @@ def valid_option(**overrides):
     return {**row, **overrides}
 
 
-def write_start_artifacts(root: Path, ledger_row: dict[str, object]) -> None:
-    """Input: root and ledger row. Output: none. Write strict start-snapshot fixtures."""
+def write_start_artifacts(root: Path, ledger_row: dict[str, object] | list[dict[str, object]]) -> None:
+    """Input: root and ledger row(s). Output: none. Write strict start-snapshot fixtures."""
     knowledge = root / "knowledge"
     decisions = knowledge / "wiki" / "70_decisions"
     decisions.mkdir(parents=True)
@@ -61,7 +62,8 @@ def write_start_artifacts(root: Path, ledger_row: dict[str, object]) -> None:
         "available_scopes": [{"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}],
         "compatible_template_ids": ["matrix_ts_zscore_rank"],
     }
-    ledger.write_text(json.dumps({**base, **ledger_row}) + "\n", encoding="utf-8")
+    ledger_rows = ledger_row if isinstance(ledger_row, list) else [ledger_row]
+    ledger.write_text("".join(json.dumps({**base, **row}) + "\n" for row in ledger_rows), encoding="utf-8")
     templates = knowledge / "wiki" / "30_templates" / "template_library.jsonl"
     templates.parent.mkdir(parents=True)
     templates.write_text(
@@ -138,6 +140,59 @@ class WorkflowStageAdaptersTests(unittest.TestCase):
                         "option-1",
                         {"region": "USA", "delay": 1, "universe": "TOP3000"},
                     )
+
+    def test_create_start_snapshot_skips_non_research_rows_when_template_match_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_start_artifacts(
+                root,
+                [
+                    {
+                        "dataset_id": "model10",
+                        "field_id": "mdl10_group_name",
+                        "field_type": "GROUP",
+                        "semantic_tags": ["model"],
+                        "coverage": 0.0,
+                        "compatible_template_ids": ["matrix_ts_zscore_rank"],
+                    },
+                    {"field_id": "cash_field", "field_type": "MATRIX", "coverage": 1.0},
+                ],
+            )
+
+            with patch("wqb.workflow_stage_adapters._require_start_snapshot_readiness"):
+                snapshot = create_start_snapshot(
+                    root / "knowledge",
+                    "option-1",
+                    {"region": "USA", "delay": 1, "universe": "TOP3000"},
+                )
+
+        self.assertEqual([row["field_id"] for row in snapshot["data_ledger_rows"]], ["cash_field"])
+        self.assertEqual(snapshot["compatible_template_ids"], ["matrix_ts_zscore_rank"])
+        self.assertEqual(snapshot["gate_metadata"]["matching_data_ledger_row_count"], 2)
+        self.assertEqual(snapshot["gate_metadata"]["snapshot_data_ledger_row_count"], 1)
+
+    def test_create_start_snapshot_caps_embedded_data_ledger_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_start_artifacts(
+                root,
+                [
+                    {"field_id": f"cash_field_{index}", "field_type": "MATRIX", "coverage": 1.0}
+                    for index in range(205)
+                ],
+            )
+
+            with patch("wqb.workflow_stage_adapters._require_start_snapshot_readiness"):
+                snapshot = create_start_snapshot(
+                    root / "knowledge",
+                    "option-1",
+                    {"region": "USA", "delay": 1, "universe": "TOP3000"},
+                )
+
+        self.assertEqual(len(snapshot["data_ledger_rows"]), 200)
+        self.assertEqual(snapshot["gate_metadata"]["matching_data_ledger_row_count"], 205)
+        self.assertEqual(snapshot["gate_metadata"]["snapshot_data_ledger_row_count"], 200)
+        self.assertEqual(snapshot["gate_metadata"]["data_ledger_row_limit"], 200)
 
     def test_schedule_research_stage_writes_stage_artifact_from_option_card(self):
         with tempfile.TemporaryDirectory() as tmp:

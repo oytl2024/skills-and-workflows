@@ -110,6 +110,14 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn("data-runtime-fragment='timeline'", html)
         self.assertIn("/api/fragments", html)
 
+    def test_render_dashboard_polling_does_not_overlap_refresh_requests(self):
+        html = render_dashboard({"active_workflow": {"exists": False}, "jobs": []})
+
+        self.assertIn("let refreshInFlight = false", html)
+        self.assertIn("if (refreshInFlight) return", html)
+        self.assertIn("refreshInFlight = true", html)
+        self.assertIn("refreshInFlight = false", html)
+
     def test_render_dashboard_labels_cache_data_as_not_authoritative(self):
         state = {
             "readiness": {"exists": True, "passed": False},
@@ -705,6 +713,47 @@ class ConsoleServerTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "templates"):
                     build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
+    def test_build_action_command_ignores_non_tradeable_rows_when_template_matches_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            self._write_start_fixture(
+                paths,
+                {"title": "Power Pool", "candidate_scope": "USA D1 TOP3000"},
+                [
+                    {
+                        "dataset_id": "model10",
+                        "field_id": "mdl10_group_name",
+                        "field_type": "GROUP",
+                        "region": "USA",
+                        "delay": 1,
+                        "universe": "TOP3000",
+                        "source_quality": "platform_raw_capture",
+                        "coverage_status": "measured_raw",
+                        "compatible_template_ids": ["matrix_ts_zscore_rank"],
+                    },
+                    {
+                        "dataset_id": "fundamental3",
+                        "field_id": "cash_field",
+                        "field_type": "MATRIX",
+                        "region": "USA",
+                        "delay": 1,
+                        "universe": "TOP3000",
+                        "source_quality": "platform_raw_capture",
+                        "coverage_status": "measured_raw",
+                        "compatible_template_ids": ["matrix_ts_zscore_rank"],
+                    },
+                ],
+            )
+
+            command = build_action_command(
+                "workflow-start-from-option",
+                paths,
+                {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"},
+            )
+
+        self.assertIn("workflow-start", command)
+
     def test_build_action_command_refuses_data_capture_without_live_api(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = make_paths(Path(tmp))
@@ -809,6 +858,39 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertEqual(json.loads(body.decode("utf-8")), expected)
         self.assertEqual(redirect_status, 303)
         self.assertEqual(redirect_headers["Location"], "/")
+
+    def test_handler_reuses_cached_state_between_poll_requests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            server = make_console_server("127.0.0.1", 0, paths)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with patch(
+                    "wqb.console_server.load_console_state",
+                    return_value={"jobs": [{"job_id": "cached-state"}]},
+                ) as loader:
+                    first = HTTPConnection(*server.server_address, timeout=5)
+                    first.request("GET", "/api/state")
+                    first_response = first.getresponse()
+                    first_body = first_response.read()
+                    first.close()
+                    second = HTTPConnection(*server.server_address, timeout=5)
+                    second.request("GET", "/api/state")
+                    second_response = second.getresponse()
+                    second_body = second_response.read()
+                    second.close()
+            finally:
+                server.shutdown()
+                thread.join(timeout=5)
+                server.server_close()
+
+        self.assertEqual(first_response.status, 200)
+        self.assertEqual(second_response.status, 200)
+        self.assertEqual(json.loads(first_body.decode("utf-8"))["jobs"][0]["job_id"], "cached-state")
+        self.assertEqual(json.loads(second_body.decode("utf-8"))["jobs"][0]["job_id"], "cached-state")
+        self.assertEqual(loader.call_count, 1)
 
     def test_run_console_action_keeps_short_actions_synchronous(self):
         with tempfile.TemporaryDirectory() as tmp:

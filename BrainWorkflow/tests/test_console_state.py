@@ -4,7 +4,8 @@ import unittest
 from datetime import date, timedelta
 from pathlib import Path
 
-from wqb.console_state import ConsolePaths, _active_workflow_summary, _startable_scopes, load_console_state
+from wqb.console_state import ConsolePaths, _active_workflow_summary, _data_authority_summary, _startable_scopes, load_console_state
+from unittest.mock import patch
 
 
 def make_paths(root: Path) -> ConsolePaths:
@@ -20,6 +21,36 @@ def make_paths(root: Path) -> ConsolePaths:
 
 
 class ConsoleStateTests(unittest.TestCase):
+    def test_data_authority_summary_uses_lightweight_ledger_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger.parent.mkdir(parents=True)
+            ledger.write_text(
+                json.dumps(
+                    {
+                        "dataset_id": "fundamental3",
+                        "field_id": "cash_field",
+                        "field_type": "MATRIX",
+                        "region": "USA",
+                        "delay": 1,
+                        "universe": "TOP3000",
+                        "source_quality": "platform_raw_capture",
+                        "coverage_status": "measured_raw",
+                        "source_updated_at": date.today().isoformat(),
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch("wqb.console_state.load_data_ledger", side_effect=AssertionError("heavy loader should not run")):
+                summary = _data_authority_summary(root)
+
+        self.assertEqual(summary["record_count"], 1)
+        self.assertEqual(summary["authoritative_measured_count"], 1)
+        self.assertTrue(summary["authoritative_ready"])
+
     def test_load_console_state_includes_timeline_current_work_and_ai_checkpoints(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

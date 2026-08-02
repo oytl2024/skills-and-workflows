@@ -32,7 +32,7 @@ def _planner_contract_inputs(knowledge_root: Path) -> dict[str, Any]:
     operators = load_operator_semantics(knowledge_root / "wiki" / "20_semantics" / "operator_semantics.jsonl")
     benchmark_rules = load_active_benchmark_rules(knowledge_root, fallback_to_defaults=False)
     planner_rules = rules_for_consumer(benchmark_rules, "research_planner")
-    data_authority = summarize_data_ledger_authority(data_records, knowledge_root)
+    data_authority = summarize_data_ledger_authority(data_records)
     blockers = []
     if not data_authority.get("authoritative_measured_count"):
         blockers.append("Authoritative data ledger is missing or has no measured platform rows.")

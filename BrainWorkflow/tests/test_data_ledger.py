@@ -299,6 +299,39 @@ class DataLedgerTest(unittest.TestCase):
         self.assertIn("analyst9_eps_revision", text)
         self.assertIn("analyst_revision, growth", text)
 
+    def test_write_data_ledger_markdown_limits_large_human_preview(self):
+        records = [
+            DataLedgerRecord(
+                dataset_id="dataset",
+                dataset_name="Dataset",
+                field_id=f"field_{index:03d}",
+                field_type="MATRIX",
+                region="USA",
+                delay=1,
+                universe="TOP3000",
+                semantic_tags=["growth"],
+                coverage=0.5,
+                alpha_count=0,
+                user_count=0,
+                simulation_usage_count=0,
+                submitted_usage_count=0,
+                last_used_at="",
+                best_result_label="unexplored",
+                correlation_risk="low",
+                source_paths=["raw/platform/data_fields/2026-07-29/data_fields.jsonl"],
+            )
+            for index in range(205)
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            output = write_data_ledger_markdown(Path(tmp) / "data_ledger.md", records, "2026-07-10T00:00:00Z")
+            text = output.read_text(encoding="utf-8")
+
+        self.assertIn("Total records: `205`", text)
+        self.assertIn("Preview records: `200`", text)
+        self.assertIn("Full machine ledger: `data_ledger.jsonl`", text)
+        self.assertIn("field_199", text)
+        self.assertNotIn("field_200", text)
+
 
 if __name__ == "__main__":
     unittest.main()

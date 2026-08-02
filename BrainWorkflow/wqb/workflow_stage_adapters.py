@@ -24,6 +24,8 @@ from wqb.run_readiness import evaluate_run_readiness
 from wqb.template_library import load_template_library, select_templates_for_data, template_record_from_dict
 
 
+START_SNAPSHOT_DATA_LEDGER_ROW_LIMIT = 200
+
 POST_SCHEDULE_STAGES = (
     "scout_seed",
     "batch_generation",
@@ -189,6 +191,92 @@ def _row_has_source_date(row: dict[str, Any]) -> bool:
     return True
 
 
+def _row_has_measured_platform_coverage(row: dict[str, Any]) -> bool:
+    """Input: ledger row. Output: bool. Check whether the row is certified raw platform coverage."""
+    return row.get("source_quality") == "platform_raw_capture" and row.get("coverage_status") == "measured_raw"
+
+
+def _row_template_matches(
+    option: dict[str, Any],
+    scope: dict[str, Any],
+    row: dict[str, Any],
+    templates: list[Any],
+) -> set[str]:
+    """Input: option, scope, ledger row, templates. Output: matching template IDs for this data row."""
+    row_template_ids = row.get("compatible_template_ids")
+    if not isinstance(row_template_ids, list) or not row_template_ids:
+        return set()
+    incentive = str(option.get("primary_incentive", ""))
+    selected = select_templates_for_data(
+        templates,
+        data_ledger_record_from_dict(row),
+        incentive,
+        len(templates),
+        region=scope["region"],
+        delay=scope["delay"],
+        universe=scope["universe"],
+    )
+    return {str(item) for item in row_template_ids} & {template.template_id for template in selected}
+
+
+def _select_start_snapshot_rows(
+    option: dict[str, Any],
+    scope: dict[str, Any],
+    ledger_rows: list[dict[str, Any]],
+    template_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str], dict[str, int]]:
+    """Input: option, scope, ledger rows, templates. Output: bounded snapshot rows, template IDs, and row counts."""
+    if not ledger_rows:
+        raise ValueError("start snapshot data ledger rows are required")
+    if not template_rows:
+        raise ValueError("start snapshot template rows are required")
+    templates = [template_record_from_dict(row) for row in template_rows]
+    compatible_ids: set[str] = set()
+    selected_rows: list[dict[str, Any]] = []
+    counts = {
+        "matching_data_ledger_row_count": len(ledger_rows),
+        "measured_platform_row_count": 0,
+        "positive_coverage_row_count": 0,
+        "source_dated_row_count": 0,
+        "template_id_row_count": 0,
+        "template_matched_row_count": 0,
+    }
+    for row in ledger_rows:
+        if not _row_matches_scope(row, scope):
+            raise ValueError("start snapshot data ledger row does not match selected scope")
+        if not _row_has_measured_platform_coverage(row):
+            continue
+        counts["measured_platform_row_count"] += 1
+        if not _row_has_positive_coverage(row):
+            continue
+        counts["positive_coverage_row_count"] += 1
+        if not _row_has_source_date(row):
+            continue
+        counts["source_dated_row_count"] += 1
+        row_template_ids = row.get("compatible_template_ids")
+        if not isinstance(row_template_ids, list) or not row_template_ids:
+            continue
+        counts["template_id_row_count"] += 1
+        matching = _row_template_matches(option, scope, row, templates)
+        if not matching:
+            continue
+        counts["template_matched_row_count"] += 1
+        compatible_ids.update(matching)
+        if len(selected_rows) < START_SNAPSHOT_DATA_LEDGER_ROW_LIMIT:
+            selected_rows.append(dict(row))
+    if counts["measured_platform_row_count"] == 0:
+        raise ValueError("start snapshot data ledger rows must be measured platform coverage")
+    if counts["positive_coverage_row_count"] == 0:
+        raise ValueError("start snapshot data ledger rows must have positive measured coverage")
+    if counts["source_dated_row_count"] == 0:
+        raise ValueError("start snapshot data ledger rows must include source_updated_at")
+    if counts["template_id_row_count"] == 0:
+        raise ValueError("start snapshot data ledger rows must include compatible template IDs")
+    if counts["template_matched_row_count"] == 0:
+        raise ValueError("start snapshot has no compatible templates for measured ledger rows")
+    return selected_rows, sorted(compatible_ids), counts
+
+
 def _validate_start_artifact_rows(
     option: dict[str, Any],
     scope: dict[str, Any],
@@ -201,12 +289,11 @@ def _validate_start_artifact_rows(
     if not template_rows:
         raise ValueError("start snapshot template rows are required")
     templates = [template_record_from_dict(row) for row in template_rows]
-    incentive = str(option.get("primary_incentive", ""))
     compatible_ids: set[str] = set()
     for row in ledger_rows:
         if not _row_matches_scope(row, scope):
             raise ValueError("start snapshot data ledger row does not match selected scope")
-        if row.get("source_quality") != "platform_raw_capture" or row.get("coverage_status") != "measured_raw":
+        if not _row_has_measured_platform_coverage(row):
             raise ValueError("start snapshot data ledger rows must be measured platform coverage")
         if not _row_has_positive_coverage(row):
             raise ValueError("start snapshot data ledger rows must have positive measured coverage")
@@ -215,16 +302,7 @@ def _validate_start_artifact_rows(
         row_template_ids = row.get("compatible_template_ids")
         if not isinstance(row_template_ids, list) or not row_template_ids:
             raise ValueError("start snapshot data ledger rows must include compatible template IDs")
-        selected = select_templates_for_data(
-            templates,
-            data_ledger_record_from_dict(row),
-            incentive,
-            len(templates),
-            region=scope["region"],
-            delay=scope["delay"],
-            universe=scope["universe"],
-        )
-        matching = {str(item) for item in row_template_ids} & {template.template_id for template in selected}
+        matching = _row_template_matches(option, scope, row, templates)
         if not matching:
             raise ValueError("start snapshot has no compatible templates for a measured ledger row")
         compatible_ids.update(matching)
@@ -257,7 +335,10 @@ def create_start_snapshot(
         if _row_matches_scope(row, scope)
     ]
     template_rows = _read_jsonl_objects(knowledge / "wiki" / "30_templates" / "template_library.jsonl")
-    compatible_ids = _validate_start_artifact_rows(selected, scope, ledger_rows, template_rows)
+    snapshot_ledger_rows, compatible_ids, row_counts = _select_start_snapshot_rows(
+        selected, scope, ledger_rows, template_rows
+    )
+    _validate_start_artifact_rows(selected, scope, snapshot_ledger_rows, template_rows)
     selected_template_rows = [row for row in template_rows if str(row.get("template_id", "")) in set(compatible_ids)]
     benchmark_rules = load_benchmark_rules(knowledge / BENCHMARK_RULES_PATH)
     if not benchmark_rules:
@@ -266,7 +347,7 @@ def create_start_snapshot(
         "artifact_binding_version": START_SNAPSHOT_VERSION,
         "selected_option": dict(selected),
         "selected_scope": dict(scope),
-        "data_ledger_rows": [dict(row) for row in ledger_rows],
+        "data_ledger_rows": [dict(row) for row in snapshot_ledger_rows],
         "compatible_template_ids": compatible_ids,
         "template_rows": selected_template_rows,
         "benchmark_rulebook": {
@@ -279,6 +360,9 @@ def create_start_snapshot(
             "required_coverage_status": "measured_raw",
             "required_positive_coverage": True,
             "required_source_updated_at": True,
+            "data_ledger_row_limit": START_SNAPSHOT_DATA_LEDGER_ROW_LIMIT,
+            "snapshot_data_ledger_row_count": len(snapshot_ledger_rows),
+            **row_counts,
         },
     }
 
