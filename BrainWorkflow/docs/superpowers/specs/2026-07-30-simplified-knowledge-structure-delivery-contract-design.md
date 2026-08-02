@@ -1,7 +1,7 @@
 # Simplified Knowledge Structure And Delivery Contract Design
 
 Date: 2026-07-30
-Status: user-approved design, pending implementation plan
+Status: implemented, pending live platform refresh and routine operation hardening
 
 ## Purpose
 
@@ -395,6 +395,24 @@ python -c "import sys, runpy; sys.platform='linux'; runpy.run_module('unittest',
 python -m compileall -q wqb tests
 Set-Location 'C:\Users\oytl\Desktop\pyproject\brain\skills-and-workflows'
 git diff --check
+```
+
+## Implementation Notes
+
+The simplified knowledge structure delivery contract was implemented in commits
+`24a1d54` through `9d816c8`. The implementation keeps `knowledge/raw`,
+`knowledge/machine`, and `knowledge/wiki` as the active knowledge layers,
+compiles maintenance evidence locally, and writes durable delivery-gate reports.
+
+Final non-live verification commands:
+
+```powershell
+Set-Location 'C:\Users\oytl\Desktop\pyproject\brain\skills-and-workflows\BrainWorkflow'
+$env:SystemRoot='C:\Windows'; $env:windir='C:\Windows'
+python -c "import sys, runpy; sys.platform='linux'; runpy.run_module('unittest', run_name='__main__')" discover -s tests -q
+python -m compileall -q wqb tests
+python -m wqb.cli compile-knowledge --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --apply-cleanup
+python -m wqb.cli delivery-gate --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --runs-root 'C:\Users\oytl\Desktop\pyproject\brain\runs'
 ```
 
 ## Design Summary

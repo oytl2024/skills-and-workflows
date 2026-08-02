@@ -65,6 +65,20 @@ python -m wqb.cli workflow-resume --knowledge-root 'C:\Users\oytl\Desktop\pyproj
 
 ## Knowledge Maintenance
 
+The active vault has three layers:
+
+- `knowledge/raw`: facts, platform snapshots, forum/advisor material, interaction notes, raw research records, and maintenance evidence.
+- `knowledge/machine`: JSON/JSONL resources consumed by the workflow code.
+- `knowledge/wiki`: compact human lessons and selected case reports.
+
+Normal maintenance command:
+
+```powershell
+python -m wqb.cli compile-knowledge --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --apply-cleanup
+```
+
+After a platform data refresh, run `compile-knowledge` before research scheduling.
+
 The research workflow consumes compiled knowledge. It should not recapture all platform documents at every startup.
 
 There are two distinct maintenance situations:
@@ -94,6 +108,18 @@ python -m wqb.cli readiness-check --knowledge-root 'C:\Users\oytl\Desktop\pyproj
 ```
 
 Use the routine loop after a research session or on a scheduled maintenance day. After platform data-field capture, run `compile-data-ledger` before the health and readiness checks below.
+
+## Stratified Platform Data Capture
+
+Use breadth-first capture before deep capture:
+
+```powershell
+python -m wqb.cli discover-data-scope-matrix --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --enable-live-api --max-scopes 40
+python -m wqb.cli plan-stratified-data-capture --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --fields-per-scope 100 --max-scopes 40
+python -m wqb.cli capture-platform-data-fields --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --enable-live-api --capture-plan-path '<plan-path>' --fields-per-scope 100
+python -m wqb.cli compile-data-ledger --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
+python -m wqb.cli compile-knowledge --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --apply-cleanup
+```
 
 ## Platform Data Field Maintenance
 
@@ -191,6 +217,16 @@ Safety rules:
 - Platform option refresh requires the `enable_live_api` checkbox.
 - Workflow start refuses to run from the console when required compiled knowledge is stale or missing; run knowledge maintenance first.
 - Submit actions are not auto-triggered by the first console version.
+
+## Delivery Gate
+
+Run this before considering the fixed workflow ready for routine operation:
+
+```powershell
+python -m wqb.cli delivery-gate --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --runs-root 'C:\Users\oytl\Desktop\pyproject\brain\runs'
+```
+
+A planned pause is acceptable only when the report states the pause, stage, reason, and evidence path.
 
 ## Minimum Verification
 

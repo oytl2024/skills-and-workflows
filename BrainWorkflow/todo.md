@@ -1,5 +1,42 @@
 # BrainWorkflow TODO
 
+## 2026-08-02 Task 10: Documentation, Console Operating Guide, And Final Verification
+
+### Requirement Summary
+- Document simplified knowledge maintenance, breadth-first platform data capture, and the non-live delivery gate for routine Console operation.
+- Verify the complete non-live suite and local delivery commands without live WorldQuant BRAIN API calls, simulations, or submissions.
+
+### Execution Plan
+1. [completed] Updated the operating guide and delivery-contract specification with the active three-layer vault, capture sequence, delivery gate, implementation status, and final verification commands.
+2. [completed] Required wrapper discovery passed 696 tests and `compileall` passed. Local `compile-knowledge` wrote its report but remained blocked by the existing incomplete knowledge migration; `delivery-gate` wrote its report and failed on explicit local knowledge/readiness blockers without any live call.
+3. [completed] Recorded verification results and committed the documentation/progress changes.
+
+### Result
+- Non-live verification: 696 tests passed; `python -m compileall -q wqb tests` exited 0.
+- Compile report: `C:\Users\oytl\Desktop\pyproject\brain\knowledge\raw\maintenance\compile_reports\2026-08-02.json`.
+- Delivery-gate report: `C:\Users\oytl\Desktop\pyproject\brain\knowledge\raw\maintenance\delivery_gates\2026-08-02.json`.
+- Remaining blocker: the pre-existing knowledge vault has legacy active paths, no current `machine` resources, stale plan-only readiness artifacts, and no accepted durable workflow boundary. No live platform call, simulation, or submission ran.
+
+## 2026-08-02 Task 9: Delivery Gate And Operational Handoff Report
+
+### Requirement Summary
+- Add the non-live `delivery-gate` workflow verification command, persisted report, and Console action/state/timeline integration.
+- Preserve `compile-knowledge`; do not invoke live WorldQuant BRAIN APIs, simulations, or submissions.
+
+### Execution Plan
+1. [completed] Added focused delivery-gate and existing CLI/Console regression tests; RED failed for the expected absent module and missing integration points.
+2. [completed] Implemented the durable gate report, CLI dispatch, asynchronous Console action, state reader, and timeline row.
+3. [completed] Focused wrapper passed 206 tests and full non-live discovery passed 693 tests with the Windows compatibility environment; committed Task 9 code/tests as `68f3bc6` (`add delivery gate`).
+
+### Result
+- Report: `../.superpowers/sdd/2026-07-30-simplified-knowledge-structure-delivery-contract-implementation/task-9-report.md`.
+- The first discovery invocation without the supplied Windows environment variables reproduced the known `WinError 10106` in two HTTP-server tests; the required compatibility wrapper passed the complete suite.
+
+### Fix Round 1 (2026-08-02)
+- [completed] Added RED regressions for plan-only readiness, durable approval boundaries, and persisted-time workflow-state selection.
+- [completed] Made delivery-gate readiness-aware and reused validated durable workflow-state loading without affecting live execution paths.
+- [completed] Focused wrapper passed 209 tests and full non-live discovery passed 696 tests; appended the Task 9 report and committed only the fix source/tests as `9d816c8` (`harden delivery gate`).
+
 ## 2026-07-30 Final Review Fix: Workflow Console Important Findings
 
 ### Requirement Summary
