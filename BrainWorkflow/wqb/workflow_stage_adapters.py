@@ -18,6 +18,7 @@ from wqb.benchmark_rules import (
     load_run_benchmark_rules,
 )
 from wqb.data_ledger import data_ledger_path_for_knowledge, data_ledger_record_from_dict, load_data_ledger_from_knowledge
+from wqb.knowledge_paths import existing_decision_artifact_path
 from wqb.option_cards import option_card_from_row, read_option_card_jsonl
 from wqb.principle_model import OptionCard
 from wqb.research_scheduler import build_research_schedule, research_schedule_to_dict, write_research_schedule
@@ -317,7 +318,10 @@ def create_start_snapshot(
 ) -> dict[str, Any]:
     """Input: knowledge root, option id, scope. Output: snapshot dict. Bind validated start artifacts immutably."""
     knowledge = Path(knowledge_root)
-    options_path = knowledge / "wiki" / "70_decisions" / "research_option_cards.jsonl"
+    options_path = existing_decision_artifact_path(
+        knowledge,
+        "research_option_cards.jsonl",
+    )
     options = read_option_card_jsonl(options_path)
     selected = next((row for row in options if str(row.get("option_id", "")) == str(selected_option_id)), None)
     if not options:
@@ -429,7 +433,10 @@ def schedule_research_stage(
     ):
         raise ValueError("start snapshot is required for workflow schedule authority")
     else:
-        options_path = knowledge / "wiki" / "70_decisions" / "research_option_cards.jsonl"
+        options_path = existing_decision_artifact_path(
+            knowledge,
+            "research_option_cards.jsonl",
+        )
         options = read_option_card_jsonl(options_path)
         selected = next(
             (row for row in options if str(row.get("option_id", "")) == str(selected_option_id)), None

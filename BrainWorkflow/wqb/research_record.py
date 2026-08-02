@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
+from wqb.knowledge_contracts import (
+    SourceIndexRow,
+    render_front_matter,
+    upsert_source_index_rows,
+)
 from wqb.knowledge_paths import machine_resource_path
 
 
@@ -303,7 +309,42 @@ def render_research_record_markdown(record: ResearchRecord) -> str:
 
 def sync_research_record_to_raw(record: ResearchRecord, raw_root: str | Path) -> Path:
     """Input: record and raw root. Output: Markdown path. Write raw research record into knowledge raw."""
-    path = Path(raw_root) / "research" / "runs" / record.run_id / "research_record.md"
+    raw = Path(raw_root)
+    knowledge_root = raw.parent
+    path = raw / "research" / "runs" / record.run_id / "research_record.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_research_record_markdown(record), encoding="utf-8")
+    body = render_research_record_markdown(record)
+    captured_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    relative_path = path.relative_to(knowledge_root).as_posix()
+    metadata = {
+        "source_type": "workflow_research_record",
+        "source_family": "raw/research/runs",
+        "source_path": relative_path,
+        "captured_at": captured_at,
+        "capture_tool": "wqb.research_record",
+        "record_count": 1,
+        "content_hash": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+        "update_check": "sync after workflow state changes",
+        "compiled_targets": [
+            "machine/research_records.jsonl",
+            "wiki/60_research_cases",
+        ],
+    }
+    path.write_text(render_front_matter(metadata) + body, encoding="utf-8")
+    upsert_source_index_rows(
+        knowledge_root,
+        [
+            SourceIndexRow(
+                path=relative_path,
+                source_family="raw/research/runs",
+                source_type="workflow_research_record",
+                contents=f"Workflow research record for {record.run_id}.",
+                update_check="sync after workflow state changes",
+                compiled_targets=[
+                    "machine/research_records.jsonl",
+                    "wiki/60_research_cases",
+                ],
+            )
+        ],
+    )
     return path

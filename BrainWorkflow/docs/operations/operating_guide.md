@@ -32,7 +32,7 @@ python -m wqb.cli readiness-check --knowledge-root 'C:\Users\oytl\Desktop\pyproj
 ```
 
 The canonical runtime benchmark rulebook is
-`wiki/50_benchmarks/benchmark_rules.jsonl`. Strict research and
+`machine/benchmark_rules.jsonl`. Strict research and
 submit-candidate readiness require this file to exist, contain at least one
 valid rule, and parse with every required rule field. Rule consumers are
 isolated through `consumed_by`; planner or proposal-only rules do not change
@@ -41,7 +41,7 @@ triage, repair-loop, or candidate-gate classification.
 Generate research option cards from the compiled knowledge base:
 
 ```powershell
-python -m wqb.cli plan-research-options --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --max-options 5 --option-output-dir 'C:\Users\oytl\Desktop\pyproject\brain\knowledge\wiki\70_decisions'
+python -m wqb.cli plan-research-options --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --max-options 5 --option-output-dir 'C:\Users\oytl\Desktop\pyproject\brain\knowledge\machine\decisions'
 ```
 
 After choosing an option card, start an Orchestrator-owned workflow:
@@ -70,6 +70,11 @@ The active vault has three layers:
 - `knowledge/raw`: facts, platform snapshots, forum/advisor material, interaction notes, raw research records, and maintenance evidence.
 - `knowledge/machine`: JSON/JSONL resources consumed by the workflow code.
 - `knowledge/wiki`: compact human lessons and selected case reports.
+
+Active option cards, workflow proposals, schedules, and AI checkpoints live
+under `knowledge/machine/decisions`. Maintenance migrates legacy
+`knowledge/wiki/70_decisions` files before cleanup and refuses deletion when
+the canonical copy is missing or has a different hash.
 
 Normal maintenance command:
 
@@ -116,7 +121,7 @@ Use breadth-first capture before deep capture:
 ```powershell
 python -m wqb.cli discover-data-scope-matrix --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --enable-live-api --max-scopes 40
 python -m wqb.cli plan-stratified-data-capture --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --fields-per-scope 100 --max-scopes 40
-python -m wqb.cli capture-platform-data-fields --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --enable-live-api --capture-plan-path '<plan-path>' --fields-per-scope 100
+python -m wqb.cli capture-platform-data-fields --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --enable-live-api --capture-plan-path '<plan-path>'
 python -m wqb.cli compile-data-ledger --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
 python -m wqb.cli compile-knowledge --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --apply-cleanup
 ```
@@ -226,7 +231,22 @@ Run this before considering the fixed workflow ready for routine operation:
 python -m wqb.cli delivery-gate --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --runs-root 'C:\Users\oytl\Desktop\pyproject\brain\runs'
 ```
 
-A planned pause is acceptable only when the report states the pause, stage, reason, and evidence path.
+Run `compile-knowledge --apply-cleanup` immediately before this command. The
+gate requires a fresh successful maintenance report, applied cleanup evidence,
+full knowledge-contract health, non-empty parseable machine resources,
+non-live planning output, and a durable workflow event timeline. A planned
+pause is acceptable only when the report states the pause, stage, reason, and
+evidence path.
+
+When the Console is running, also verify its documented endpoints:
+
+```powershell
+python -m wqb.cli delivery-gate --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --runs-root 'C:\Users\oytl\Desktop\pyproject\brain\runs' --console-base-url 'http://127.0.0.1:8765'
+```
+
+Maintenance and delivery reports are immutable timestamped files. Console
+status reads `latest.json` pointers under `raw/maintenance/compile_reports`
+and `raw/maintenance/delivery_gates`.
 
 ## Minimum Verification
 

@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 from wqb.data_field_capture import DATA_CAPTURE_LOCK_NAME, build_capture_scopes, capture_platform_data_fields
 from wqb.data_ledger_compile import compile_data_ledger_from_raw
+from wqb.knowledge_contracts import parse_markdown_front_matter
+from wqb.knowledge_freshness import evaluate_knowledge_contract_health
 
 
 class FakeCaptureClient:
@@ -158,7 +160,7 @@ class DataFieldCaptureTests(unittest.TestCase):
         self.assertEqual(manifest["latest_scope_outcomes"][0]["status"], "completed")
         self.assertEqual(manifest["latest_scope_outcomes"][0]["certification_status"], "partial")
 
-    def test_capture_plan_applies_scope_field_budget_and_marks_partial_coverage(self):
+    def test_capture_plan_applies_persisted_scope_field_budget_without_global_override(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
             plan = root / "raw" / "platform" / "data_fields" / "capture_plans" / "2026-07-16.jsonl"
@@ -170,7 +172,7 @@ class DataFieldCaptureTests(unittest.TestCase):
 
             summary = capture_platform_data_fields(
                 FakeCaptureClient(), root, generated_at="2026-07-16T08:30:00+00:00",
-                capture_plan_path=plan, fields_per_scope=1,
+                capture_plan_path=plan,
             )
             capture = Path(summary["capture_dir"])
             manifest = json.loads((capture / "manifest.json").read_text(encoding="utf-8"))
@@ -179,6 +181,33 @@ class DataFieldCaptureTests(unittest.TestCase):
         self.assertEqual(manifest["certification_status"], "partial")
         self.assertEqual(manifest["latest_scope_outcomes"][0]["sampling_mode"], "stratified")
         self.assertEqual(manifest["latest_scope_outcomes"][0]["field_budget"], 1)
+
+    def test_capture_index_has_canonical_metadata_and_source_index_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+
+            summary = capture_platform_data_fields(
+                FakeCaptureClient(),
+                root,
+                generated_at="2026-07-16T08:30:00+00:00",
+                instrument_types=["EQUITY"],
+                regions=["USA"],
+                delays=[1],
+                universes=["TOP3000"],
+                max_scopes=1,
+                max_datasets_per_scope=1,
+                max_fields_per_dataset=1,
+            )
+            index_path = Path(summary["capture_dir"]) / "index.md"
+            metadata, _ = parse_markdown_front_matter(index_path.read_text(encoding="utf-8"))
+            health = evaluate_knowledge_contract_health(root)
+            self.assertEqual(metadata["source_family"], "raw/platform/data_fields")
+            self.assertEqual(metadata["record_count"], 1)
+            self.assertTrue((root / "machine" / "source_index.jsonl").exists())
+            self.assertFalse(
+                any(issue["path"] == str(index_path) for issue in health["issues"]),
+                health["issues"],
+            )
 
     def test_scope_field_budget_treats_truncation_as_intentional_partial_sampling(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -123,6 +123,24 @@ def write_start_artifacts(root: Path, ledger_row: dict[str, object] | list[dict[
 
 
 class WorkflowStageAdaptersTests(unittest.TestCase):
+    def test_schedule_research_stage_reads_canonical_machine_decision_cards(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            decisions = root / "knowledge" / "machine" / "decisions"
+            decisions.mkdir(parents=True)
+            (decisions / "research_option_cards.jsonl").write_text(
+                json.dumps(valid_option(option_id="option-1")) + "\n",
+                encoding="utf-8",
+            )
+
+            summary = schedule_research_stage(
+                root / "knowledge",
+                root / "runs" / "run1",
+                "option-1",
+            )
+
+        self.assertEqual(summary["selected_option"]["option_id"], "option-1")
+
     def test_create_start_snapshot_requires_positive_coverage_and_fresh_source_date(self):
         cases = (
             {"coverage": 0.0, "source_updated_at": date.today().isoformat()},

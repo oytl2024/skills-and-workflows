@@ -66,6 +66,89 @@ class KnowledgeCleanCompileTests(unittest.TestCase):
         self.assertEqual(missing, {"machine", "wiki"})
         self.assertFalse(report["clean"])
 
+    def test_clean_structure_reports_root_level_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("raw", "machine", "wiki"):
+                (root / name).mkdir()
+            ordinary = root / "data_ledger.jsonl"
+            ordinary.write_text("{}\n", encoding="utf-8")
+
+            report = evaluate_clean_knowledge_structure(root)
+            self.assertFalse(report["clean"])
+            self.assertIn(
+                str(ordinary),
+                {issue["path"] for issue in report["issues"] if issue["code"] == "root_level_file"},
+            )
+
+    def test_cleanup_routes_root_level_files_through_sensitive_refusal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ordinary = root / "old_notes.txt"
+            sensitive = root / "private.txt"
+            ordinary.write_text("obsolete\n", encoding="utf-8")
+            sensitive.write_text("do not delete\n", encoding="utf-8")
+            report_path = self._successful_compile_evidence(root, "compile.json")
+
+            planned = plan_obsolete_active_cleanup(root)
+            actions = {Path(item.path).name: item.action for item in planned}
+            summary = apply_obsolete_active_cleanup(
+                root,
+                "2026-07-30T00:00:00+00:00",
+                dry_run=False,
+                verification_report_path=report_path,
+            )
+            self.assertEqual(actions["old_notes.txt"], "remove")
+            self.assertEqual(actions["private.txt"], "refuse")
+            self.assertFalse(ordinary.exists())
+            self.assertTrue(sensitive.exists())
+            self.assertEqual(summary["removed_count"], 1)
+            self.assertEqual(summary["refused_count"], 1)
+
+    def test_cleanup_refuses_unmigrated_active_decision_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy = root / "wiki" / "70_decisions" / "research_option_cards.jsonl"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text('{"option_id":"option-1"}\n', encoding="utf-8")
+            report_path = self._successful_compile_evidence(root, "compile.json")
+
+            planned = plan_obsolete_active_cleanup(root)
+            summary = apply_obsolete_active_cleanup(
+                root,
+                "2026-07-30T00:00:00+00:00",
+                dry_run=False,
+                verification_report_path=report_path,
+            )
+            candidate = next(item for item in planned if Path(item.path) == legacy)
+            self.assertEqual(candidate.action, "refuse")
+            self.assertTrue(legacy.exists())
+            self.assertEqual(summary["refused_count"], 1)
+
+    def test_cleanup_removes_legacy_decision_artifact_after_exact_migration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy = root / "wiki" / "70_decisions" / "workflow_change_proposals.jsonl"
+            canonical = root / "machine" / "decisions" / "workflow_change_proposals.jsonl"
+            legacy.parent.mkdir(parents=True)
+            canonical.parent.mkdir(parents=True)
+            payload = '{"proposal_id":"proposal-1"}\n'
+            legacy.write_text(payload, encoding="utf-8")
+            canonical.write_text(payload, encoding="utf-8")
+            report_path = self._successful_compile_evidence(root, "compile.json")
+
+            planned = plan_obsolete_active_cleanup(root)
+            apply_obsolete_active_cleanup(
+                root,
+                "2026-07-30T00:00:00+00:00",
+                dry_run=False,
+                verification_report_path=report_path,
+            )
+            candidate = next(item for item in planned if Path(item.path) == legacy)
+            self.assertEqual(candidate.action, "remove")
+            self.assertFalse(legacy.exists())
+            self.assertTrue(canonical.exists())
+
     def test_cleanup_refuses_sensitive_files_and_removes_ordinary_legacy_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

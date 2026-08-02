@@ -132,7 +132,7 @@ def _write_manifest(path: Path, generated_at: str, initialized_names: set[str]) 
         },
         {
             "name": "research_option_cards",
-            "path": "wiki/70_decisions/research_option_cards.jsonl",
+            "path": "machine/decisions/research_option_cards.jsonl",
             "updated_at": NON_REFRESHED_BASELINE_DATE,
             "max_age_days": 7,
             "status": "not_refreshed",

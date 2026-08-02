@@ -11,7 +11,10 @@ from typing import Any
 from wqb.ai_checkpoints import load_ai_checkpoints
 from wqb.benchmark_rules import load_active_benchmark_rules
 from wqb.data_ledger import load_data_ledger, summarize_data_ledger_authority
-from wqb.knowledge_paths import existing_machine_resource_path
+from wqb.knowledge_paths import (
+    existing_decision_artifact_path,
+    existing_machine_resource_path,
+)
 from wqb.knowledge_freshness import (
     evaluate_freshness,
     evaluate_knowledge_contract_health,
@@ -99,8 +102,22 @@ def _latest_readiness(runs_root: Path) -> dict[str, Any]:
 
 def _latest_knowledge_maintenance(knowledge_root: Path) -> dict[str, Any]:
     """Input: knowledge root. Output: maintenance summary. Read the newest valid maintenance report."""
+    directory = knowledge_root / "raw" / "maintenance" / "compile_reports"
+    latest = directory / "latest.json"
+    payload = _read_json(latest)
+    if payload:
+        evidence_path = Path(str(payload.get("report_path", latest)))
+        return {
+            **payload,
+            "exists": True,
+            "path": str(evidence_path if evidence_path.exists() else latest),
+        }
     reports = sorted(
-        (knowledge_root / "raw" / "maintenance" / "compile_reports").glob("*.json"),
+        (
+            path
+            for path in directory.glob("*.json")
+            if ".pre_cleanup_evidence" not in path.name and path.name != "latest.json"
+        ),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
@@ -112,8 +129,18 @@ def _latest_knowledge_maintenance(knowledge_root: Path) -> dict[str, Any]:
 
 def _latest_delivery_gate(knowledge_root: Path) -> dict[str, Any]:
     """Input: knowledge root. Output: delivery summary. Read the newest valid delivery gate report."""
+    directory = knowledge_root / "raw" / "maintenance" / "delivery_gates"
+    latest = directory / "latest.json"
+    payload = _read_json(latest)
+    if payload:
+        evidence_path = Path(str(payload.get("report_path", latest)))
+        return {
+            **payload,
+            "exists": True,
+            "path": str(evidence_path if evidence_path.exists() else latest),
+        }
     reports = sorted(
-        (knowledge_root / "raw" / "maintenance" / "delivery_gates").glob("*.json"),
+        (path for path in directory.glob("*.json") if path.name != "latest.json"),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
@@ -321,7 +348,7 @@ def _startable_scopes(knowledge_root: Path) -> list[dict[str, Any]]:
 
 def _schedule_summary(knowledge_root: Path) -> dict[str, Any]:
     """Input: knowledge root. Output: schedule preview. Read current schedule Markdown."""
-    path = knowledge_root / "wiki" / "70_decisions" / "research_schedule.md"
+    path = existing_decision_artifact_path(knowledge_root, "research_schedule.md")
     if not path.exists():
         return {"exists": False, "path": str(path), "preview": ""}
     text = path.read_text(encoding="utf-8")
@@ -427,14 +454,21 @@ def _research_record_summary(run_dir: Path | None) -> dict[str, Any]:
 
 def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
     """Input: console paths. Output: JSON-safe state dict. Aggregate dashboard data."""
-    decisions = paths.knowledge_root / "wiki" / "70_decisions"
+    proposal_dir = existing_decision_artifact_path(
+        paths.knowledge_root,
+        "workflow_change_proposals.jsonl",
+    ).parent
+    checkpoint_dir = existing_decision_artifact_path(
+        paths.knowledge_root,
+        "ai_checkpoints.jsonl",
+    ).parent
     data_ledger_rows = _read_jsonl(existing_machine_resource_path(paths.knowledge_root, "data_ledger"))
-    proposals = load_workflow_proposals(decisions)
+    proposals = load_workflow_proposals(proposal_dir)
     proposal_counts = Counter(str(row.get("status", "unclassified")) for row in proposals)
     active_workflow, active_run_dir = _active_workflow_summary(paths.runs_root)
     workflow_events = [] if active_run_dir is None else [event.__dict__ for event in read_workflow_events(active_run_dir)]
     approved_queue, queue_diagnostics = _approved_queue_with_diagnostics(paths.runs_root)
-    ai_checkpoints = load_ai_checkpoints(decisions)
+    ai_checkpoints = load_ai_checkpoints(checkpoint_dir)
     base_state = {
         "readiness": _latest_readiness(paths.runs_root),
         "knowledge_maintenance": _latest_knowledge_maintenance(paths.knowledge_root),
@@ -445,7 +479,12 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
         "data_authority": _data_authority_summary_from_rows(data_ledger_rows),
         "semantic_ledgers": _semantic_ledger_summary(paths.knowledge_root),
         "startable_scopes": _startable_scopes_from_rows(paths.knowledge_root, data_ledger_rows),
-        "option_cards": _read_jsonl(decisions / "research_option_cards.jsonl"),
+        "option_cards": _read_jsonl(
+            existing_decision_artifact_path(
+                paths.knowledge_root,
+                "research_option_cards.jsonl",
+            )
+        ),
         "schedule": _schedule_summary(paths.knowledge_root),
         "jobs": _job_rows(paths.job_root, paths.knowledge_root),
         "proposals": proposals,

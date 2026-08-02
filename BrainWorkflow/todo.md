@@ -1278,3 +1278,32 @@
 - Optional `applied_at` minor deferred to keep the fix scoped to the Required Fixes.
 - Report: `.superpowers/sdd/final-review-knowledge-os-fix6-report.md` (protected, uncommitted).
 - Commit: `2d2b743 fail closed before workflow authority use`.
+
+## 2026-08-02 Simplified Knowledge Contract Final Review Fix
+
+### Requirement Summary
+- Fix all Critical and Important findings in the final review based on `a79fbd5`.
+- Prevent knowledge cleanup from deleting active Console and workflow decision artifacts.
+- Make delivery gating consume fresh successful maintenance evidence and verify the full high-value delivery contract.
+- Enforce persisted per-scope capture budgets without a duplicate global flag.
+- Make normal raw Markdown writers satisfy metadata and source-index contracts.
+- Reject and safely clean root-level knowledge files, including sensitive-file refusal.
+- Keep all verification non-live and preserve the existing Orchestrator, Console jobs, readiness gates, queue, and workflow stages.
+
+### Plan
+1. Add focused RED regressions for cleanup migration/protection, Console and workflow decision paths, delivery evidence, capture budgets, raw writers, and root-level files.
+2. Move live decision artifacts to a canonical machine directory with legacy fallback and exact-hash migration evidence.
+3. Harden maintenance/report persistence and delivery checks, including optional Console endpoint probes.
+4. Run focused suites, full non-live discovery, compileall, and the required range diff check.
+5. Write the final-review fix report and commit with the required message.
+
+### Result
+- Moved active option cards, proposals, schedules, and Console/workflow reads to `machine/decisions`, with legacy fallback and exact-hash migration/refusal before cleanup.
+- Hardened delivery gating around fresh applied maintenance, full contract health, source and cleanup evidence, parseable non-empty machine resources, non-live planning, workflow events/evidence, and optional Console endpoint checks.
+- Enforced persisted capture-plan budgets and added canonical metadata/source-index synchronization for platform capture indexes and raw research records.
+- Added guarded cleanup for ordinary and sensitive knowledge-root files.
+- Added immutable maintenance/delivery reports with `latest.json` pointers and preserved Console latest-report loading.
+- RED regressions failed for each reported gap before the corresponding production fix.
+- Final non-live verification: 713 tests passed; `compileall` passed; `git diff --check f7ae8cb` passed.
+- Real local knowledge-vault maintenance/delivery was not run or claimed; it must produce fresh applied maintenance evidence before its delivery gate can pass.
+- Report: `.superpowers/sdd/2026-07-30-simplified-knowledge-structure-delivery-contract-implementation/final-review-fix-report.md`.

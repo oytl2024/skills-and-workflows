@@ -17,6 +17,8 @@ from wqb.research_record import (
     sync_research_record_to_raw,
     write_research_record,
 )
+from wqb.knowledge_contracts import parse_markdown_front_matter
+from wqb.knowledge_freshness import evaluate_knowledge_contract_health
 
 
 class ResearchRecordTests(unittest.TestCase):
@@ -140,6 +142,24 @@ class ResearchRecordTests(unittest.TestCase):
 
         self.assertEqual(loaded.run_id, "run1")
         self.assertTrue(raw_path.name == "research_record.md")
+
+    def test_raw_sync_writes_canonical_metadata_and_updates_source_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            for name in ("raw", "machine", "wiki"):
+                (root / name).mkdir(parents=True)
+            record = empty_research_record("run1", "Power Pool")
+
+            raw_path = sync_research_record_to_raw(record, root / "raw")
+            metadata, _ = parse_markdown_front_matter(raw_path.read_text(encoding="utf-8"))
+            health = evaluate_knowledge_contract_health(root)
+            self.assertEqual(metadata["source_family"], "raw/research/runs")
+            self.assertEqual(metadata["record_count"], 1)
+            self.assertTrue((root / "machine" / "source_index.jsonl").exists())
+            self.assertFalse(
+                any(issue["path"] == str(raw_path) for issue in health["issues"]),
+                health["issues"],
+            )
 
     def test_interrupted_research_record_replace_preserves_previous_record(self):
         with tempfile.TemporaryDirectory() as tmp:

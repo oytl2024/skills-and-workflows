@@ -1,15 +1,26 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 from typing import Any
+import urllib.request
 
 from wqb.knowledge_clean_compile import evaluate_clean_knowledge_structure
+from wqb.knowledge_freshness import (
+    evaluate_knowledge_contract_health,
+    load_freshness_manifest,
+)
 from wqb.knowledge_paths import MACHINE_RESOURCE_FILES, machine_resource_path
+from wqb.research_planner import plan_research_options
 from wqb.run_readiness import evaluate_run_readiness
-from wqb.workflow_state import WorkflowRunState, load_run_state
+from wqb.workflow_events import WorkflowEventReadError, read_workflow_events_strict
+from wqb.workflow_state import (
+    WorkflowRunState,
+    diagnose_state_consistency,
+    load_run_state,
+)
 
 
 REQUIRED_HUMAN_WIKI_FILES = (
@@ -56,6 +67,252 @@ def _check(status: bool, code: str, message: str, evidence_path: str = "") -> De
     return DeliveryGateCheck(code, "passed" if status else "failed", message, evidence_path)
 
 
+def _parse_timestamp(value: str) -> datetime | None:
+    """Input: timestamp string. Output: timezone-aware datetime or none. Parse report evidence safely."""
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _latest_maintenance_report(knowledge_root: Path) -> tuple[dict[str, Any], Path | None]:
+    """Input: knowledge root. Output: newest final maintenance payload and path."""
+    directory = knowledge_root / "raw" / "maintenance" / "compile_reports"
+    reports: list[tuple[datetime, dict[str, Any], Path]] = []
+    for path in directory.glob("*.json"):
+        if ".pre_cleanup_evidence" in path.name:
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict) or payload.get("report_type") != "knowledge_maintenance":
+            continue
+        generated = _parse_timestamp(str(payload.get("generated_at", "")))
+        if generated is not None:
+            reports.append((generated, payload, path))
+    if not reports:
+        return {}, None
+    _, payload, path = max(reports, key=lambda row: (row[0], row[2].stat().st_mtime_ns))
+    return payload, path
+
+
+def _load_cleanup_log(path_value: str, knowledge_root: Path) -> list[dict[str, Any]]:
+    """Input: cleanup log reference and knowledge root. Output: parsed JSONL rows."""
+    path = Path(path_value)
+    if not path.is_absolute():
+        path = knowledge_root / path
+    path = path.resolve()
+    cleanup_root = (
+        knowledge_root / "raw" / "maintenance" / "cleanup_logs"
+    ).resolve()
+    try:
+        path.relative_to(cleanup_root)
+    except ValueError as error:
+        raise ValueError("cleanup log is outside the maintenance directory") from error
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if not isinstance(row, dict):
+            raise ValueError("cleanup log row must be an object")
+        rows.append(row)
+    return rows
+
+
+def _maintenance_evidence(
+    knowledge_root: Path,
+    gate_generated_at: str,
+) -> tuple[bool, str, str]:
+    """Input: knowledge root and gate time. Output: status, message, report path. Validate fresh applied maintenance."""
+    report, report_path = _latest_maintenance_report(knowledge_root)
+    if report_path is None:
+        return False, "Fresh successful knowledge maintenance report is missing.", ""
+    gate_time = _parse_timestamp(gate_generated_at)
+    report_time = _parse_timestamp(str(report.get("generated_at", "")))
+    fresh = (
+        gate_time is not None
+        and report_time is not None
+        and timedelta(0) <= gate_time - report_time <= timedelta(hours=24)
+    )
+    cleanup = report.get("cleanup", {})
+    health = report.get("health", {})
+    cleanup_rows: list[dict[str, Any]] = []
+    try:
+        if isinstance(cleanup, dict):
+            cleanup_rows = _load_cleanup_log(
+                str(cleanup.get("cleanup_log_path", "")),
+                knowledge_root,
+            )
+    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        cleanup_rows = []
+    applied_cleanup = any(
+        row.get("event") == "cleanup_run"
+        and row.get("dry_run") is False
+        and row.get("blocked") is False
+        and row.get("generated_at") == report.get("generated_at")
+        for row in cleanup_rows
+    )
+    passed = (
+        fresh
+        and report.get("status") == "completed"
+        and isinstance(health, dict)
+        and health.get("issue_count") == 0
+        and isinstance(cleanup, dict)
+        and cleanup.get("status") == "completed"
+        and cleanup.get("dry_run") is False
+        and cleanup.get("blocked") is False
+        and applied_cleanup
+    )
+    message = (
+        "Fresh successful maintenance report and applied cleanup evidence are present."
+        if passed
+        else "Maintenance must be fresh, completed, healthy, and backed by an applied cleanup log."
+    )
+    return passed, message, str(report_path)
+
+
+def _parse_machine_resource(
+    knowledge_root: Path,
+    resource_name: str,
+) -> tuple[bool, str, list[dict[str, Any]]]:
+    """Input: vault root and resource name. Output: parse status, message, object rows."""
+    path = machine_resource_path(knowledge_root, resource_name)
+    try:
+        if resource_name == "freshness_manifest":
+            records = load_freshness_manifest(path, strict=True)
+            if not records:
+                raise ValueError("freshness manifest is empty")
+            return True, f"Machine resource is non-empty and parseable: {resource_name}.", []
+        rows: list[dict[str, Any]] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError("JSONL row must be an object")
+            rows.append(row)
+        if not rows:
+            raise ValueError("JSONL resource is empty")
+        return True, f"Machine resource is non-empty and parseable: {resource_name}.", rows
+    except (OSError, UnicodeDecodeError, ValueError, TypeError, json.JSONDecodeError) as error:
+        return False, f"Machine resource is missing, empty, or malformed: {resource_name}: {error}", []
+
+
+def _source_index_evidence(
+    knowledge_root: Path,
+    rows: list[dict[str, Any]],
+) -> tuple[bool, str]:
+    """Input: knowledge root and source-index rows. Output: status and message. Validate indexed sources."""
+    markdown_index = knowledge_root / "raw" / "source_index.md"
+    valid_rows = bool(rows) and all(
+        isinstance(row.get("path"), str)
+        and bool(str(row.get("path", "")).strip())
+        and (knowledge_root / str(row["path"])).is_file()
+        for row in rows
+    )
+    passed = markdown_index.is_file() and bool(markdown_index.read_text(encoding="utf-8").strip()) and valid_rows
+    return (
+        passed,
+        "Raw and machine source indexes resolve to existing source files."
+        if passed
+        else "Source indexes are missing, empty, or reference missing source files.",
+    )
+
+
+def _planning_exercise(knowledge_root: Path, generated_at: str) -> tuple[bool, str]:
+    """Input: knowledge root and timestamp. Output: status and message. Exercise deterministic non-live planning."""
+    try:
+        result = plan_research_options(
+            knowledge_root,
+            generated_at,
+            max_options=1,
+            live_api_enabled=False,
+        )
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
+        return False, f"Non-live planning exercise failed: {error}"
+    options = result.get("options", [])
+    passed = int(result.get("option_count", 0)) > 0 and isinstance(options, list) and bool(options)
+    return passed, "Non-live research option planning produced a valid option." if passed else "Non-live planning produced no options."
+
+
+def _workflow_timeline_evidence(state: WorkflowRunState | None) -> tuple[bool, str, str]:
+    """Input: latest workflow state. Output: status, message, run path. Validate timeline and stage evidence."""
+    if state is None:
+        return False, "Latest workflow state is missing.", ""
+    run_dir = Path(state.run_dir)
+    try:
+        events = read_workflow_events_strict(run_dir)
+        diagnostics = diagnose_state_consistency(run_dir, state)
+    except (OSError, ValueError, TypeError, WorkflowEventReadError) as error:
+        return False, f"Workflow timeline or evidence is malformed: {error}", str(run_dir)
+    passed = run_dir.is_dir() and bool(events) and not diagnostics
+    message = (
+        "Workflow event timeline and referenced stage evidence are durable and consistent."
+        if passed
+        else f"Workflow timeline/evidence is incomplete: {', '.join(diagnostics) or 'event log is empty'}."
+    )
+    return passed, message, str(run_dir)
+
+
+def _console_checks(console_base_url: str) -> list[DeliveryGateCheck]:
+    """Input: Console base URL. Output: endpoint checks. Probe documented read-only Console endpoints."""
+    checks: list[DeliveryGateCheck] = []
+    base = console_base_url.rstrip("/")
+    for code, endpoint, expect_json in (
+        ("console_root", "/", False),
+        ("console_api_state", "/api/state", True),
+        ("console_api_fragments", "/api/fragments", True),
+    ):
+        url = f"{base}{endpoint}"
+        try:
+            with urllib.request.urlopen(url, timeout=3) as response:
+                body = response.read()
+                passed = int(response.status) == 200
+                if expect_json:
+                    passed = passed and isinstance(json.loads(body.decode("utf-8")), dict)
+            message = f"Console endpoint responded successfully: {endpoint}."
+        except (OSError, UnicodeDecodeError, ValueError, TypeError, json.JSONDecodeError) as error:
+            passed = False
+            message = f"Console endpoint failed: {endpoint}: {error}"
+        checks.append(_check(passed, code, message, url))
+    return checks
+
+
+def _write_delivery_report(
+    knowledge_root: Path,
+    generated_at: str,
+    report: dict[str, Any],
+) -> Path:
+    """Input: knowledge root, timestamp, report. Output: immutable report path and latest pointer."""
+    generated = _parse_timestamp(generated_at)
+    if generated is None:
+        raise ValueError(f"invalid delivery report timestamp: {generated_at}")
+    directory = knowledge_root / "raw" / "maintenance" / "delivery_gates"
+    directory.mkdir(parents=True, exist_ok=True)
+    stem = generated.strftime("%Y%m%dT%H%M%SZ")
+    index = 0
+    while True:
+        suffix = "" if index == 0 else f".{index}"
+        path = directory / f"{stem}{suffix}.json"
+        payload = {**report, "report_path": str(path)}
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+            (directory / "latest.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            report["report_path"] = str(path)
+            return path
+        except FileExistsError:
+            index += 1
+
+
 def run_delivery_gate(
     knowledge_root: str | Path,
     runs_root: str | Path,
@@ -67,12 +324,35 @@ def run_delivery_gate(
     knowledge = Path(knowledge_root)
     runs = Path(runs_root)
     checks: list[DeliveryGateCheck] = []
+    maintenance_ok, maintenance_message, maintenance_path = _maintenance_evidence(
+        knowledge,
+        generated,
+    )
+    checks.append(
+        _check(
+            maintenance_ok,
+            "maintenance_evidence",
+            maintenance_message,
+            maintenance_path,
+        )
+    )
     clean = evaluate_clean_knowledge_structure(knowledge)
     checks.append(
         _check(
             bool(clean.get("clean")),
             "clean_knowledge_structure",
             "Knowledge active tree follows raw/machine/wiki.",
+            str(knowledge),
+        )
+    )
+    health = evaluate_knowledge_contract_health(knowledge)
+    checks.append(
+        _check(
+            health.get("issue_count") == 0,
+            "knowledge_contract_health",
+            "Full knowledge contract health has no issues."
+            if health.get("issue_count") == 0
+            else f"Knowledge contract health has {health.get('issue_count', 0)} issue(s).",
             str(knowledge),
         )
     )
@@ -95,16 +375,31 @@ def run_delivery_gate(
             str(knowledge),
         )
     )
+    machine_rows: dict[str, list[dict[str, Any]]] = {}
     for resource_name in MACHINE_RESOURCE_FILES:
         path = machine_resource_path(knowledge, resource_name)
+        parsed, message, rows = _parse_machine_resource(knowledge, resource_name)
+        machine_rows[resource_name] = rows
         checks.append(
             _check(
-                path.exists(),
+                parsed,
                 f"machine_resource_{resource_name}",
-                f"Machine resource exists: {resource_name}.",
+                message,
                 str(path),
             )
         )
+    source_index_ok, source_index_message = _source_index_evidence(
+        knowledge,
+        machine_rows.get("source_index", []),
+    )
+    checks.append(
+        _check(
+            source_index_ok,
+            "source_index_evidence",
+            source_index_message,
+            str(knowledge / "raw" / "source_index.md"),
+        )
+    )
     for page_name in REQUIRED_HUMAN_WIKI_FILES:
         path = knowledge / "wiki" / page_name
         compact = path.exists() and path.stat().st_size <= 12000
@@ -116,6 +411,15 @@ def run_delivery_gate(
                 str(path),
             )
         )
+    planning_ok, planning_message = _planning_exercise(knowledge, generated)
+    checks.append(
+        _check(
+            planning_ok,
+            "planning_exercise",
+            planning_message,
+            str(knowledge),
+        )
+    )
     state = _latest_run_state(runs)
     expected_pause = (
         state is not None
@@ -131,6 +435,15 @@ def run_delivery_gate(
     )
     evidence_path = state.run_dir if state is not None else str(runs)
     checks.append(_check(state is not None, "workflow_state_exists", "Latest workflow state is durable.", evidence_path))
+    timeline_ok, timeline_message, timeline_path = _workflow_timeline_evidence(state)
+    checks.append(
+        _check(
+            timeline_ok,
+            "workflow_timeline_evidence",
+            timeline_message,
+            timeline_path,
+        )
+    )
     checks.append(
         _check(
             expected_pause
@@ -141,13 +454,13 @@ def run_delivery_gate(
             evidence_path,
         )
     )
+    if console_base_url.strip():
+        checks.extend(_console_checks(console_base_url.strip()))
     report = {
+        "report_type": "delivery_gate",
         "generated_at": generated,
         "status": "passed" if all(check.status == "passed" for check in checks) else "failed",
         "checks": [asdict(check) for check in checks],
     }
-    report_path = knowledge / "raw" / "maintenance" / "delivery_gates" / f"{generated[:10]}.json"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-    report["report_path"] = str(report_path)
+    _write_delivery_report(knowledge, generated, report)
     return report

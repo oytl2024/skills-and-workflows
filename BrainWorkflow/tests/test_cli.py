@@ -491,12 +491,12 @@ class CliTests(unittest.TestCase):
         expected = TESTS_DIR.parents[2] / "knowledge"
 
         self.assertEqual(default_knowledge_root(), expected)
-        self.assertEqual(Path(default_option_output_dir()), expected / "wiki" / "70_decisions")
+        self.assertEqual(Path(default_option_output_dir()), expected / "machine" / "decisions")
 
         custom_root = TESTS_DIR / "_custom_knowledge"
         with patch.dict(os.environ, {"BRAIN_KNOWLEDGE_ROOT": str(custom_root)}):
             self.assertEqual(default_knowledge_root(), custom_root)
-            self.assertEqual(Path(default_option_output_dir()), custom_root / "wiki" / "70_decisions")
+            self.assertEqual(Path(default_option_output_dir()), custom_root / "machine" / "decisions")
 
     def test_learn_capture_defaults_to_raw_layer(self):
         from scripts import capture_learn_material

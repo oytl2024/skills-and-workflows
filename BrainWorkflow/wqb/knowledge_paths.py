@@ -27,6 +27,8 @@ LEGACY_MACHINE_RESOURCE_PATHS: dict[str, tuple[Path, ...]] = {
 ACTIVE_TOP_LEVELS = {"raw", "machine", "wiki"}
 RAW_INTERACTION_ROOT = Path("raw") / "community" / "user_messages"
 ENGINEERING_LESSONS_WIKI_PATH = Path("wiki") / "50_engineering_lessons.md"
+DECISION_ARTIFACTS_ROOT = Path("machine") / "decisions"
+LEGACY_DECISION_ARTIFACTS_ROOT = Path("wiki") / "70_decisions"
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,25 @@ def interaction_note_file_path(knowledge_root: str | Path, captured_at: str) -> 
 def engineering_lessons_wiki_path(knowledge_root: str | Path) -> Path:
     """Input: knowledge root. Output: canonical engineering lessons page path. Locate compiled interaction lessons."""
     return Path(knowledge_root) / ENGINEERING_LESSONS_WIKI_PATH
+
+
+def decision_artifacts_root(knowledge_root: str | Path) -> Path:
+    """Input: knowledge root. Output: canonical decision directory. Locate active Console and workflow decisions."""
+    return Path(knowledge_root) / DECISION_ARTIFACTS_ROOT
+
+
+def decision_artifact_path(knowledge_root: str | Path, filename: str) -> Path:
+    """Input: knowledge root and filename. Output: canonical decision artifact path."""
+    return decision_artifacts_root(knowledge_root) / str(filename)
+
+
+def existing_decision_artifact_path(knowledge_root: str | Path, filename: str) -> Path:
+    """Input: knowledge root and filename. Output: canonical path or legacy fallback for transition reads."""
+    canonical = decision_artifact_path(knowledge_root, filename)
+    if canonical.exists():
+        return canonical
+    legacy = Path(knowledge_root) / LEGACY_DECISION_ARTIFACTS_ROOT / str(filename)
+    return legacy if legacy.exists() else canonical
 
 
 def _require_resource_name(resource_name: str) -> str:

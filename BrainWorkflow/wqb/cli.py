@@ -43,7 +43,7 @@ from wqb.knowledge_compile import compile_research_records
 from wqb.delivery_gate import run_delivery_gate
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest, write_freshness_report
 from wqb.knowledge_maintenance import run_knowledge_maintenance
-from wqb.knowledge_paths import machine_resource_path
+from wqb.knowledge_paths import decision_artifacts_root, machine_resource_path
 from wqb.interaction_memory import append_interaction_note
 from wqb.novelty import score_expression_novelty
 from wqb.optimizer import actions_for_check_summary
@@ -90,7 +90,7 @@ def default_knowledge_root() -> Path:
 
 def default_option_output_dir() -> str:
     """Input: none. Output: str path. Return the default research option card directory."""
-    return str(default_knowledge_root() / "wiki" / "70_decisions")
+    return str(decision_artifacts_root(default_knowledge_root()))
 
 
 def default_orchestrator_paths(config: dict[str, Any]) -> OrchestratorPaths:
@@ -3535,7 +3535,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-handoffs", action="store_true", default=False)
     parser.add_argument("--option-json", default="")
     parser.add_argument("--option-index", type=int, default=None)
-    parser.add_argument("--schedule-output", default="wiki/70_decisions/research_schedule.md")
+    parser.add_argument("--schedule-output", default="machine/decisions/research_schedule.md")
     parser.add_argument("--schedule-region", default="USA")
     parser.add_argument("--schedule-delay", type=int, default=1)
     parser.add_argument("--schedule-universe", default="TOP3000")

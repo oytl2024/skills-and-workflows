@@ -17,6 +17,10 @@ from wqb.console_jobs import create_job, finish_job, run_job, start_job_async
 from wqb.console_proposals import create_proposal_from_form
 from wqb.console_state import ConsolePaths, default_console_paths, load_console_state
 from wqb.data_ledger import DataLedgerRecord, data_ledger_path_for_knowledge
+from wqb.knowledge_paths import (
+    decision_artifacts_root,
+    existing_decision_artifact_path,
+)
 from wqb.template_library import load_template_library_from_knowledge
 from wqb.option_cards import fallback_option_id, normalize_option_card_row, normalize_option_card_rows
 from wqb.run_readiness import evaluate_run_readiness
@@ -474,7 +478,10 @@ def _freshness_clean(paths: ConsolePaths) -> bool:
 
 def _option_rows(paths: ConsolePaths) -> list[dict[str, Any]]:
     """Input: console paths. Output: normalized option rows. Load durable research options."""
-    path = paths.knowledge_root / "wiki" / "70_decisions" / "research_option_cards.jsonl"
+    path = existing_decision_artifact_path(
+        paths.knowledge_root,
+        "research_option_cards.jsonl",
+    )
     rows: list[dict[str, Any]] = []
     if not path.exists():
         return rows
@@ -672,7 +679,7 @@ def create_console_proposal(paths: ConsolePaths, form: dict[str, Any]) -> Any:
     """Input: console paths and proposal form. Output: ConsoleJob. Persist proposal and context artifacts."""
     job = create_job(paths.job_root, "create-proposal", ["internal:create-proposal"], paths.workflow_root, {"form": dict(form)})
     try:
-        proposal = create_proposal_from_form(paths.knowledge_root / "wiki" / "70_decisions", form)
+        proposal = create_proposal_from_form(decision_artifacts_root(paths.knowledge_root), form)
         completed = finish_job(job, "completed", exit_code=0, error="")
         record_console_job_context(paths, completed, next_command=f"review proposal {proposal.proposal_id}")
         return completed
@@ -689,7 +696,11 @@ def update_console_proposal_decision(paths: ConsolePaths, form: dict[str, Any]) 
     user_decision = str(form.get("user_decision", ""))
     job = create_job(paths.job_root, "update-proposal-decision", ["internal:update-proposal-decision"], paths.workflow_root, {"form": dict(form)})
     try:
-        update_workflow_proposal_decision(paths.knowledge_root / "wiki" / "70_decisions", proposal_id, status, user_decision)
+        proposal_dir = existing_decision_artifact_path(
+            paths.knowledge_root,
+            "workflow_change_proposals.jsonl",
+        ).parent
+        update_workflow_proposal_decision(proposal_dir, proposal_id, status, user_decision)
         completed = finish_job(job, "completed", exit_code=0, error="")
         record_console_job_context(paths, completed, next_command="open workflow proposal inbox")
         return completed

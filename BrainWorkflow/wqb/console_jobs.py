@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from wqb.console_progress import probe_data_capture_progress, process_is_alive
 from wqb.console_state import ConsolePaths
+from wqb.knowledge_paths import decision_artifacts_root
 
 
 DEFAULT_TIMEOUT_SECONDS = 3600
@@ -390,7 +391,7 @@ def build_cli_command(action: str, paths: ConsolePaths, form: dict[str, Any] | N
             "--knowledge-root",
             knowledge_root,
             "--option-output-dir",
-            str(paths.knowledge_root / "wiki" / "70_decisions"),
+            str(decision_artifacts_root(paths.knowledge_root)),
             "--max-options",
             str(data.get("max_options", 5)),
         ]

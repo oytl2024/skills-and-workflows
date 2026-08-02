@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from wqb.data_catalog import fetch_data_fields_with_metadata, fetch_data_sets_with_metadata, fetch_operators
+from wqb.knowledge_contracts import (
+    SourceIndexRow,
+    render_front_matter,
+    upsert_source_index_rows,
+)
 from wqb.lockfile import exclusive_json_lock
 
 
@@ -158,7 +164,11 @@ def _error_row(scope: CaptureScope | None, endpoint: str, error: Exception, gene
     }
 
 
-def _write_index(capture_dir: Path, summary: dict[str, Any]) -> None:
+def _write_index(
+    capture_dir: Path,
+    summary: dict[str, Any],
+    knowledge_root: Path,
+) -> None:
     """Input: capture dir and summary. Output: none. Write the human-readable raw capture index."""
     lines = [
         "# Platform Data Field Capture",
@@ -177,7 +187,42 @@ def _write_index(capture_dir: Path, summary: dict[str, Any]) -> None:
         "python -m wqb.cli compile-data-ledger --knowledge-root <knowledge-root>",
         "```",
     ]
-    (capture_dir / "index.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    body = "\n".join(lines) + "\n"
+    relative_path = (capture_dir / "index.md").relative_to(knowledge_root).as_posix()
+    metadata = {
+        "source_type": "platform_data_field_capture",
+        "source_family": "raw/platform/data_fields",
+        "source_path": capture_dir.relative_to(knowledge_root).as_posix(),
+        "captured_at": summary["generated_at"],
+        "capture_tool": "wqb.data_field_capture",
+        "record_count": summary["field_count"],
+        "content_hash": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+        "update_check": "rerun stratified platform data capture",
+        "compiled_targets": [
+            "machine/data_ledger.jsonl",
+            "machine/scope_matrix.jsonl",
+        ],
+    }
+    (capture_dir / "index.md").write_text(
+        render_front_matter(metadata) + body,
+        encoding="utf-8",
+    )
+    upsert_source_index_rows(
+        knowledge_root,
+        [
+            SourceIndexRow(
+                path=relative_path,
+                source_family="raw/platform/data_fields",
+                source_type="platform_data_field_capture",
+                contents="Platform data-field capture summary and provenance.",
+                update_check="rerun stratified platform data capture",
+                compiled_targets=[
+                    "machine/data_ledger.jsonl",
+                    "machine/scope_matrix.jsonl",
+                ],
+            )
+        ],
+    )
 
 
 def capture_platform_data_fields(
@@ -271,7 +316,9 @@ def _capture_platform_data_fields_locked(
         if _scope_key(scope) in completed_scopes:
             continue
         plan_row = plan_by_key.get(_scope_key(scope), {})
-        field_budget = int(plan_row.get("field_budget", fields_per_scope)) if fields_per_scope > 0 else 0
+        plan_budget = int(plan_row.get("field_budget", 0) or 0)
+        field_budget = plan_budget if plan_budget > 0 else max(int(fields_per_scope), 0)
+        budget_enabled = field_budget > 0
         sampling_mode = "stratified" if fields_per_scope > 0 or capture_plan_path else "full_scope"
         scope_row = {
             "generated_at": generated,
@@ -305,7 +352,7 @@ def _capture_platform_data_fields_locked(
             field_errors.append(str(error))
         remaining_scope_budget = field_budget
         for data_set in data_sets:
-            if remaining_scope_budget == 0 and fields_per_scope > 0:
+            if remaining_scope_budget == 0 and budget_enabled:
                 break
             dataset_id = str(data_set.get("id", ""))
             append(
@@ -328,7 +375,7 @@ def _capture_platform_data_fields_locked(
                     limit=SAFE_PAGE_LIMIT,
                     max_records=(
                         min(max(remaining_scope_budget, 1), SAFE_PAGE_LIMIT)
-                        if fields_per_scope > 0
+                        if budget_enabled
                         else max_fields_per_dataset if max_fields_per_dataset > 0 else 1000000
                     ),
                 )
@@ -336,9 +383,9 @@ def _capture_platform_data_fields_locked(
                 append("errors.jsonl", _error_row(scope, f"/data-fields?dataset.id={dataset_id}", error, generated))
                 field_errors.append(str(error))
                 continue
-            if fields_per_scope > 0:
+            if budget_enabled:
                 remaining_scope_budget = max(0, remaining_scope_budget - len(fields))
-            if fields_truncated and max_fields_per_dataset == 0 and fields_per_scope == 0:
+            if fields_truncated and max_fields_per_dataset == 0 and not budget_enabled:
                 error = ValueError(f"data-field pagination truncated at implicit cap for dataset {dataset_id}")
                 append("errors.jsonl", _error_row(scope, f"/data-fields?dataset.id={dataset_id}", error, generated))
                 field_errors.append(str(error))
@@ -359,7 +406,7 @@ def _capture_platform_data_fields_locked(
             scope_row.update({
                 "status": "completed",
                 "data_set_count": len(data_sets),
-                "certification_status": "partial" if fields_per_scope > 0 or capture_plan_path else "complete" if certification_complete else "partial",
+                "certification_status": "partial" if budget_enabled or capture_plan_path else "complete" if certification_complete else "partial",
             })
         append("scopes.jsonl", scope_row)
 
@@ -402,5 +449,5 @@ def _capture_platform_data_fields_locked(
     errors_path = capture_dir / "errors.jsonl"
     if not errors_path.exists():
         errors_path.write_text("", encoding="utf-8")
-    _write_index(capture_dir, summary)
+    _write_index(capture_dir, summary, root)
     return summary

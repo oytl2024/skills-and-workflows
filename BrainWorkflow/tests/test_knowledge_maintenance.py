@@ -28,11 +28,13 @@ class KnowledgeMaintenanceTests(unittest.TestCase):
 
             report = run_knowledge_maintenance(root, "2026-07-30T00:00:00+00:00", apply_cleanup=True)
 
-            report_path = root / "raw" / "maintenance" / "compile_reports" / "2026-07-30.json"
+            report_path = Path(report["report_path"])
             self.assertEqual(report["status"], "completed")
             self.assertTrue((root / "wiki" / "00_start_here.md").exists())
             self.assertTrue(report_path.exists())
             self.assertEqual(report["report_path"], str(report_path))
+            self.assertEqual(report_path.name, "20260730T000000Z.json")
+            self.assertTrue((report_path.parent / "latest.json").exists())
             evidence_path = Path(report["cleanup"]["verification_report_path"])
             self.assertNotEqual(evidence_path, report_path)
             self.assertEqual(report["cleanup"]["verification_status"], "completed")
@@ -91,6 +93,72 @@ class KnowledgeMaintenanceTests(unittest.TestCase):
             self.assertTrue(obsolete.exists())
             self.assertEqual(evidence["status"], "blocked")
             self.assertGreater(evidence["pre_cleanup_health"]["blocking_issue_count"], 0)
+
+    def test_maintenance_migrates_active_decisions_before_legacy_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_machine_resources(root)
+            legacy = root / "wiki" / "70_decisions"
+            legacy.mkdir(parents=True)
+            payloads = {
+                "research_option_cards.jsonl": '{"option_id":"option-1"}\n',
+                "workflow_change_proposals.jsonl": '{"proposal_id":"proposal-1"}\n',
+                "research_schedule.md": "# Active schedule\n",
+            }
+            for name, payload in payloads.items():
+                (legacy / name).write_text(payload, encoding="utf-8")
+
+            report = run_knowledge_maintenance(
+                root,
+                "2026-07-30T00:00:00+00:00",
+                apply_cleanup=True,
+            )
+
+            canonical = root / "machine" / "decisions"
+            self.assertEqual(report["status"], "completed")
+            self.assertFalse(legacy.exists())
+            for name, payload in payloads.items():
+                self.assertEqual((canonical / name).read_text(encoding="utf-8"), payload)
+            self.assertEqual(
+                {row["status"] for row in report["decision_migration"]["artifacts"]},
+                {"migrated"},
+            )
+
+    def test_maintenance_reports_are_immutable_with_latest_pointer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_machine_resources(root)
+
+            first = run_knowledge_maintenance(root, "2026-07-30T00:00:00+00:00")
+            second = run_knowledge_maintenance(root, "2026-07-30T00:00:00+00:00")
+
+            self.assertNotEqual(first["report_path"], second["report_path"])
+            self.assertTrue(Path(first["report_path"]).exists())
+            self.assertTrue(Path(second["report_path"]).exists())
+            self.assertTrue(
+                (root / "raw" / "maintenance" / "compile_reports" / "latest.json").exists()
+            )
+
+    def test_maintenance_removes_ordinary_root_file_and_refuses_sensitive_root_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_machine_resources(root)
+            ordinary = root / "old_notes.txt"
+            sensitive = root / "private.txt"
+            ordinary.write_text("obsolete\n", encoding="utf-8")
+            sensitive.write_text("keep\n", encoding="utf-8")
+
+            report = run_knowledge_maintenance(
+                root,
+                "2026-07-30T00:00:00+00:00",
+                apply_cleanup=True,
+            )
+
+            self.assertFalse(ordinary.exists())
+            self.assertTrue(sensitive.exists())
+            self.assertEqual(report["status"], "blocked")
+            self.assertEqual(report["cleanup"]["removed_count"], 1)
+            self.assertEqual(report["cleanup"]["refused_count"], 1)
 
 
 if __name__ == "__main__":

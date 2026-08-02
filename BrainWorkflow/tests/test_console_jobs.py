@@ -72,6 +72,10 @@ class ConsoleJobsTests(unittest.TestCase):
         self.assertEqual(knowledge_compile[-3:], ["--knowledge-root", str(paths.knowledge_root), "--apply-cleanup"])
         self.assertEqual(delivery_gate[-5:], ["delivery-gate", "--knowledge-root", str(paths.knowledge_root), "--runs-root", str(paths.runs_root)])
         self.assertIn("--enable-live-api", option_refresh)
+        self.assertEqual(
+            option_refresh[option_refresh.index("--option-output-dir") + 1],
+            str(paths.knowledge_root / "machine" / "decisions"),
+        )
         self.assertNotEqual(platform_compile, research_compile)
 
     def test_build_cli_command_maps_interaction_capture_fields(self):

@@ -12,6 +12,7 @@ from unittest.mock import patch
 from wqb.console_server import build_action_command, create_console_proposal, make_console_server, render_dashboard, render_proposals, render_runtime_fragments, run_console_action, update_console_proposal_decision
 from wqb.console_state import ConsolePaths, load_console_state
 from wqb.data_ledger_compile import compile_data_ledger_from_raw
+from wqb.knowledge_clean_compile import apply_obsolete_active_cleanup
 from wqb.workflow_proposals import load_workflow_proposals
 
 
@@ -938,12 +939,36 @@ class ConsoleServerTests(unittest.TestCase):
             paths = make_paths(root)
 
             completed = create_console_proposal(paths, {"summary": "Improve novelty.", "issue_type": "template_innovation"})
-            proposal_path = paths.knowledge_root / "wiki" / "70_decisions" / "workflow_change_proposals.jsonl"
+            proposal_path = paths.knowledge_root / "machine" / "decisions" / "workflow_change_proposals.jsonl"
+            legacy = paths.knowledge_root / "wiki" / "20_semantics" / "obsolete.md"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text("# obsolete\n", encoding="utf-8")
+            evidence = paths.knowledge_root / "raw" / "maintenance" / "compile_reports" / "evidence.json"
+            evidence.parent.mkdir(parents=True)
+            evidence.write_text(
+                json.dumps(
+                    {
+                        "report_type": "knowledge_maintenance_pre_cleanup_evidence",
+                        "status": "completed",
+                        "compile": {"status": "completed"},
+                        "pre_cleanup_health": {"blocking_issue_count": 0},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            apply_obsolete_active_cleanup(
+                paths.knowledge_root,
+                "2026-07-30T00:00:00+00:00",
+                dry_run=False,
+                verification_report_path=evidence,
+            )
             jobs = list(paths.job_root.glob("*/job.json"))
             proposal_exists = proposal_path.exists()
+            legacy_exists = legacy.exists()
 
         self.assertEqual(completed.status, "completed")
         self.assertTrue(proposal_exists)
+        self.assertFalse(legacy_exists)
         self.assertEqual(len(jobs), 1)
 
     def test_update_console_proposal_decision_persists_lifecycle_status(self):
@@ -951,7 +976,7 @@ class ConsoleServerTests(unittest.TestCase):
             root = Path(tmp)
             paths = make_paths(root)
             proposal_job = create_console_proposal(paths, {"summary": "Improve novelty.", "issue_type": "template_innovation"})
-            proposal = load_workflow_proposals(paths.knowledge_root / "wiki" / "70_decisions")[0]
+            proposal = load_workflow_proposals(paths.knowledge_root / "machine" / "decisions")[0]
 
             completed = update_console_proposal_decision(
                 paths,
@@ -961,7 +986,7 @@ class ConsoleServerTests(unittest.TestCase):
                     "user_decision": "Run an isolated experiment.",
                 },
             )
-            rows = load_workflow_proposals(paths.knowledge_root / "wiki" / "70_decisions")
+            rows = load_workflow_proposals(paths.knowledge_root / "machine" / "decisions")
 
         self.assertEqual(proposal_job.status, "completed")
         self.assertEqual(completed.status, "completed")

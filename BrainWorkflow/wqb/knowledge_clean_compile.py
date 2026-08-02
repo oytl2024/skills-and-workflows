@@ -7,7 +7,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from wqb.knowledge_paths import ACTIVE_TOP_LEVELS, active_top_level_names
+from wqb.knowledge_paths import (
+    ACTIVE_TOP_LEVELS,
+    DECISION_ARTIFACTS_ROOT,
+    LEGACY_DECISION_ARTIFACTS_ROOT,
+    active_top_level_names,
+)
 
 
 SENSITIVE_NAME_FRAGMENTS = (
@@ -89,6 +94,16 @@ def evaluate_clean_knowledge_structure(knowledge_root: str | Path) -> dict[str, 
                 "Move compiled content under raw, machine, or wiki.",
             )
         )
+    if root.exists():
+        for path in sorted(item for item in root.iterdir() if item.is_file()):
+            issues.append(
+                KnowledgeCleanIssue(
+                    "root_level_file",
+                    str(path),
+                    "Files are not allowed at the knowledge root.",
+                    "Move the file under raw, machine, or wiki, or remove it through guarded cleanup.",
+                )
+            )
     for prefix in OBSOLETE_ACTIVE_PREFIXES:
         path = root / prefix
         if path.exists():
@@ -124,22 +139,84 @@ def plan_obsolete_active_cleanup(knowledge_root: str | Path) -> list[CleanupCand
     """Input: knowledge root. Output: cleanup candidates. Plan ordinary removals and sensitive refusals."""
     root = Path(knowledge_root)
     rows: list[CleanupCandidate] = []
+    if root.exists():
+        for path in sorted(item for item in root.iterdir() if item.is_file()):
+            action = "refuse" if _is_sensitive(path, root) else "remove"
+            rows.append(
+                CleanupCandidate(
+                    str(path),
+                    "file at knowledge root",
+                    action,
+                    _sha256(path),
+                )
+            )
     for prefix in OBSOLETE_ACTIVE_PREFIXES:
         base = root / prefix
         if not base.exists():
             continue
         for path in sorted(base.rglob("*")):
             if path.is_file():
-                action = "refuse" if _is_sensitive(path, root) else "remove"
+                migrated = True
+                if prefix == LEGACY_DECISION_ARTIFACTS_ROOT:
+                    relative = path.relative_to(base)
+                    canonical = root / DECISION_ARTIFACTS_ROOT / relative
+                    migrated = canonical.is_file() and _sha256(canonical) == _sha256(path)
+                action = "refuse" if _is_sensitive(path, root) or not migrated else "remove"
+                reason = f"obsolete active prefix {prefix.as_posix()}"
+                if prefix == LEGACY_DECISION_ARTIFACTS_ROOT:
+                    reason += (
+                        " with exact canonical migration"
+                        if migrated
+                        else " without exact canonical migration"
+                    )
                 rows.append(
                     CleanupCandidate(
                         str(path),
-                        f"obsolete active prefix {prefix.as_posix()}",
+                        reason,
                         action,
                         _sha256(path),
                     )
                 )
     return rows
+
+
+def migrate_legacy_decision_artifacts(knowledge_root: str | Path) -> dict[str, Any]:
+    """Input: knowledge root. Output: migration evidence. Copy legacy decisions without overwriting conflicts."""
+    root = Path(knowledge_root)
+    legacy = root / LEGACY_DECISION_ARTIFACTS_ROOT
+    canonical = root / DECISION_ARTIFACTS_ROOT
+    artifacts: list[dict[str, Any]] = []
+    if legacy.exists():
+        for source in sorted(path for path in legacy.rglob("*") if path.is_file()):
+            relative = source.relative_to(legacy)
+            target = canonical / relative
+            source_hash = _sha256(source)
+            target_hash = _sha256(target) if target.is_file() else ""
+            if target.is_file() and target_hash != source_hash:
+                status = "conflict"
+            elif target.is_file():
+                status = "verified_existing"
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(source.read_bytes())
+                target_hash = _sha256(target)
+                status = "migrated"
+            artifacts.append(
+                {
+                    "source_path": str(source),
+                    "target_path": str(target),
+                    "source_sha256": source_hash,
+                    "target_sha256": target_hash,
+                    "status": status,
+                }
+            )
+    return {
+        "status": "completed"
+        if all(row["status"] != "conflict" for row in artifacts)
+        else "blocked",
+        "artifact_count": len(artifacts),
+        "artifacts": artifacts,
+    }
 
 
 def write_cleanup_log(knowledge_root: str | Path, rows: list[dict[str, Any]], generated_at: str) -> Path:

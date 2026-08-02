@@ -20,6 +20,7 @@ RAW_CANONICAL_PREFIXES = (
     "raw/research/near_misses",
     "raw/research/repairs",
     "raw/research/submissions",
+    "raw/research/runs",
 )
 
 WIKI_CANONICAL_PREFIXES = (
@@ -251,3 +252,38 @@ def update_source_index(knowledge_root: str | Path, rows: list[SourceIndexRow]) 
         )
     output.write_text("\n".join(lines), encoding="utf-8")
     return output
+
+
+def upsert_source_index_rows(
+    knowledge_root: str | Path,
+    rows: list[SourceIndexRow],
+) -> Path:
+    """Input: vault root and source rows. Output: source index path. Merge writer-owned rows by canonical path."""
+    root = Path(knowledge_root)
+    machine_index = machine_resource_path(root, "source_index")
+    merged: dict[str, SourceIndexRow] = {}
+    if machine_index.exists():
+        for line_number, line in enumerate(
+            machine_index.read_text(encoding="utf-8").splitlines(),
+            start=1,
+        ):
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+                existing = SourceIndexRow(
+                    path=str(payload["path"]),
+                    source_family=str(payload["source_family"]),
+                    source_type=str(payload["source_type"]),
+                    contents=str(payload["contents"]),
+                    update_check=str(payload["update_check"]),
+                    compiled_targets=[str(item) for item in payload["compiled_targets"]],
+                )
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+                raise ValueError(
+                    f"invalid machine source index row {line_number}: {machine_index}"
+                ) from error
+            merged[existing.path] = existing
+    for row in rows:
+        merged[row.path] = row
+    return update_source_index(root, list(merged.values()))
