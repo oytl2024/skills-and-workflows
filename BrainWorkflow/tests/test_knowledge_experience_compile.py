@@ -3,7 +3,11 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from wqb.knowledge_contracts import canonical_source_family, parse_markdown_front_matter
 from wqb.knowledge_experience_compile import compile_human_experience_wiki
+
+
+MAX_EXPECTED_COMPILED_FROM = 24
 
 
 class KnowledgeExperienceCompileTests(unittest.TestCase):
@@ -81,6 +85,46 @@ class KnowledgeExperienceCompileTests(unittest.TestCase):
                 self.assertLess(len(text), 12000)
                 self.assertNotIn('{"', text)
                 self.assertTrue(text.startswith("---\n"))
+
+    def test_compiled_from_uses_bounded_canonical_source_authority(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            machine = root / "machine"
+            machine.mkdir()
+            source_paths = [
+                "raw/platform/data_fields/2026-07-30/field_0.jsonl",
+                "raw/maintenance",
+                "raw/community/user_messages",
+                "wiki/20_semantics/old_summary.md",
+                "raw/learn/legacy.md",
+                "external/evidence.md",
+            ]
+            source_paths.extend(
+                "raw/platform/data_fields/2026-07-30/field_{:03d}_{}.jsonl".format(index, "x" * 80)
+                for index in range(MAX_EXPECTED_COMPILED_FROM * 10)
+            )
+            (machine / "data_ledger.jsonl").write_text(
+                json.dumps({"source_paths": source_paths}) + "\n",
+                encoding="utf-8",
+            )
+
+            summary = compile_human_experience_wiki(root, "2026-07-30T00:00:00+00:00")
+
+            for path_text in summary["page_paths"]:
+                text = Path(path_text).read_text(encoding="utf-8")
+                metadata, _ = parse_markdown_front_matter(text)
+                compiled_from = metadata["compiled_from"]
+                self.assertLess(len(text), 12000)
+                self.assertLessEqual(len(compiled_from), MAX_EXPECTED_COMPILED_FROM)
+                self.assertEqual(compiled_from, sorted(set(compiled_from)))
+                self.assertNotIn("raw/maintenance", compiled_from)
+                self.assertNotIn("raw/community/user_messages", compiled_from)
+                for source_path in compiled_from:
+                    family = canonical_source_family(root / source_path, root)
+                    self.assertTrue(
+                        family.startswith("raw/") or family.startswith("machine/"),
+                        msg=source_path,
+                    )
 
 
 if __name__ == "__main__":

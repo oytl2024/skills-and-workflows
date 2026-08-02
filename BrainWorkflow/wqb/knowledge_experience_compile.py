@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from wqb.knowledge_contracts import render_front_matter
+from wqb.knowledge_contracts import canonical_source_family, render_front_matter
 from wqb.knowledge_paths import (
     existing_machine_resource_path,
     machine_resource_path,
@@ -23,13 +23,15 @@ HUMAN_WIKI_FILES = {
     "engineering_lessons": Path("wiki") / "50_engineering_lessons.md",
 }
 
+MAX_COMPILED_FROM = 24
+
 
 def _front_matter(generated_at: str, compiled_from: list[str], consumed_by: list[str]) -> str:
     """Input: timestamp, sources, consumers. Output: Markdown front matter."""
     return render_front_matter(
         {
             "compiled_at": generated_at,
-            "compiled_from": compiled_from,
+            "compiled_from": sorted(set(compiled_from))[:MAX_COMPILED_FROM],
             "consumed_by": consumed_by,
             "stale_after_days": 14,
             "trust_level": "compiled_experience",
@@ -101,11 +103,12 @@ def _canonical_sources(
         values = row.get(source_key, [])
         if not isinstance(values, list):
             continue
-        for value in values:
+        for value in values[:MAX_COMPILED_FROM]:
             relative = str(value).replace("\\", "/").removeprefix("knowledge/")
-            if relative.startswith("raw/") or relative.startswith("machine/"):
+            family = canonical_source_family(knowledge_root / relative, knowledge_root)
+            if family.startswith("machine/") or (family.startswith("raw/") and Path(relative).suffix):
                 sources.add(relative)
-    return sorted(sources)
+    return sorted(sources)[:MAX_COMPILED_FROM]
 
 
 def _write_page(path: Path, front_matter: str, title: str, lines: list[str]) -> Path:
@@ -132,7 +135,7 @@ def compile_human_experience_wiki(
     template_sources = _canonical_sources(root, ["template_library"], template_rows, "source_paths")
     benchmark_sources = _canonical_sources(root, ["benchmark_rules"], benchmark_rows, "evidence_paths")
     workflow_sources = sorted(set(data_sources + template_sources + benchmark_sources))
-    engineering_sources = ["raw/community/user_messages", "raw/maintenance"]
+    engineering_sources = workflow_sources
 
     underexplored = sorted(
         ledger_rows,
