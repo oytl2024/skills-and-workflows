@@ -19,7 +19,7 @@ def valid_option(**overrides):
         "expected_asset_value": "A measured research direction.",
         "correlation_risk": "low",
         "resource_cost": "small",
-        "evidence": [{"source_type": "ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "title": "Ledger", "timestamp": "2026-07-16"}],
+        "evidence": [{"source_type": "ledger", "path": "machine/data_ledger.jsonl", "title": "Ledger", "timestamp": "2026-07-16"}],
         "failure_modes": [],
         "decision_needed": "Start the selected scope.",
         "score": {"total": 1.0, "components": {}, "penalties": {}, "reasons": ["measured coverage"]},
@@ -36,7 +36,7 @@ def write_start_artifacts(root: Path, ledger_row: dict[str, object] | list[dict[
         json.dumps(valid_option(option_id="option-1")) + "\n",
         encoding="utf-8",
     )
-    ledger = knowledge / "wiki" / "20_semantics" / "data_ledger.jsonl"
+    ledger = knowledge / "machine" / "data_ledger.jsonl"
     ledger.parent.mkdir(parents=True)
     base = {
         "dataset_id": "fundamental3",
@@ -64,8 +64,8 @@ def write_start_artifacts(root: Path, ledger_row: dict[str, object] | list[dict[
     }
     ledger_rows = ledger_row if isinstance(ledger_row, list) else [ledger_row]
     ledger.write_text("".join(json.dumps({**base, **row}) + "\n" for row in ledger_rows), encoding="utf-8")
-    templates = knowledge / "wiki" / "30_templates" / "template_library.jsonl"
-    templates.parent.mkdir(parents=True)
+    templates = knowledge / "machine" / "template_library.jsonl"
+    templates.parent.mkdir(parents=True, exist_ok=True)
     templates.write_text(
         json.dumps({
             "template_id": "matrix_ts_zscore_rank",
@@ -84,8 +84,8 @@ def write_start_artifacts(root: Path, ledger_row: dict[str, object] | list[dict[
         }) + "\n",
         encoding="utf-8",
     )
-    benchmark = knowledge / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
-    benchmark.parent.mkdir(parents=True)
+    benchmark = knowledge / "machine" / "benchmark_rules.jsonl"
+    benchmark.parent.mkdir(parents=True, exist_ok=True)
     benchmark.write_text(
         json.dumps(
             {
@@ -105,12 +105,12 @@ def write_start_artifacts(root: Path, ledger_row: dict[str, object] | list[dict[
     activity = knowledge / "wiki" / "10_foundations" / "activity_snapshot.md"
     activity.parent.mkdir(parents=True)
     activity.write_text("# Activity Snapshot\n", encoding="utf-8")
-    maintenance = knowledge / "wiki" / "80_maintenance"
-    maintenance.mkdir(parents=True)
+    maintenance = knowledge / "machine"
+    maintenance.mkdir(parents=True, exist_ok=True)
     artifacts = {
-        "data_ledger": "wiki/20_semantics/data_ledger.jsonl",
-        "template_library": "wiki/30_templates/template_library.jsonl",
-        "benchmark_rules": "wiki/50_benchmarks/benchmark_rules.jsonl",
+        "data_ledger": "machine/data_ledger.jsonl",
+        "template_library": "machine/template_library.jsonl",
+        "benchmark_rules": "machine/benchmark_rules.jsonl",
         "activity_snapshot": "wiki/10_foundations/activity_snapshot.md",
     }
     (maintenance / "freshness_manifest.json").write_text(

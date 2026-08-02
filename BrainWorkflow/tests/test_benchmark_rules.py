@@ -48,7 +48,7 @@ class BenchmarkRulesTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
-            path = root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+            path = root / "machine" / "benchmark_rules.jsonl"
             write_benchmark_rules_jsonl(path, [unrelated])
             before = benchmark_alpha_record(
                 record,
@@ -70,7 +70,7 @@ class BenchmarkRulesTests(unittest.TestCase):
     def test_present_empty_rulebook_does_not_restore_default_rules(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
-            path = root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+            path = root / "machine" / "benchmark_rules.jsonl"
             path.parent.mkdir(parents=True)
             path.write_text("", encoding="utf-8")
 
@@ -201,7 +201,7 @@ class BenchmarkRulesTests(unittest.TestCase):
                 root = Path(tmp)
                 knowledge = root / "knowledge"
                 write_benchmark_rules_jsonl(
-                    knowledge / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl",
+                    knowledge / "machine" / "benchmark_rules.jsonl",
                     [rule],
                 )
                 run_dir = root / "runs" / "run1"
@@ -310,7 +310,7 @@ class BenchmarkRulesTests(unittest.TestCase):
                         "start_snapshot": {
                             "artifact_binding_version": 2,
                             "benchmark_rulebook": {
-                                "path": "wiki/50_benchmarks/benchmark_rules.jsonl",
+                                "path": "machine/benchmark_rules.jsonl",
                                 "sha256": benchmark_rulebook_digest([bound_rule]),
                                 "rules": [benchmark_rule_to_dict(bound_rule)],
                             },
@@ -349,7 +349,7 @@ class BenchmarkRulesTests(unittest.TestCase):
                             "start_snapshot": {
                                 "artifact_binding_version": version,
                                 "benchmark_rulebook": {
-                                    "path": "wiki/50_benchmarks/benchmark_rules.jsonl",
+                                    "path": "machine/benchmark_rules.jsonl",
                                     "sha256": benchmark_rulebook_digest([rule]),
                                     "rules": [benchmark_rule_to_dict(rule)],
                                 },

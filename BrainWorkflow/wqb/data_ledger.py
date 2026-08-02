@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from wqb.knowledge_paths import existing_machine_resource_path
+
 
 LOW_RISK_BONUS = 1.5
 MEDIUM_RISK_BONUS = 0.3
@@ -337,6 +339,16 @@ def load_data_ledger(path: Path) -> list[DataLedgerRecord]:
         if line.strip():
             records.append(_record_from_dict(json.loads(line)))
     return records
+
+
+def data_ledger_path_for_knowledge(knowledge_root: str | Path) -> Path:
+    """Input: knowledge root. Output: Path. Return the current data-ledger authority path."""
+    return existing_machine_resource_path(knowledge_root, "data_ledger")
+
+
+def load_data_ledger_from_knowledge(knowledge_root: str | Path) -> list[DataLedgerRecord]:
+    """Input: knowledge root. Output: DataLedgerRecord list. Load canonical machine ledger with legacy fallback."""
+    return load_data_ledger(data_ledger_path_for_knowledge(knowledge_root))
 
 
 def score_data_for_research(record: DataLedgerRecord, incentive: str, region: str, delay: int) -> float:

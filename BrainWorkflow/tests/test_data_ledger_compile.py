@@ -16,6 +16,31 @@ def write_jsonl(path, rows):
 
 
 class DataLedgerCompileTests(unittest.TestCase):
+    def test_compile_data_ledger_writes_jsonl_to_machine_and_markdown_out_of_machine(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture_dir = root / "raw" / "platform" / "data_fields" / "2026-07-30"
+            scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+            write_jsonl(capture_dir / "data_fields.jsonl", [{
+                "scope": scope,
+                "data_set": {"id": "fundamental3", "name": "Fundamentals", "category": "fundamental"},
+                "field": {"id": "cash_field", "type": "MATRIX"},
+            }])
+            write_jsonl(capture_dir / "scopes.jsonl", [{
+                "scope": scope,
+                "status": "completed",
+                "certification_status": "complete",
+            }])
+            (capture_dir / "manifest.json").write_text(
+                json.dumps({"generated_at": "2026-07-30T00:00:00+00:00", "certification_status": "complete", "requested_matrix": [scope]}),
+                encoding="utf-8",
+            )
+
+            summary = compile_data_ledger_from_raw(root, capture_dir=capture_dir, generated_at="2026-07-30T00:00:00+00:00")
+            self.assertEqual(Path(summary["ledger_path"]), root / "machine" / "data_ledger.jsonl")
+            self.assertTrue((root / "machine" / "data_ledger.jsonl").exists())
+            self.assertFalse((root / "wiki" / "20_semantics" / "data_ledger.jsonl").exists())
+
     def test_latest_capture_dir_selects_newest_data_field_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
@@ -52,7 +77,7 @@ class DataLedgerCompileTests(unittest.TestCase):
             (capture / "manifest.json").write_text(json.dumps({"status": "completed", "field_count": 2, "certification_status": "complete"}), encoding="utf-8")
 
             summary = compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
-            ledger_path = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger_path = root / "machine" / "data_ledger.jsonl"
             records = load_data_ledger(ledger_path)
             raw_row = json.loads(ledger_path.read_text(encoding="utf-8").splitlines()[0])
 
@@ -85,7 +110,7 @@ class DataLedgerCompileTests(unittest.TestCase):
             (capture / "manifest.json").write_text(json.dumps({"status": "completed_with_warnings", "certification_status": "complete"}), encoding="utf-8")
 
             compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
-            rows = [json.loads(line) for line in (root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()]
+            rows = [json.loads(line) for line in (root / "machine" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()]
 
         self.assertEqual([(row["region"], row["coverage_status"]) for row in rows], [("EUR", "partial"), ("USA", "measured_raw")])
         self.assertTrue(all(len(row["available_scopes"]) == 1 for row in rows))
@@ -119,7 +144,7 @@ class DataLedgerCompileTests(unittest.TestCase):
             )
 
             compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
-            rows = [json.loads(line) for line in (root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()]
+            rows = [json.loads(line) for line in (root / "machine" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()]
 
         by_field = {row["field_id"]: row["coverage_status"] for row in rows}
         self.assertEqual(by_field["field_from_completed_generation"], "measured_raw")
@@ -128,7 +153,7 @@ class DataLedgerCompileTests(unittest.TestCase):
     def test_targeted_compile_preserves_prior_records_for_unattempted_exact_scopes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
-            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = root / "machine" / "data_ledger.jsonl"
             write_jsonl(ledger, [{
                 "dataset_id": "fundamental3",
                 "field_id": "eur_field",
@@ -180,7 +205,7 @@ class DataLedgerCompileTests(unittest.TestCase):
     def test_targeted_compile_splits_legacy_multi_scope_rows_for_unattempted_scopes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
-            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = root / "machine" / "data_ledger.jsonl"
             usa_scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
             eur_scope = {"instrument_type": "EQUITY", "region": "EUR", "delay": 1, "universe": "TOP3000"}
             write_jsonl(ledger, [{
@@ -239,7 +264,7 @@ class DataLedgerCompileTests(unittest.TestCase):
     def test_targeted_compile_replaces_attempted_scope_with_partial_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
-            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = root / "machine" / "data_ledger.jsonl"
             eur_scope = {"instrument_type": "EQUITY", "region": "EUR", "delay": 1, "universe": "TOP3000"}
             write_jsonl(ledger, [{
                 "dataset_id": "fundamental3",
@@ -290,7 +315,7 @@ class DataLedgerCompileTests(unittest.TestCase):
     def test_targeted_compile_removes_prior_measured_row_for_completed_zero_field_attempt(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
-            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = root / "machine" / "data_ledger.jsonl"
             scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
             write_jsonl(ledger, [{
                 "dataset_id": "fundamental3",
@@ -337,7 +362,7 @@ class DataLedgerCompileTests(unittest.TestCase):
     def test_targeted_compile_does_not_leave_prior_measured_row_for_failed_zero_field_attempt(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
-            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = root / "machine" / "data_ledger.jsonl"
             scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
             write_jsonl(ledger, [{
                 "dataset_id": "fundamental3",
@@ -415,7 +440,7 @@ class DataLedgerCompileTests(unittest.TestCase):
             (capture / "manifest.json").write_text(json.dumps({"status": "completed", "certification_status": "complete"}), encoding="utf-8")
 
             compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
-            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            row = json.loads((root / "machine" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
 
         self.assertEqual(row["coverage_status"], "partial")
 
@@ -432,7 +457,7 @@ class DataLedgerCompileTests(unittest.TestCase):
             (capture / "manifest.json").write_text(json.dumps({"status": "completed", "certification_status": "complete"}), encoding="utf-8")
 
             compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
-            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            row = json.loads((root / "machine" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
 
         self.assertEqual(row["coverage_status"], "partial")
 
@@ -450,7 +475,7 @@ class DataLedgerCompileTests(unittest.TestCase):
             (capture / "manifest.json").write_text(json.dumps({"status": "completed", "certification_status": "complete"}), encoding="utf-8")
 
             compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
-            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            row = json.loads((root / "machine" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
 
         self.assertEqual(row["coverage_status"], "partial")
 
@@ -458,7 +483,7 @@ class DataLedgerCompileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
             capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
-            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = root / "machine" / "data_ledger.jsonl"
             ledger.parent.mkdir(parents=True)
             ledger.write_text('{"field_id":"last_good"}\n', encoding="utf-8")
             write_jsonl(capture / "data_fields.jsonl", [{
@@ -490,7 +515,7 @@ class DataLedgerCompileTests(unittest.TestCase):
             (capture / "manifest.json").write_text(json.dumps({"status": "completed_with_warnings"}), encoding="utf-8")
 
             summary = compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
-            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            row = json.loads((root / "machine" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
 
         self.assertEqual(summary["source_status"], "partial")
         self.assertEqual(row["coverage_status"], "partial")
@@ -503,7 +528,7 @@ class DataLedgerCompileTests(unittest.TestCase):
             (capture / "manifest.json").write_text(json.dumps({"status": "completed", "active_limits": {"max_scopes": 0, "max_datasets_per_scope": 1, "max_fields_per_dataset": 0}, "certification_status": "partial"}), encoding="utf-8")
 
             compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
-            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            row = json.loads((root / "machine" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
 
         self.assertEqual(row["coverage_status"], "partial")
 
@@ -511,7 +536,7 @@ class DataLedgerCompileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
             capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
-            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = root / "machine" / "data_ledger.jsonl"
             write_jsonl(capture / "data_fields.jsonl", [{"scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}, "data_set": {"id": "fundamental3", "name": "Fundamentals", "category": "fundamental"}, "field": {"id": "cash_field", "type": "MATRIX", "description": "Quarterly cash"}}])
             write_jsonl(ledger, [{"dataset_id": "fundamental3", "field_id": "cash_field", "simulation_usage_count": 4, "submitted_usage_count": 2, "repair_usage_count": 1, "last_used_at": "2026-07-15", "best_result_label": "repairable_signal", "experiment_paths": ["wiki/40_experiments/run.md"], "activity_tags": ["power_pool"]}])
 
@@ -532,9 +557,9 @@ class DataLedgerCompileTests(unittest.TestCase):
             root = Path(tmp) / "knowledge"
             capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
             write_jsonl(capture / "data_fields.jsonl", [{"scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}, "data_set": {"id": "fundamental3"}, "field": {"id": "cash_field", "type": "MATRIX"}}])
-            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = root / "machine" / "data_ledger.jsonl"
             markdown = root / "wiki" / "20_semantics" / "data_ledger.md"
-            manifest = root / "wiki" / "80_maintenance" / "freshness_manifest.json"
+            manifest = root / "machine" / "freshness_manifest.json"
             for path, content in ((ledger, '{"dataset_id": "old", "field_id": "old"}\n'), (markdown, "old markdown\n"), (manifest, "[{\"name\": \"old\"}]")):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(content, encoding="utf-8")
@@ -558,7 +583,7 @@ class DataLedgerCompileTests(unittest.TestCase):
             root = Path(tmp) / "knowledge"
             capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
             capture.mkdir(parents=True)
-            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = root / "machine" / "data_ledger.jsonl"
             ledger.parent.mkdir(parents=True)
             ledger.write_text('{"field_id": "last_good"}\n', encoding="utf-8")
             write_jsonl(
@@ -582,7 +607,7 @@ class DataLedgerCompileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
             capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
-            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = root / "machine" / "data_ledger.jsonl"
             ledger.parent.mkdir(parents=True)
             capture.mkdir(parents=True)
             ledger.write_text('{"field_id": "last_good"}\n', encoding="utf-8")
@@ -605,7 +630,7 @@ class DataLedgerCompileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
             capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
-            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = root / "machine" / "data_ledger.jsonl"
             ledger.parent.mkdir(parents=True)
             capture.mkdir(parents=True)
             ledger.write_text('{"field_id": "last_good"}\n', encoding="utf-8")
@@ -636,7 +661,7 @@ class DataLedgerCompileTests(unittest.TestCase):
             (capture / "manifest.json").write_text(json.dumps({"status": "completed_with_warnings", "generated_at": "2026-07-16T08:00:00+00:00", "certification_status": "complete"}), encoding="utf-8")
 
             compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
-            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            row = json.loads((root / "machine" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
 
         self.assertEqual(row["coverage_status"], "measured_raw")
 
@@ -648,7 +673,7 @@ class DataLedgerCompileTests(unittest.TestCase):
             (capture / "manifest.json").write_text(json.dumps({"status": "completed", "generated_at": "2025-01-02T08:00:00+00:00"}), encoding="utf-8")
 
             compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
-            freshness = json.loads((root / "wiki" / "80_maintenance" / "freshness_manifest.json").read_text(encoding="utf-8"))
+            freshness = json.loads((root / "machine" / "freshness_manifest.json").read_text(encoding="utf-8"))
 
         entry = next(row for row in freshness if row["name"] == "data_ledger")
         self.assertEqual(entry["updated_at"], "2025-01-02")
@@ -659,7 +684,7 @@ class DataLedgerCompileTests(unittest.TestCase):
             root = Path(tmp) / "knowledge"
             eur_scope = {"instrument_type": "EQUITY", "region": "EUR", "delay": 1, "universe": "TOP3000"}
             usa_scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
-            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = root / "machine" / "data_ledger.jsonl"
             write_jsonl(ledger, [{
                 "dataset_id": "fundamental3",
                 "dataset_name": "Fundamentals",
@@ -684,7 +709,7 @@ class DataLedgerCompileTests(unittest.TestCase):
                 "available_scopes": [eur_scope],
                 "compatible_template_ids": ["matrix_ts_zscore_rank"],
             }])
-            template = root / "wiki" / "30_templates" / "template_library.jsonl"
+            template = root / "machine" / "template_library.jsonl"
             write_jsonl(template, [{
                 "template_id": "matrix_ts_zscore_rank",
                 "hypothesis": "Rank cash.",
@@ -701,7 +726,7 @@ class DataLedgerCompileTests(unittest.TestCase):
                 "compatible_universes": ["TOP3000"],
             }])
             (root / "wiki" / "50_benchmarks").mkdir(parents=True, exist_ok=True)
-            (root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl").write_text(
+            (root / "machine" / "benchmark_rules.jsonl").write_text(
                 json.dumps(
                     {
                         "rule_id": "near_miss",
@@ -719,14 +744,14 @@ class DataLedgerCompileTests(unittest.TestCase):
             )
             (root / "wiki" / "10_foundations").mkdir(parents=True, exist_ok=True)
             (root / "wiki" / "10_foundations" / "activity_snapshot.md").write_text("# Activity Snapshot\n", encoding="utf-8")
-            freshness = root / "wiki" / "80_maintenance" / "freshness_manifest.json"
+            freshness = root / "machine" / "freshness_manifest.json"
             freshness.parent.mkdir(parents=True, exist_ok=True)
             freshness.write_text(
                 json.dumps(
                     [
-                        {"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-10", "max_age_days": 1},
-                        {"name": "template_library", "path": "wiki/30_templates/template_library.jsonl", "updated_at": "2026-07-16", "max_age_days": 7},
-                        {"name": "benchmark_rules", "path": "wiki/50_benchmarks/benchmark_rules.jsonl", "updated_at": "2026-07-16", "max_age_days": 7},
+                        {"name": "data_ledger", "path": "machine/data_ledger.jsonl", "updated_at": "2026-07-10", "max_age_days": 1},
+                        {"name": "template_library", "path": "machine/template_library.jsonl", "updated_at": "2026-07-16", "max_age_days": 7},
+                        {"name": "benchmark_rules", "path": "machine/benchmark_rules.jsonl", "updated_at": "2026-07-16", "max_age_days": 7},
                         {"name": "activity_snapshot", "path": "wiki/10_foundations/activity_snapshot.md", "updated_at": "2026-07-16", "max_age_days": 7},
                     ]
                 ),
@@ -782,9 +807,9 @@ class DataLedgerCompileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
             capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
-            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = root / "machine" / "data_ledger.jsonl"
             markdown = root / "wiki" / "20_semantics" / "data_ledger.md"
-            manifest = root / "wiki" / "80_maintenance" / "freshness_manifest.json"
+            manifest = root / "machine" / "freshness_manifest.json"
             for path, content in ((ledger, '{"field_id": "last_good"}\n'), (markdown, "last good markdown\n"), (manifest, "[{\"name\": \"last_good\"}]")):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(content, encoding="utf-8")

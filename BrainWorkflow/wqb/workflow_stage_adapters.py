@@ -11,17 +11,18 @@ from wqb.benchmark_rules import (
     OFFICIAL_WORKFLOW_MARKER_FILES,
     START_SNAPSHOT_VERSION,
     benchmark_rule_to_dict,
+    benchmark_rules_path_for_knowledge,
     benchmark_rulebook_digest,
     benchmark_rules_from_start_snapshot,
     load_benchmark_rules,
     load_run_benchmark_rules,
 )
-from wqb.data_ledger import data_ledger_record_from_dict, load_data_ledger
+from wqb.data_ledger import data_ledger_path_for_knowledge, data_ledger_record_from_dict, load_data_ledger_from_knowledge
 from wqb.option_cards import option_card_from_row, read_option_card_jsonl
 from wqb.principle_model import OptionCard
 from wqb.research_scheduler import build_research_schedule, research_schedule_to_dict, write_research_schedule
 from wqb.run_readiness import evaluate_run_readiness
-from wqb.template_library import load_template_library, select_templates_for_data, template_record_from_dict
+from wqb.template_library import load_template_library_from_knowledge, select_templates_for_data, template_library_path_for_knowledge, template_record_from_dict
 
 
 START_SNAPSHOT_DATA_LEDGER_ROW_LIMIT = 200
@@ -331,16 +332,16 @@ def create_start_snapshot(
     _require_start_snapshot_readiness(knowledge, scope)
     ledger_rows = [
         row
-        for row in _read_jsonl_objects(knowledge / "wiki" / "20_semantics" / "data_ledger.jsonl")
+        for row in _read_jsonl_objects(data_ledger_path_for_knowledge(knowledge))
         if _row_matches_scope(row, scope)
     ]
-    template_rows = _read_jsonl_objects(knowledge / "wiki" / "30_templates" / "template_library.jsonl")
+    template_rows = _read_jsonl_objects(template_library_path_for_knowledge(knowledge))
     snapshot_ledger_rows, compatible_ids, row_counts = _select_start_snapshot_rows(
         selected, scope, ledger_rows, template_rows
     )
     _validate_start_artifact_rows(selected, scope, snapshot_ledger_rows, template_rows)
     selected_template_rows = [row for row in template_rows if str(row.get("template_id", "")) in set(compatible_ids)]
-    benchmark_rules = load_benchmark_rules(knowledge / BENCHMARK_RULES_PATH)
+    benchmark_rules = load_benchmark_rules(benchmark_rules_path_for_knowledge(knowledge))
     if not benchmark_rules:
         raise ValueError("start snapshot benchmark rule rows are required")
     return {
@@ -438,8 +439,8 @@ def schedule_research_stage(
         if selected is None:
             raise ValueError(f"selected research option not found: {selected_option_id}")
         region, delay, universe = _scope_from_selected_or_option(selected_scope, selected)
-        ledger = load_data_ledger(knowledge / "wiki" / "20_semantics" / "data_ledger.jsonl")
-        templates = load_template_library(knowledge / "wiki" / "30_templates" / "template_library.jsonl")
+        ledger = load_data_ledger_from_knowledge(knowledge)
+        templates = load_template_library_from_knowledge(knowledge)
         benchmark_rules = []
     stage_dir = run_root / "stages" / "schedule"
     stage_dir.mkdir(parents=True, exist_ok=True)

@@ -96,7 +96,7 @@ class KnowledgeFreshnessTest(unittest.TestCase):
     def test_load_freshness_manifest(self):
         row = {
             "name": "data_ledger",
-            "path": "knowledge/wiki/20_semantics/data_ledger.jsonl",
+            "path": "knowledge/machine/data_ledger.jsonl",
             "updated_at": "2026-07-08",
             "max_age_days": 1,
         }
@@ -121,7 +121,7 @@ class KnowledgeFreshnessTest(unittest.TestCase):
                 load_freshness_manifest(invalid)
 
     def test_load_freshness_manifest_strictly_requires_research_run_entries(self):
-        partial = [{"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-10", "max_age_days": 1}]
+        partial = [{"name": "data_ledger", "path": "machine/data_ledger.jsonl", "updated_at": "2026-07-10", "max_age_days": 1}]
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "freshness.json"
             for manifest in ([], partial):
@@ -181,8 +181,8 @@ class KnowledgeFreshnessTest(unittest.TestCase):
 
     def test_evaluate_freshness_marks_stale_records(self):
         records = [
-            KnowledgeFreshnessRecord("data_ledger", "knowledge/wiki/20_semantics/data_ledger.jsonl", "2026-07-08", 1),
-            KnowledgeFreshnessRecord("template_library", "knowledge/wiki/30_templates/template_library.jsonl", "2026-07-10", 7),
+            KnowledgeFreshnessRecord("data_ledger", "knowledge/machine/data_ledger.jsonl", "2026-07-08", 1),
+            KnowledgeFreshnessRecord("template_library", "knowledge/machine/template_library.jsonl", "2026-07-10", 7),
         ]
 
         statuses = evaluate_freshness(records, today=date(2026, 7, 10))
@@ -193,7 +193,7 @@ class KnowledgeFreshnessTest(unittest.TestCase):
         self.assertEqual(by_name["data_ledger"].age_days, 2)
 
     def test_evaluate_freshness_marks_missing_artifacts_stale_when_root_is_provided(self):
-        records = [KnowledgeFreshnessRecord("data_ledger", "wiki/20_semantics/data_ledger.jsonl", "2026-07-10", 7)]
+        records = [KnowledgeFreshnessRecord("data_ledger", "machine/data_ledger.jsonl", "2026-07-10", 7)]
         with tempfile.TemporaryDirectory() as tmp:
             statuses = evaluate_freshness(records, today=date(2026, 7, 10), artifact_root=Path(tmp))
 

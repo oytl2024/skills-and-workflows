@@ -4,23 +4,23 @@ import json
 from pathlib import Path
 from typing import Any
 
-from wqb.benchmark_rules import BENCHMARK_RULES_PATH, load_benchmark_rules
+from wqb.benchmark_rules import benchmark_rules_path_for_knowledge, load_benchmark_rules
 from wqb.data_ledger import (
     DataLedgerRecord,
+    data_ledger_path_for_knowledge,
     is_authoritative_data_record,
-    load_data_ledger,
+    load_data_ledger_from_knowledge,
     select_data_for_research,
     summarize_data_ledger_authority,
 )
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest
-from wqb.template_library import load_template_library, select_templates_for_data
+from wqb.knowledge_paths import existing_machine_resource_path
+from wqb.template_library import load_template_library_from_knowledge, select_templates_for_data, template_library_path_for_knowledge
 
 
 READINESS_MODES = {"maintenance", "plan-only", "research", "submit-candidate"}
 STRICT_BLOCKING_MODES = {"research", "submit-candidate"}
-FRESHNESS_MANIFEST_PATH = Path("wiki") / "80_maintenance" / "freshness_manifest.json"
-DATA_LEDGER_PATH = Path("wiki") / "20_semantics" / "data_ledger.jsonl"
-TEMPLATE_LIBRARY_PATH = Path("wiki") / "30_templates" / "template_library.jsonl"
+FRESHNESS_MANIFEST_RESOURCE = "freshness_manifest"
 
 
 @dataclass(frozen=True)
@@ -328,11 +328,11 @@ def _validate_scope_artifacts(
     if region is None or universe is None or delay is None:
         return
     level = _level_for_mode(mode)
-    ledger_path = root / DATA_LEDGER_PATH
-    template_path = root / TEMPLATE_LIBRARY_PATH
+    ledger_path = data_ledger_path_for_knowledge(root)
+    template_path = template_library_path_for_knowledge(root)
     try:
-        ledger_records = load_data_ledger(ledger_path)
-        template_records = load_template_library(template_path)
+        ledger_records = load_data_ledger_from_knowledge(root)
+        template_records = load_template_library_from_knowledge(root)
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
         issues.append(_issue(level, "parse_error", f"Cannot load scoped knowledge artifacts: {error}", root, "Fix JSONL before running research."))
         return
@@ -388,7 +388,7 @@ def _validate_scope_artifacts(
                     level,
                     "invalid_scope_data_freshness",
                     "Data ledger freshness policy is missing for scoped readiness.",
-                    root / FRESHNESS_MANIFEST_PATH,
+                    existing_machine_resource_path(root, FRESHNESS_MANIFEST_RESOURCE),
                     "Fix freshness_manifest.json before running research.",
                 )
             )
@@ -491,7 +491,7 @@ def evaluate_run_readiness(
     generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     issues: list[ReadinessIssue] = []
     freshness_records: list[Any] = []
-    manifest = root / FRESHNESS_MANIFEST_PATH
+    manifest = existing_machine_resource_path(root, FRESHNESS_MANIFEST_RESOURCE)
     if not manifest.exists():
         issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "missing_manifest", "Freshness manifest is missing.", manifest, "Run bootstrap-knowledge."))
     else:
@@ -501,15 +501,17 @@ def evaluate_run_readiness(
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
             issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "parse_error", f"Cannot load freshness manifest: {error}", manifest, "Fix the freshness manifest before running."))
         else:
+            benchmark_rulebook_path = benchmark_rules_path_for_knowledge(root)
+            benchmark_rulebook_reference = benchmark_rulebook_path.relative_to(root).as_posix()
             for record in freshness_records:
-                if record.name == "benchmark_rules" and Path(record.path) != BENCHMARK_RULES_PATH:
+                if record.name == "benchmark_rules" and Path(record.path).as_posix() != benchmark_rulebook_reference:
                     issues.append(
                         _issue(
                             _level_for_mode(mode),
                             "invalid_benchmark_rule_path",
                             "Freshness manifest must track the runtime benchmark rulebook.",
                             record.path,
-                            f"Set benchmark_rules path to {BENCHMARK_RULES_PATH.as_posix()}.",
+                            f"Set benchmark_rules path to {benchmark_rulebook_reference}.",
                         )
                     )
             for status in statuses:
@@ -517,9 +519,9 @@ def evaluate_run_readiness(
                     issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "missing_artifact", f"Required artifact is missing: {status.name}", status.path, "Run bootstrap-knowledge."))
                 elif status.stale:
                     issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "stale_artifact", f"Required artifact is stale: {status.name}", status.path, "Run knowledge maintenance."))
-    _check_jsonl_artifact(root / DATA_LEDGER_PATH, "data_ledger", issues, mode)
-    _check_jsonl_artifact(root / TEMPLATE_LIBRARY_PATH, "template_library", issues, mode)
-    _check_benchmark_rulebook(root / BENCHMARK_RULES_PATH, issues, mode)
+    _check_jsonl_artifact(data_ledger_path_for_knowledge(root), "data_ledger", issues, mode)
+    _check_jsonl_artifact(template_library_path_for_knowledge(root), "template_library", issues, mode)
+    _check_benchmark_rulebook(benchmark_rules_path_for_knowledge(root), issues, mode)
     _validate_scope_artifacts(
         root,
         mode,

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from wqb.data_ledger import DataLedgerRecord
+from wqb.knowledge_paths import existing_machine_resource_path
 
 
 FIELD_TYPE_MATCH_BONUS = 3.0
@@ -109,6 +110,16 @@ def load_template_library(path: Path) -> list[TemplateRecord]:
         if line.strip():
             records.append(_template_from_dict(json.loads(line)))
     return records
+
+
+def template_library_path_for_knowledge(knowledge_root: str | Path) -> Path:
+    """Input: knowledge root. Output: Path. Return the current template-library authority path."""
+    return existing_machine_resource_path(knowledge_root, "template_library")
+
+
+def load_template_library_from_knowledge(knowledge_root: str | Path) -> list[TemplateRecord]:
+    """Input: knowledge root. Output: TemplateRecord list. Load canonical template records with legacy fallback."""
+    return load_template_library(template_library_path_for_knowledge(knowledge_root))
 
 
 def template_matrix_ready(template: TemplateRecord) -> bool:

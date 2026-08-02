@@ -10,13 +10,9 @@ from wqb.research_planner import generate_research_options, plan_research_option
 
 def write_seed_knowledge(root: Path) -> None:
     """Input: knowledge root Path. Output: none. Write seed semantic ledgers without authoritative measured data."""
-    semantics = root / "wiki" / "20_semantics"
-    templates = root / "wiki" / "30_templates"
-    benchmarks = root / "wiki" / "50_benchmarks"
-    semantics.mkdir(parents=True, exist_ok=True)
-    templates.mkdir(parents=True, exist_ok=True)
-    benchmarks.mkdir(parents=True, exist_ok=True)
-    (semantics / "data_ledger.jsonl").write_text(
+    machine = root / "machine"
+    machine.mkdir(parents=True, exist_ok=True)
+    (machine / "data_ledger.jsonl").write_text(
         json.dumps(
             {
                 "dataset_id": "seed_dataset",
@@ -43,7 +39,7 @@ def write_seed_knowledge(root: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    (semantics / "operator_semantics.jsonl").write_text(
+    (machine / "operator_ledger.jsonl").write_text(
         json.dumps(
             {
                 "operator": "rank",
@@ -59,7 +55,7 @@ def write_seed_knowledge(root: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    (templates / "template_library.jsonl").write_text(
+    (machine / "template_library.jsonl").write_text(
         json.dumps(
             {
                 "template_id": "seed_template",
@@ -77,7 +73,7 @@ def write_seed_knowledge(root: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    (benchmarks / "benchmark_rules.jsonl").write_text(
+    (machine / "benchmark_rules.jsonl").write_text(
         json.dumps(
             {
                 "rule_id": "seed_rule",
@@ -114,7 +110,7 @@ class ResearchPlannerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
             write_seed_knowledge(root)
-            rule_path = root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+            rule_path = root / "machine" / "benchmark_rules.jsonl"
             row = {
                 "rule_id": "planner_correlation_rule",
                 "issue_types": ["correlation"],
@@ -176,7 +172,7 @@ class ResearchPlannerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
             write_seed_knowledge(root)
-            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = root / "machine" / "data_ledger.jsonl"
             ledger.write_text(
                 json.dumps(
                     {

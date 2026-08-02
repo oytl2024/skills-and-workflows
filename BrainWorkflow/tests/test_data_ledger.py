@@ -8,6 +8,7 @@ from wqb.data_ledger import (
     data_ledger_record_from_dict,
     data_ledger_record_to_dict,
     data_record_authority,
+    load_data_ledger_from_knowledge,
     is_authoritative_data_record,
     load_data_ledger,
     score_data_for_research,
@@ -18,6 +19,31 @@ from wqb.data_ledger import (
 
 
 class DataLedgerTest(unittest.TestCase):
+    def test_readiness_prefers_machine_resource_over_legacy_resource(self):
+        machine_row = json.dumps({"dataset_id": "machine", "field_id": "machine_field"}) + "\n"
+        legacy_row = json.dumps({"dataset_id": "legacy", "field_id": "legacy_field"}) + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            (root / "machine").mkdir(parents=True)
+            (root / "wiki" / "20_semantics").mkdir(parents=True)
+            (root / "machine" / "data_ledger.jsonl").write_text(machine_row, encoding="utf-8")
+            (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(legacy_row, encoding="utf-8")
+
+            records = load_data_ledger_from_knowledge(root)
+
+        self.assertEqual(records[0].field_id, "machine_field")
+
+    def test_readiness_reads_legacy_resource_when_machine_resource_has_not_been_compiled(self):
+        legacy_row = json.dumps({"dataset_id": "legacy", "field_id": "legacy_field"}) + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            (root / "wiki" / "20_semantics").mkdir(parents=True)
+            (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(legacy_row, encoding="utf-8")
+
+            records = load_data_ledger_from_knowledge(root)
+
+        self.assertEqual(records[0].field_id, "legacy_field")
+
     def test_authority_requires_certified_canonical_raw_capture_evidence(self):
         scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
         record = data_ledger_record_from_dict(

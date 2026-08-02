@@ -9,14 +9,15 @@ from uuid import uuid4
 
 from wqb.data_field_capture import DATA_CAPTURE_LOCK_NAME
 from wqb.data_ledger import DataLedgerRecord, data_ledger_record_to_dict, load_data_ledger, write_data_ledger_markdown
+from wqb.knowledge_paths import existing_machine_resource_path, machine_resource_path
 from wqb.lockfile import exclusive_json_lock
 from wqb.semantics import field_semantic_embedding
 
 
 RAW_CAPTURE_ROOT = Path("raw") / "platform" / "data_fields"
-DATA_LEDGER_JSONL = Path("wiki") / "20_semantics" / "data_ledger.jsonl"
-DATA_LEDGER_MD = Path("wiki") / "20_semantics" / "data_ledger.md"
-FRESHNESS_MANIFEST = Path("wiki") / "80_maintenance" / "freshness_manifest.json"
+DATA_LEDGER_RESOURCE = "data_ledger"
+FRESHNESS_MANIFEST_RESOURCE = "freshness_manifest"
+DATA_LEDGER_MD = Path("wiki") / "20_data_semantics.md"
 COMPILE_LOCK_NAME = DATA_CAPTURE_LOCK_NAME
 COMPILE_LOCK_TIMEOUT_SECONDS = 5.0
 COMPILE_LOCK_SLEEP_SECONDS = 0.05
@@ -89,7 +90,7 @@ def _template_ids(field_type: str, tags: list[str]) -> list[str]:
 
 def _update_manifest(root: Path, source_day: str, compiled_at: str, output_path: Path | None = None) -> None:
     """Input: root, source day, compile timestamp, output path. Output: none. Stage ledger freshness from raw capture age."""
-    manifest_path = root / FRESHNESS_MANIFEST
+    manifest_path = existing_machine_resource_path(root, FRESHNESS_MANIFEST_RESOURCE)
     rows: list[dict[str, Any]] = []
     if manifest_path.exists():
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -98,7 +99,7 @@ def _update_manifest(root: Path, source_day: str, compiled_at: str, output_path:
     by_name = {str(row.get("name", "")): row for row in rows}
     by_name["data_ledger"] = {
         "name": "data_ledger",
-        "path": str(DATA_LEDGER_JSONL).replace("\\", "/"),
+        "path": machine_resource_path(root, DATA_LEDGER_RESOURCE).relative_to(root).as_posix(),
         "updated_at": source_day,
         "compiled_at": compiled_at,
         "max_age_days": 1,
@@ -385,9 +386,9 @@ def compile_data_ledger_from_raw(
     generated = generated_at or _now()
     root = Path(knowledge_root)
     selected_capture = Path(capture_dir) if capture_dir is not None else latest_capture_dir(root)
-    ledger_path = root / DATA_LEDGER_JSONL
+    ledger_path = machine_resource_path(root, DATA_LEDGER_RESOURCE)
     markdown_path = root / DATA_LEDGER_MD
-    manifest_path = root / FRESHNESS_MANIFEST
+    manifest_path = machine_resource_path(root, FRESHNESS_MANIFEST_RESOURCE)
     token = uuid4().hex
     ledger_tmp_path = ledger_path.with_name(f"{ledger_path.name}.{token}.tmp")
     markdown_tmp_path = markdown_path.with_name(f"{markdown_path.name}.{token}.tmp")
@@ -435,10 +436,11 @@ def compile_data_ledger_from_raw(
 
             certification_complete = _capture_certification_complete(manifest, scope_outcomes)
             source_day = _capture_source_day(manifest, selected_capture)
-            prior_rows = _read_jsonl(ledger_path)
+            prior_ledger_path = existing_machine_resource_path(root, DATA_LEDGER_RESOURCE)
+            prior_rows = _read_jsonl(prior_ledger_path)
             prior_records_by_field: dict[tuple[str, str], DataLedgerRecord] = {}
             prior_records_by_exact: dict[tuple[str, str, tuple[str, str, int, str]], DataLedgerRecord] = {}
-            for record in load_data_ledger(ledger_path):
+            for record in load_data_ledger(prior_ledger_path):
                 row = data_ledger_record_to_dict(record)
                 prior_records_by_field.setdefault((record.dataset_id, record.field_id), record)
                 for scope_key in _ledger_row_scope_keys(row):

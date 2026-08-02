@@ -6,8 +6,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+from wqb.knowledge_paths import existing_machine_resource_path
 
-BENCHMARK_RULES_PATH = Path("wiki") / "50_benchmarks" / "benchmark_rules.jsonl"
+BENCHMARK_RULES_PATH = Path("machine") / "benchmark_rules.jsonl"
 BENCHMARK_RULE_REQUIRED_FIELDS = {
     "rule_id",
     "issue_types",
@@ -128,12 +129,17 @@ def load_active_benchmark_rules(
     knowledge_root: str | Path, fallback_to_defaults: bool = True
 ) -> list[BenchmarkRule]:
     """Input: vault root and fallback flag. Output: active rules. Prefer the persisted benchmark rulebook."""
-    path = Path(knowledge_root) / BENCHMARK_RULES_PATH
+    path = benchmark_rules_path_for_knowledge(knowledge_root)
     if path.exists():
         return load_benchmark_rules(path)
     if not fallback_to_defaults:
         return []
     return default_benchmark_rules()
+
+
+def benchmark_rules_path_for_knowledge(knowledge_root: str | Path) -> Path:
+    """Input: knowledge root. Output: Path. Return the current benchmark-rule authority path."""
+    return existing_machine_resource_path(knowledge_root, "benchmark_rules")
 
 
 def benchmark_rules_from_start_snapshot(snapshot: Any) -> list[BenchmarkRule]:

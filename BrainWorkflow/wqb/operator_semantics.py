@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from wqb.knowledge_paths import existing_machine_resource_path, machine_resource_path
+
 
 FIELD_TYPE_BONUS = 3.0
 TAG_MATCH_BONUS = 0.8
@@ -189,14 +191,14 @@ def compile_operator_semantics(
 ) -> dict[str, Any]:
     """Input: vault root and timestamp. Output: compile summary. Merge canonical operators, seeds, and reviewed records."""
     root = Path(knowledge_root)
-    jsonl_path = root / "wiki" / "20_semantics" / "operator_semantics.jsonl"
-    markdown_path = root / "wiki" / "20_semantics" / "operator_semantics.md"
+    jsonl_path = machine_resource_path(root, "operator_ledger")
+    markdown_path = root / "wiki" / "20_operator_semantics.md"
     by_operator = {record.operator: record for record in default_operator_semantics()}
     for row, source_path in _canonical_operator_rows(root):
         record = _record_from_canonical_operator(row, source_path)
         if record is not None and record.operator not in by_operator:
             by_operator[record.operator] = record
-    reviewed = load_operator_semantics(jsonl_path)
+    reviewed = load_operator_semantics(existing_machine_resource_path(root, "operator_ledger"))
     for record in reviewed:
         by_operator[record.operator] = record
     records = list(by_operator.values())

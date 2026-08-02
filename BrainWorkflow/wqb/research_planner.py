@@ -3,7 +3,8 @@ from pathlib import Path
 from typing import Any
 
 from wqb.benchmark_rules import BenchmarkRule, load_active_benchmark_rules, rules_for_consumer
-from wqb.data_ledger import load_data_ledger, summarize_data_ledger_authority
+from wqb.data_ledger import load_data_ledger_from_knowledge, summarize_data_ledger_authority
+from wqb.knowledge_paths import existing_machine_resource_path
 from wqb.operator_semantics import load_operator_semantics
 from wqb.principle_model import (
     IncentiveSnapshot,
@@ -13,7 +14,7 @@ from wqb.principle_model import (
     option_card_to_dict,
     validate_option_card,
 )
-from wqb.template_library import load_template_library, template_matrix_summary
+from wqb.template_library import load_template_library_from_knowledge, template_matrix_summary
 
 
 GENIUS_BASE_SCORE = 7.0
@@ -27,9 +28,9 @@ STALE_REFRESH_PENALTY = 3.0
 
 def _planner_contract_inputs(knowledge_root: Path) -> dict[str, Any]:
     """Input: knowledge root. Output: planner input summary. Summarize semantic ledgers for option cards."""
-    data_records = load_data_ledger(knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl")
-    template_records = load_template_library(knowledge_root / "wiki" / "30_templates" / "template_library.jsonl")
-    operators = load_operator_semantics(knowledge_root / "wiki" / "20_semantics" / "operator_semantics.jsonl")
+    data_records = load_data_ledger_from_knowledge(knowledge_root)
+    template_records = load_template_library_from_knowledge(knowledge_root)
+    operators = load_operator_semantics(existing_machine_resource_path(knowledge_root, "operator_ledger"))
     benchmark_rules = load_active_benchmark_rules(knowledge_root, fallback_to_defaults=False)
     planner_rules = rules_for_consumer(benchmark_rules, "research_planner")
     data_authority = summarize_data_ledger_authority(data_records)
