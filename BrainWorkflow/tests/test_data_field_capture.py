@@ -184,7 +184,7 @@ class DataFieldCaptureTests(unittest.TestCase):
             )
             capture = Path(resumed_summary["capture_dir"])
             compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
-            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            row = json.loads((root / "machine" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
 
         self.assertEqual(first_summary["certification_status"], "partial")
         self.assertTrue(any(path.startswith("/data-sets?") for path in resumed_client.paths))
@@ -298,7 +298,7 @@ class DataFieldCaptureTests(unittest.TestCase):
             )
             capture = Path(resumed_summary["capture_dir"])
             compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
-            row = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            row = json.loads((root / "machine" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
             historical_error_count = len((capture / "errors.jsonl").read_text(encoding="utf-8").splitlines())
 
         self.assertEqual(first_summary["status"], "completed_with_warnings")
@@ -382,7 +382,7 @@ class DataFieldCaptureTests(unittest.TestCase):
                 capture = Path(summary["capture_dir"])
                 outcomes = [json.loads(line) for line in (capture / "scopes.jsonl").read_text(encoding="utf-8").splitlines()]
                 compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
-                compiled = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+                compiled = json.loads((root / "machine" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
 
         self.assertEqual(outcomes[-1]["certification_status"], "partial")
         self.assertEqual(compiled["coverage_status"], "partial")
@@ -398,7 +398,7 @@ class DataFieldCaptureTests(unittest.TestCase):
                 capture = Path(summary["capture_dir"])
                 errors = [json.loads(line) for line in (capture / "errors.jsonl").read_text(encoding="utf-8").splitlines()]
                 compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
-                compiled = json.loads((root / "wiki" / "20_semantics" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+                compiled = json.loads((root / "machine" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
 
         self.assertTrue(any("truncated" in row["message"] for row in errors))
         self.assertEqual(compiled["coverage_status"], "partial")

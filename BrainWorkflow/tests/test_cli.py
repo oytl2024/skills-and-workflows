@@ -76,11 +76,8 @@ def cleanup_run_dir(run_dir: Path) -> None:
 def write_ready_knowledge_artifacts(root: Path) -> None:
     """Input: knowledge root. Output: none. Create minimal scope-ready knowledge test artifacts."""
     fresh_date = date.today().isoformat()
-    (root / "wiki" / "20_semantics").mkdir(parents=True, exist_ok=True)
-    (root / "wiki" / "30_templates").mkdir(parents=True, exist_ok=True)
-    (root / "wiki" / "50_benchmarks").mkdir(parents=True, exist_ok=True)
+    (root / "machine").mkdir(parents=True, exist_ok=True)
     (root / "wiki" / "10_foundations").mkdir(parents=True, exist_ok=True)
-    (root / "wiki" / "80_maintenance").mkdir(parents=True, exist_ok=True)
     scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
     capture = root / "raw" / "platform" / "data_fields" / fresh_date
     capture.mkdir(parents=True, exist_ok=True)
@@ -96,7 +93,7 @@ def write_ready_knowledge_artifacts(root: Path) -> None:
         json.dumps({"generated_at": f"{fresh_date}T00:00:00Z", "certification_status": "complete", "requested_matrix": [scope]}),
         encoding="utf-8",
     )
-    (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(
+    (root / "machine" / "data_ledger.jsonl").write_text(
         json.dumps(
             {
                 "dataset_id": "news12",
@@ -128,7 +125,7 @@ def write_ready_knowledge_artifacts(root: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    (root / "wiki" / "30_templates" / "template_library.jsonl").write_text(
+    (root / "machine" / "template_library.jsonl").write_text(
         json.dumps(
             {
                 "template_id": "matrix_rank",
@@ -149,7 +146,7 @@ def write_ready_knowledge_artifacts(root: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    (root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl").write_text(
+    (root / "machine" / "benchmark_rules.jsonl").write_text(
         json.dumps(
             {
                 "rule_id": "near_miss",
@@ -166,12 +163,12 @@ def write_ready_knowledge_artifacts(root: Path) -> None:
         encoding="utf-8",
     )
     (root / "wiki" / "10_foundations" / "activity_snapshot.md").write_text("# Activity Snapshot\n", encoding="utf-8")
-    (root / "wiki" / "80_maintenance" / "freshness_manifest.json").write_text(
+    (root / "machine" / "freshness_manifest.json").write_text(
         json.dumps(
             [
-                {"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": fresh_date, "max_age_days": 7},
-                {"name": "template_library", "path": "wiki/30_templates/template_library.jsonl", "updated_at": fresh_date, "max_age_days": 7},
-                {"name": "benchmark_rules", "path": "wiki/50_benchmarks/benchmark_rules.jsonl", "updated_at": fresh_date, "max_age_days": 7},
+                {"name": "data_ledger", "path": "machine/data_ledger.jsonl", "updated_at": fresh_date, "max_age_days": 7},
+                {"name": "template_library", "path": "machine/template_library.jsonl", "updated_at": fresh_date, "max_age_days": 7},
+                {"name": "benchmark_rules", "path": "machine/benchmark_rules.jsonl", "updated_at": fresh_date, "max_age_days": 7},
                 {"name": "activity_snapshot", "path": "wiki/10_foundations/activity_snapshot.md", "updated_at": fresh_date, "max_age_days": 7},
             ]
         ),
@@ -202,7 +199,7 @@ class CliTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
-            path = root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+            path = root / "machine" / "benchmark_rules.jsonl"
             write_benchmark_rules_jsonl(path, [])
             before = benchmark_fields_for_record(
                 record,
@@ -445,7 +442,7 @@ class CliTests(unittest.TestCase):
             knowledge_root="knowledge",
             data_ledger_count=1,
             template_count=1,
-            artifact_paths=["knowledge/wiki/20_semantics/data_ledger.jsonl"],
+            artifact_paths=["knowledge/machine/data_ledger.jsonl"],
             warnings=[],
         )
         with patch("wqb.cli.bootstrap_knowledge", return_value=fake_summary):
@@ -535,9 +532,8 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             knowledge_root = Path(tmp) / "knowledge"
             write_ready_knowledge_artifacts(knowledge_root)
-            semantics = knowledge_root / "wiki" / "20_semantics"
-            benchmarks = knowledge_root / "wiki" / "50_benchmarks"
-            (semantics / "operator_semantics.jsonl").write_text(
+            machine = knowledge_root / "machine"
+            (machine / "operator_ledger.jsonl").write_text(
                 json.dumps(
                     {
                         "operator": "rank",
@@ -553,7 +549,7 @@ class CliTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            (benchmarks / "benchmark_rules.jsonl").write_text(
+            (machine / "benchmark_rules.jsonl").write_text(
                 json.dumps(
                     {
                         "rule_id": "test_rule",
@@ -673,8 +669,8 @@ class CliTests(unittest.TestCase):
             write_ready_knowledge_artifacts(root)
             option_path = root / "option.json"
             option_path.write_text(json.dumps(option_card_to_dict(option)), encoding="utf-8")
-            ledger_dir = root / "wiki" / "20_semantics"
-            template_dir = root / "wiki" / "30_templates"
+            ledger_dir = root / "machine"
+            template_dir = root / "machine"
             ledger_dir.mkdir(parents=True, exist_ok=True)
             template_dir.mkdir(parents=True, exist_ok=True)
             (ledger_dir / "data_ledger.jsonl").write_text(
@@ -949,8 +945,8 @@ class CliTests(unittest.TestCase):
                 main()
 
             result = json.loads(output.getvalue())
-            jsonl_path = root / "wiki" / "20_semantics" / "operator_semantics.jsonl"
-            markdown_path = root / "wiki" / "20_semantics" / "operator_semantics.md"
+            jsonl_path = root / "machine" / "operator_ledger.jsonl"
+            markdown_path = root / "wiki" / "20_operator_semantics.md"
             self.assertEqual(result["record_count"], 3)
             self.assertEqual(Path(result["jsonl_path"]), jsonl_path)
             self.assertEqual(Path(result["markdown_path"]), markdown_path)

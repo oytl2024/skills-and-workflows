@@ -586,7 +586,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertIn("benchmark_rule:bound_near_miss", reasons)
         self.assertNotIn("benchmark_rule:mutated_after_start", reasons)
         authority = manifest["start_snapshot"]["benchmark_rulebook"]
-        self.assertEqual(authority["path"], "wiki/50_benchmarks/benchmark_rules.jsonl")
+        self.assertEqual(authority["path"], "machine/benchmark_rules.jsonl")
         self.assertEqual(authority["rules"][0]["rule_id"], "bound_near_miss")
         self.assertRegex(authority["sha256"], r"^[0-9a-f]{64}$")
 

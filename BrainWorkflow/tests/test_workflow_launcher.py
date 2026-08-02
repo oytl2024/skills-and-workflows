@@ -47,8 +47,31 @@ class WorkflowLauncherTests(unittest.TestCase):
         self.assertIn("data_ledger", payload["knowledge_artifacts"])
         self.assertEqual(
             payload["knowledge_artifacts"]["benchmark_rules"],
-            "wiki/50_benchmarks/benchmark_rules.jsonl",
+            "machine/benchmark_rules.jsonl",
         )
+        self.assertEqual(payload["knowledge_artifacts"]["data_ledger"], "machine/data_ledger.jsonl")
+        self.assertEqual(payload["knowledge_artifacts"]["template_library"], "machine/template_library.jsonl")
+        self.assertEqual(payload["knowledge_artifacts"]["freshness_manifest"], "machine/freshness_manifest.json")
+
+    def test_create_run_manifest_uses_legacy_artifacts_only_when_machine_resources_are_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            knowledge_root = Path(tmp) / "knowledge"
+            legacy_paths = {
+                "data_ledger": knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl",
+                "template_library": knowledge_root / "wiki" / "30_templates" / "template_library.jsonl",
+                "freshness_manifest": knowledge_root / "wiki" / "80_maintenance" / "freshness_manifest.json",
+                "benchmark_rules": knowledge_root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl",
+            }
+            for path in legacy_paths.values():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("[]", encoding="utf-8")
+
+            manifest = create_run_manifest(WorkflowLaunchConfig(knowledge_root=str(knowledge_root)))
+
+        self.assertEqual(manifest.knowledge_artifacts, {
+            name: path.relative_to(knowledge_root).as_posix()
+            for name, path in legacy_paths.items()
+        } | {"activity_snapshot": "wiki/10_foundations/activity_snapshot.md"})
 
     def test_create_run_manifest_keeps_same_day_runs_in_separate_directories(self):
         with tempfile.TemporaryDirectory() as tmp:

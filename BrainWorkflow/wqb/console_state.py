@@ -11,6 +11,7 @@ from typing import Any
 from wqb.ai_checkpoints import load_ai_checkpoints
 from wqb.benchmark_rules import load_active_benchmark_rules
 from wqb.data_ledger import load_data_ledger, summarize_data_ledger_authority
+from wqb.knowledge_paths import existing_machine_resource_path
 from wqb.knowledge_freshness import (
     evaluate_freshness,
     evaluate_knowledge_contract_health,
@@ -98,7 +99,7 @@ def _latest_readiness(runs_root: Path) -> dict[str, Any]:
 
 def _freshness_summary(knowledge_root: Path) -> dict[str, Any]:
     """Input: knowledge root. Output: freshness counts. Evaluate the manifest when present."""
-    manifest = knowledge_root / "wiki" / "80_maintenance" / "freshness_manifest.json"
+    manifest = existing_machine_resource_path(knowledge_root, "freshness_manifest")
     if not manifest.exists():
         return {"exists": False, "valid": False, "record_count": 0, "stale_count": 0, "missing_count": 0, "records": []}
     try:
@@ -153,7 +154,7 @@ def _data_coverage_summary(knowledge_root: Path) -> dict[str, Any]:
 
 def _data_authority_summary(knowledge_root: Path) -> dict[str, Any]:
     """Input: knowledge root. Output: data authority summary. Summarize ledger provenance for dashboard."""
-    ledger_path = knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+    ledger_path = existing_machine_resource_path(knowledge_root, "data_ledger")
     try:
         return _data_authority_summary_from_rows(_read_jsonl(ledger_path))
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
@@ -200,12 +201,8 @@ def _data_authority_summary_from_rows(rows: list[dict[str, Any]]) -> dict[str, A
 def _semantic_ledger_summary(knowledge_root: Path) -> dict[str, Any]:
     """Input: knowledge root. Output: semantic summary. Count operator, matrix-ready template, and active rule records."""
     try:
-        operators = load_operator_semantics(
-            knowledge_root / "wiki" / "20_semantics" / "operator_semantics.jsonl"
-        )
-        templates = load_template_library(
-            knowledge_root / "wiki" / "30_templates" / "template_library.jsonl"
-        )
+        operators = load_operator_semantics(existing_machine_resource_path(knowledge_root, "operator_ledger"))
+        templates = load_template_library(existing_machine_resource_path(knowledge_root, "template_library"))
         rules = load_active_benchmark_rules(knowledge_root, fallback_to_defaults=False)
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         operators, templates, rules = [], [], []
@@ -220,7 +217,7 @@ def _semantic_ledger_summary(knowledge_root: Path) -> dict[str, Any]:
 
 def _data_ledger_max_age_days(knowledge_root: Path) -> int | None:
     """Input: knowledge root. Output: optional max age. Read scoped data-ledger freshness policy."""
-    manifest = knowledge_root / "wiki" / "80_maintenance" / "freshness_manifest.json"
+    manifest = existing_machine_resource_path(knowledge_root, "freshness_manifest")
     try:
         records = load_freshness_manifest(manifest, strict=True)
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
@@ -292,7 +289,7 @@ def _startable_scopes(knowledge_root: Path) -> list[dict[str, Any]]:
     """Input: knowledge root. Output: concrete scope rows. Read measured ledger scopes suitable for console selection."""
     return _startable_scopes_from_rows(
         knowledge_root,
-        _read_jsonl(knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"),
+        _read_jsonl(existing_machine_resource_path(knowledge_root, "data_ledger")),
     )
 
 
@@ -405,7 +402,7 @@ def _research_record_summary(run_dir: Path | None) -> dict[str, Any]:
 def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
     """Input: console paths. Output: JSON-safe state dict. Aggregate dashboard data."""
     decisions = paths.knowledge_root / "wiki" / "70_decisions"
-    data_ledger_rows = _read_jsonl(paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl")
+    data_ledger_rows = _read_jsonl(existing_machine_resource_path(paths.knowledge_root, "data_ledger"))
     proposals = load_workflow_proposals(decisions)
     proposal_counts = Counter(str(row.get("status", "unclassified")) for row in proposals)
     active_workflow, active_run_dir = _active_workflow_summary(paths.runs_root)

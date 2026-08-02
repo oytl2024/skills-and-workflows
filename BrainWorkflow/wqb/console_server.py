@@ -16,10 +16,11 @@ from wqb.console_jobs import build_cli_command as build_raw_cli_command
 from wqb.console_jobs import create_job, finish_job, run_job, start_job_async
 from wqb.console_proposals import create_proposal_from_form
 from wqb.console_state import ConsolePaths, default_console_paths, load_console_state
-from wqb.data_ledger import DataLedgerRecord
+from wqb.data_ledger import DataLedgerRecord, data_ledger_path_for_knowledge
+from wqb.template_library import load_template_library_from_knowledge
 from wqb.option_cards import fallback_option_id, normalize_option_card_row, normalize_option_card_rows
 from wqb.run_readiness import evaluate_run_readiness
-from wqb.template_library import load_template_library, select_templates_for_data
+from wqb.template_library import select_templates_for_data
 from wqb.workflow_proposals import update_workflow_proposal_decision
 
 
@@ -574,7 +575,7 @@ def _require_scoped_readiness(paths: ConsolePaths, scope: dict[str, Any]) -> Non
 
 def _validate_option_data_coverage(paths: ConsolePaths, option: dict[str, Any], scope: dict[str, Any]) -> None:
     """Input: console paths, selected option, selected scope. Output: none. Require certified data and real templates."""
-    ledger_path = paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+    ledger_path = data_ledger_path_for_knowledge(paths.knowledge_root)
     matching_rows: list[dict[str, Any]] = []
     if ledger_path.exists():
         for line in ledger_path.read_text(encoding="utf-8").splitlines():
@@ -598,8 +599,7 @@ def _validate_option_data_coverage(paths: ConsolePaths, option: dict[str, Any], 
         research_rows.append(row)
     if not research_rows:
         raise ValueError("data coverage ledger for the selected scope is not certified measured platform coverage")
-    template_path = paths.knowledge_root / "wiki" / "30_templates" / "template_library.jsonl"
-    templates = load_template_library(template_path)
+    templates = load_template_library_from_knowledge(paths.knowledge_root)
     incentive = str(option.get("primary_incentive", ""))
     has_template_match = False
     for row in research_rows:

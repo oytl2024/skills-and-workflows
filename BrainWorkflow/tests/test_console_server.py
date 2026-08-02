@@ -234,19 +234,19 @@ class ConsoleServerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             paths = make_paths(root)
-            artifact = paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            artifact = paths.knowledge_root / "machine" / "data_ledger.jsonl"
             artifact.parent.mkdir(parents=True)
             fresh_date = date.today().isoformat()
             artifact.write_text(
                 json.dumps({"dataset_id": "fundamental3", "field_id": "cash_field", "field_type": "MATRIX", "region": "USA", "delay": 1, "universe": "TOP3000", "semantic_tags": ["cash"], "coverage": 1.0, "source_updated_at": fresh_date, "source_quality": "platform_raw_capture", "coverage_status": "measured_raw", "compatible_template_ids": ["matrix_ts_zscore_rank"]}) + "\n",
                 encoding="utf-8",
             )
-            maintenance = paths.knowledge_root / "wiki" / "80_maintenance"
-            maintenance.mkdir(parents=True)
+            maintenance = paths.knowledge_root / "machine"
+            maintenance.mkdir(parents=True, exist_ok=True)
             (maintenance / "freshness_manifest.json").write_text(
                 json.dumps(
                     [
-                        {"name": name, "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": fresh_date, "max_age_days": 7}
+                        {"name": name, "path": "machine/data_ledger.jsonl", "updated_at": fresh_date, "max_age_days": 7}
                         for name in ("data_ledger", "template_library", "benchmark_rules", "activity_snapshot", "operator_catalog", "research_option_cards")
                     ]
                 ),
@@ -258,8 +258,8 @@ class ConsoleServerTests(unittest.TestCase):
                 json.dumps(valid_option(title="First objective")) + "\n\nnot-json\n" + json.dumps(valid_option(title="Second objective")) + "\n",
                 encoding="utf-8",
             )
-            template = paths.knowledge_root / "wiki" / "30_templates" / "template_library.jsonl"
-            template.parent.mkdir(parents=True)
+            template = paths.knowledge_root / "machine" / "template_library.jsonl"
+            template.parent.mkdir(parents=True, exist_ok=True)
             template.write_text(json.dumps({"template_id": "matrix_ts_zscore_rank", "status": "discovery_ready", "required_field_types": ["MATRIX"]}) + "\n", encoding="utf-8")
             self._write_start_fixture(
                 paths,
@@ -343,10 +343,10 @@ class ConsoleServerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             paths = make_paths(root)
-            maintenance = root / "knowledge" / "wiki" / "80_maintenance"
-            maintenance.mkdir(parents=True)
+            maintenance = root / "knowledge" / "machine"
+            maintenance.mkdir(parents=True, exist_ok=True)
             (maintenance / "freshness_manifest.json").write_text(
-                json.dumps([{"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-01-01", "max_age_days": 1}]),
+                json.dumps([{"name": "data_ledger", "path": "machine/data_ledger.jsonl", "updated_at": "2026-01-01", "max_age_days": 1}]),
                 encoding="utf-8",
             )
 
@@ -357,8 +357,8 @@ class ConsoleServerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             paths = make_paths(root)
-            maintenance = root / "knowledge" / "wiki" / "80_maintenance"
-            maintenance.mkdir(parents=True)
+            maintenance = root / "knowledge" / "machine"
+            maintenance.mkdir(parents=True, exist_ok=True)
             (maintenance / "freshness_manifest.json").write_text("{not-json}", encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "direct console workflow-start"):
@@ -372,13 +372,13 @@ class ConsoleServerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             paths = make_paths(root)
-            maintenance = root / "knowledge" / "wiki" / "80_maintenance"
-            artifact = root / "knowledge" / "wiki" / "20_semantics" / "data_ledger.jsonl"
-            maintenance.mkdir(parents=True)
-            artifact.parent.mkdir(parents=True)
+            maintenance = root / "knowledge" / "machine"
+            artifact = root / "knowledge" / "machine" / "data_ledger.jsonl"
+            maintenance.mkdir(parents=True, exist_ok=True)
+            artifact.parent.mkdir(parents=True, exist_ok=True)
             artifact.write_text("{}\n", encoding="utf-8")
             (maintenance / "freshness_manifest.json").write_text(
-                json.dumps([{"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7}]),
+                json.dumps([{"name": "data_ledger", "path": "machine/data_ledger.jsonl", "updated_at": "2026-07-16", "max_age_days": 7}]),
                 encoding="utf-8",
             )
 
@@ -515,7 +515,7 @@ class ConsoleServerTests(unittest.TestCase):
             )
             (capture / "manifest.json").write_text(json.dumps({"status": "completed_with_warnings"}), encoding="utf-8")
             compile_data_ledger_from_raw(paths.knowledge_root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
-            ledger = paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = paths.knowledge_root / "machine" / "data_ledger.jsonl"
             compiled_row = json.loads(ledger.read_text(encoding="utf-8").splitlines()[0])
             decisions = paths.knowledge_root / "wiki" / "70_decisions"
             decisions.mkdir(parents=True, exist_ok=True)
@@ -525,8 +525,8 @@ class ConsoleServerTests(unittest.TestCase):
             )
             freshness_artifacts = {
                 "data_ledger": ledger,
-                "template_library": paths.knowledge_root / "wiki" / "30_templates" / "template_library.jsonl",
-                "benchmark_rules": paths.knowledge_root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl",
+                "template_library": paths.knowledge_root / "machine" / "template_library.jsonl",
+                "benchmark_rules": paths.knowledge_root / "machine" / "benchmark_rules.jsonl",
                 "activity_snapshot": paths.knowledge_root / "wiki" / "80_maintenance" / "activity_snapshot.json",
                 "operator_catalog": paths.knowledge_root / "wiki" / "20_semantics" / "operator_semantics.jsonl",
                 "research_option_cards": decisions / "research_option_cards.jsonl",
@@ -535,7 +535,7 @@ class ConsoleServerTests(unittest.TestCase):
                 artifact.parent.mkdir(parents=True, exist_ok=True)
                 if artifact != ledger and not artifact.exists():
                     artifact.write_text("{}\n", encoding="utf-8")
-            maintenance = paths.knowledge_root / "wiki" / "80_maintenance"
+            maintenance = paths.knowledge_root / "machine"
             (maintenance / "freshness_manifest.json").write_text(
                 json.dumps([
                     {"name": name, "path": artifact.relative_to(paths.knowledge_root).as_posix(), "updated_at": date.today().isoformat(), "max_age_days": 7}
@@ -576,7 +576,7 @@ class ConsoleServerTests(unittest.TestCase):
 
     def _write_start_fixture(self, paths, option, ledger_rows, template=None):
         """Input: console paths, option, ledger rows. Output: none. Write valid freshness and start artifacts."""
-        ledger = paths.knowledge_root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+        ledger = paths.knowledge_root / "machine" / "data_ledger.jsonl"
         ledger.parent.mkdir(parents=True, exist_ok=True)
         fresh_date = date.today().isoformat()
         source_path = f"raw/platform/data_fields/{fresh_date}/data_fields.jsonl"
@@ -614,11 +614,11 @@ class ConsoleServerTests(unittest.TestCase):
             json.dumps({"generated_at": f"{fresh_date}T00:00:00Z", "certification_status": "complete", "requested_matrix": scope_rows}),
             encoding="utf-8",
         )
-        template_path = paths.knowledge_root / "wiki" / "30_templates" / "template_library.jsonl"
+        template_path = paths.knowledge_root / "machine" / "template_library.jsonl"
         template_path.parent.mkdir(parents=True, exist_ok=True)
         template_row = template if template is not None else {"template_id": "matrix_ts_zscore_rank", "status": "discovery_ready", "required_field_types": ["MATRIX"], "compatible_regions": ["USA"], "compatible_delays": [1], "compatible_universes": ["TOP3000"]}
         template_path.write_text(json.dumps(template_row) + "\n", encoding="utf-8")
-        benchmark_path = paths.knowledge_root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+        benchmark_path = paths.knowledge_root / "machine" / "benchmark_rules.jsonl"
         benchmark_path.parent.mkdir(parents=True, exist_ok=True)
         benchmark_path.write_text(
             json.dumps(
@@ -642,12 +642,12 @@ class ConsoleServerTests(unittest.TestCase):
         operator_catalog = paths.knowledge_root / "wiki" / "20_semantics" / "operator_catalog_official.md"
         operator_catalog.parent.mkdir(parents=True, exist_ok=True)
         operator_catalog.write_text("# Operator Catalog\n", encoding="utf-8")
-        maintenance = paths.knowledge_root / "wiki" / "80_maintenance"
+        maintenance = paths.knowledge_root / "machine"
         maintenance.mkdir(parents=True, exist_ok=True)
         artifacts = {
-            "data_ledger": "wiki/20_semantics/data_ledger.jsonl",
-            "template_library": "wiki/30_templates/template_library.jsonl",
-            "benchmark_rules": "wiki/50_benchmarks/benchmark_rules.jsonl",
+            "data_ledger": "machine/data_ledger.jsonl",
+            "template_library": "machine/template_library.jsonl",
+            "benchmark_rules": "machine/benchmark_rules.jsonl",
             "activity_snapshot": "wiki/10_foundations/activity_snapshot.md",
             "operator_catalog": "wiki/20_semantics/operator_catalog_official.md",
             "research_option_cards": "wiki/70_decisions/research_option_cards.jsonl",

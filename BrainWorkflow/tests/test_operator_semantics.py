@@ -17,7 +17,7 @@ class OperatorSemanticsTests(unittest.TestCase):
     def test_compile_preserves_curated_records_and_adds_missing_canonical_operators(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
-            output = root / "wiki" / "20_semantics" / "operator_semantics.jsonl"
+            output = root / "machine" / "operator_ledger.jsonl"
             output.parent.mkdir(parents=True)
             curated = OperatorSemanticRecord(
                 operator="rank",

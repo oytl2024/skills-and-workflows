@@ -26,7 +26,7 @@ from wqb.data_catalog import (
     select_seed_fields,
 )
 from wqb.data_field_capture import capture_platform_data_fields
-from wqb.data_ledger import load_data_ledger
+from wqb.data_ledger import load_data_ledger, load_data_ledger_from_knowledge
 from wqb.data_ledger_compile import compile_data_ledger_from_raw
 from wqb.decision_log import write_option_cards
 from wqb.expression import expression_hash, is_power_pool_complexity_ok, replace_operator_names
@@ -47,7 +47,7 @@ from wqb.rule_refresh import refresh_incentive_snapshot
 from wqb.run_readiness import evaluate_run_readiness, write_readiness_reports
 from wqb.simulator import extract_alpha_id, poll_simulation, resolve_multisimulation_alpha_ids, submit_multisimulation, submit_simulation
 from wqb.subagent_handoff import build_handoff_packets, write_handoff_packets
-from wqb.template_library import load_template_library
+from wqb.template_library import load_template_library, load_template_library_from_knowledge
 from wqb.workflow_launcher import create_run_manifest, load_workflow_launch_config, write_run_manifest
 from wqb.workflow_paths import resolve_project_root, resolve_run_root
 from wqb.console_server import run_console
@@ -425,8 +425,8 @@ def schedule_research_from_option(
     if selected_index > len(rows):
         raise ValueError(f"option_index {selected_index} is outside the {len(rows)} available option records")
     option = _option_card_from_dict(rows[selected_index - 1])
-    ledger = load_data_ledger(root / "wiki" / "20_semantics" / "data_ledger.jsonl")
-    templates = load_template_library(root / "wiki" / "30_templates" / "template_library.jsonl")
+    ledger = load_data_ledger_from_knowledge(root)
+    templates = load_template_library_from_knowledge(root)
     schedule = build_research_schedule(option, ledger, templates, region=region, delay=delay, universe=universe)
     schedule_path = write_research_schedule(output, schedule, datetime.now(timezone.utc).replace(microsecond=0).isoformat())
     row = research_schedule_to_dict(schedule)
@@ -3431,7 +3431,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--request-base-backoff-seconds", type=int, default=None)
     parser.add_argument("--max-options", type=int, default=5)
     parser.add_argument("--option-output-dir", default=default_option_output_dir())
-    parser.add_argument("--freshness-manifest", default="wiki/80_maintenance/freshness_manifest.json")
+    parser.add_argument("--freshness-manifest", default="machine/freshness_manifest.json")
     parser.add_argument("--freshness-report", default="wiki/80_maintenance/freshness_report.md")
     parser.add_argument("--knowledge-root", default=str(default_knowledge_root()))
     parser.add_argument("--knowledge-seed-root", default="docs/knowledge")

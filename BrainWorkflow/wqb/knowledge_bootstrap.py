@@ -6,14 +6,18 @@ from typing import Any
 
 from wqb.benchmark_rules import BENCHMARK_RULES_PATH
 from wqb.data_ledger import load_data_ledger, write_data_ledger_markdown
+from wqb.knowledge_paths import machine_resource_path
 from wqb.template_library import load_template_library, write_template_library_markdown
 
 
-DATA_LEDGER_JSONL = Path("wiki") / "20_semantics" / "data_ledger.jsonl"
+DATA_LEDGER_RESOURCE = "data_ledger"
+TEMPLATE_LIBRARY_RESOURCE = "template_library"
+FRESHNESS_MANIFEST_RESOURCE = "freshness_manifest"
+DATA_LEDGER_JSONL = Path("machine") / "data_ledger.jsonl"
 DATA_LEDGER_MD = Path("wiki") / "20_semantics" / "data_ledger.md"
-TEMPLATE_LIBRARY_JSONL = Path("wiki") / "30_templates" / "template_library.jsonl"
+TEMPLATE_LIBRARY_JSONL = Path("machine") / "template_library.jsonl"
 TEMPLATE_LIBRARY_MD = Path("wiki") / "30_templates" / "template_library.md"
-FRESHNESS_MANIFEST = Path("wiki") / "80_maintenance" / "freshness_manifest.json"
+FRESHNESS_MANIFEST = Path("machine") / "freshness_manifest.json"
 BOOTSTRAP_REPORT = Path("wiki") / "80_maintenance" / "bootstrap_report.md"
 ACTIVITY_SNAPSHOT = Path("wiki") / "10_foundations" / "activity_snapshot.md"
 NON_REFRESHED_BASELINE_DATE = "1970-01-01"
@@ -156,12 +160,12 @@ def bootstrap_knowledge(knowledge_root: str | Path, seed_root: str | Path, gener
         normalize_coverage=True,
     )
     template_rows = _stamp_rows(_read_jsonl(seed / "template_library.example.jsonl"), "schema_seed", "partial")
-    ledger_jsonl = root / DATA_LEDGER_JSONL
+    ledger_jsonl = machine_resource_path(root, DATA_LEDGER_RESOURCE)
     ledger_md = root / DATA_LEDGER_MD
-    template_jsonl = root / TEMPLATE_LIBRARY_JSONL
+    template_jsonl = machine_resource_path(root, TEMPLATE_LIBRARY_RESOURCE)
     template_md = root / TEMPLATE_LIBRARY_MD
     activity = root / ACTIVITY_SNAPSHOT
-    manifest = root / FRESHNESS_MANIFEST
+    manifest = machine_resource_path(root, FRESHNESS_MANIFEST_RESOURCE)
     report = root / BOOTSTRAP_REPORT
     initialized_names: set[str] = set()
     preserved_paths: list[str] = []

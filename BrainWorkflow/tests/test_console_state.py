@@ -24,7 +24,7 @@ class ConsoleStateTests(unittest.TestCase):
     def test_data_authority_summary_uses_lightweight_ledger_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
-            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = root / "machine" / "data_ledger.jsonl"
             ledger.parent.mkdir(parents=True)
             ledger.write_text(
                 json.dumps(
@@ -79,13 +79,13 @@ class ConsoleStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             paths = make_paths(root)
-            semantics = paths.knowledge_root / "wiki" / "20_semantics"
-            templates = paths.knowledge_root / "wiki" / "30_templates"
-            benchmarks = paths.knowledge_root / "wiki" / "50_benchmarks"
+            semantics = paths.knowledge_root / "machine"
+            templates = paths.knowledge_root / "machine"
+            benchmarks = paths.knowledge_root / "machine"
             decisions = paths.knowledge_root / "wiki" / "70_decisions"
             for directory in (semantics, templates, benchmarks, decisions):
                 directory.mkdir(parents=True, exist_ok=True)
-            (semantics / "operator_semantics.jsonl").write_text(
+            (semantics / "operator_ledger.jsonl").write_text(
                 json.dumps({"operator": "rank", "family": "normalizer"}) + "\n",
                 encoding="utf-8",
             )
@@ -157,7 +157,7 @@ class ConsoleStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             paths = make_paths(root)
-            benchmark_path = paths.knowledge_root / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
+            benchmark_path = paths.knowledge_root / "machine" / "benchmark_rules.jsonl"
             benchmark_path.parent.mkdir(parents=True)
             benchmark_path.write_text(
                 json.dumps(
@@ -175,12 +175,12 @@ class ConsoleStateTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            maintenance = paths.knowledge_root / "wiki" / "80_maintenance"
-            maintenance.mkdir(parents=True)
+            maintenance = paths.knowledge_root / "machine"
+            maintenance.mkdir(parents=True, exist_ok=True)
             artifacts = {
-                "data_ledger": "wiki/20_semantics/data_ledger.jsonl",
-                "template_library": "wiki/30_templates/template_library.jsonl",
-                "benchmark_rules": "wiki/50_benchmarks/benchmark_rules.jsonl",
+                "data_ledger": "machine/data_ledger.jsonl",
+                "template_library": "machine/template_library.jsonl",
+                "benchmark_rules": "machine/benchmark_rules.jsonl",
                 "activity_snapshot": "wiki/10_foundations/activity_snapshot.md",
             }
             for relative in artifacts.values():
@@ -211,7 +211,7 @@ class ConsoleStateTests(unittest.TestCase):
         ]
         self.assertEqual(
             benchmark_records[0]["path"],
-            "wiki/50_benchmarks/benchmark_rules.jsonl",
+            "machine/benchmark_rules.jsonl",
         )
 
     def test_console_state_includes_knowledge_contract_summary(self):
@@ -230,7 +230,7 @@ class ConsoleStateTests(unittest.TestCase):
     def test_startable_scopes_keeps_exact_available_scope_tuples(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
-            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = root / "machine" / "data_ledger.jsonl"
             ledger.parent.mkdir(parents=True)
             ledger.write_text(json.dumps({
                 "source_quality": "platform_raw_capture",
@@ -245,11 +245,11 @@ class ConsoleStateTests(unittest.TestCase):
                     {"instrument_type": "EQUITY", "region": "EUR", "delay": 0, "universe": "TOP500"},
                 ],
             }) + "\n", encoding="utf-8")
-            maintenance = root / "wiki" / "80_maintenance"
-            maintenance.mkdir(parents=True)
+            maintenance = root / "machine"
+            maintenance.mkdir(parents=True, exist_ok=True)
             (maintenance / "freshness_manifest.json").write_text(
                 json.dumps([
-                    {"name": name, "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": date.today().isoformat(), "max_age_days": 7}
+                    {"name": name, "path": "machine/data_ledger.jsonl", "updated_at": date.today().isoformat(), "max_age_days": 7}
                     for name in ("data_ledger", "template_library", "benchmark_rules", "activity_snapshot")
                 ]),
                 encoding="utf-8",
@@ -265,7 +265,7 @@ class ConsoleStateTests(unittest.TestCase):
     def test_startable_scopes_excludes_zero_missing_and_stale_source_coverage(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
-            ledger = root / "wiki" / "20_semantics" / "data_ledger.jsonl"
+            ledger = root / "machine" / "data_ledger.jsonl"
             ledger.parent.mkdir(parents=True)
             fresh = date.today().isoformat()
             stale = (date.today() - timedelta(days=30)).isoformat()
@@ -283,11 +283,11 @@ class ConsoleStateTests(unittest.TestCase):
                 {**base, "field_id": "stale", "coverage": 1.0, "source_updated_at": stale, "region": "ASI"},
             ]
             ledger.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
-            maintenance = root / "wiki" / "80_maintenance"
-            maintenance.mkdir(parents=True)
+            maintenance = root / "machine"
+            maintenance.mkdir(parents=True, exist_ok=True)
             (maintenance / "freshness_manifest.json").write_text(
                 json.dumps([
-                    {"name": name, "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": fresh, "max_age_days": 7}
+                    {"name": name, "path": "machine/data_ledger.jsonl", "updated_at": fresh, "max_age_days": 7}
                     for name in ("data_ledger", "template_library", "benchmark_rules", "activity_snapshot")
                 ]),
                 encoding="utf-8",
@@ -322,7 +322,7 @@ class ConsoleStateTests(unittest.TestCase):
             decisions = knowledge / "wiki" / "70_decisions"
             maintenance = knowledge / "wiki" / "80_maintenance"
             decisions.mkdir(parents=True)
-            maintenance.mkdir(parents=True)
+            maintenance.mkdir(parents=True, exist_ok=True)
             readiness_dir = runs / "readiness_latest"
             readiness_dir.mkdir(parents=True)
             job_dir = runs / "console_jobs" / "job-1"
@@ -333,15 +333,15 @@ class ConsoleStateTests(unittest.TestCase):
                 encoding="utf-8",
             )
             for relative in [
-                "wiki/20_semantics/data_ledger.jsonl",
-                "wiki/30_templates/template_library.jsonl",
+                "machine/data_ledger.jsonl",
+                "machine/template_library.jsonl",
                 "wiki/10_foundations/activity_snapshot.md",
             ]:
                 artifact = knowledge / relative
                 artifact.parent.mkdir(parents=True, exist_ok=True)
                 artifact.write_text("{}", encoding="utf-8")
-            benchmark = knowledge / "wiki" / "50_benchmarks" / "benchmark_rules.jsonl"
-            benchmark.parent.mkdir(parents=True)
+            benchmark = knowledge / "machine" / "benchmark_rules.jsonl"
+            benchmark.parent.mkdir(parents=True, exist_ok=True)
             benchmark.write_text(
                 json.dumps(
                     {
@@ -358,12 +358,12 @@ class ConsoleStateTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            (maintenance / "freshness_manifest.json").write_text(
+            (knowledge / "machine" / "freshness_manifest.json").write_text(
                 json.dumps(
                     [
-                        {"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-12", "max_age_days": 7},
-                        {"name": "template_library", "path": "wiki/30_templates/template_library.jsonl", "updated_at": "2026-07-12", "max_age_days": 7},
-                        {"name": "benchmark_rules", "path": "wiki/50_benchmarks/benchmark_rules.jsonl", "updated_at": "2026-07-12", "max_age_days": 7},
+                        {"name": "data_ledger", "path": "machine/data_ledger.jsonl", "updated_at": "2026-07-12", "max_age_days": 7},
+                        {"name": "template_library", "path": "machine/template_library.jsonl", "updated_at": "2026-07-12", "max_age_days": 7},
+                        {"name": "benchmark_rules", "path": "machine/benchmark_rules.jsonl", "updated_at": "2026-07-12", "max_age_days": 7},
                         {"name": "activity_snapshot", "path": "wiki/10_foundations/activity_snapshot.md", "updated_at": "2026-07-12", "max_age_days": 7},
                     ]
                 ),
