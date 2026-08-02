@@ -40,6 +40,7 @@ from wqb.generator import build_settings, generate_seed_candidates, simulation_p
 from wqb.knowledge import fetch_knowledge_snapshot
 from wqb.knowledge_bootstrap import bootstrap_knowledge, bootstrap_summary_to_dict
 from wqb.knowledge_compile import compile_research_records
+from wqb.delivery_gate import run_delivery_gate
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest, write_freshness_report
 from wqb.knowledge_maintenance import run_knowledge_maintenance
 from wqb.knowledge_paths import machine_resource_path
@@ -3447,6 +3448,7 @@ def parse_args() -> argparse.Namespace:
             "bootstrap-knowledge",
             "compile-research-records",
             "compile-knowledge",
+            "delivery-gate",
             "capture-interaction-note",
             "schedule-research",
             "workflow-start",
@@ -3504,6 +3506,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--knowledge-seed-root", default="docs/knowledge")
     parser.add_argument("--apply-cleanup", action="store_true", default=False)
     parser.add_argument("--max-case-reports", type=int, default=20)
+    parser.add_argument("--runs-root", default="")
+    parser.add_argument("--console-base-url", default="")
     parser.add_argument("--data-capture-date", default="")
     parser.add_argument("--capture-region", default="")
     parser.add_argument("--capture-delay", default="")
@@ -3612,6 +3616,18 @@ def main() -> None:
             knowledge_root=args.knowledge_root,
             runs_root=args.run_dir,
             open_browser=not args.no_open_browser,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    if args.command == "delivery-gate":
+        if not cli_flag_present(sys.argv[1:], "--knowledge-root"):
+            raise SystemExit("--knowledge-root is required for delivery-gate")
+        if not args.runs_root:
+            raise SystemExit("--runs-root is required for delivery-gate")
+        result = run_delivery_gate(
+            args.knowledge_root,
+            args.runs_root,
+            console_base_url=str(args.console_base_url),
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return

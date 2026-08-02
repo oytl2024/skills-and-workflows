@@ -64,11 +64,13 @@ class ConsoleJobsTests(unittest.TestCase):
             platform_compile = build_cli_command("bootstrap-knowledge", paths, {})
             research_compile = build_cli_command("compile-research-records", paths, {})
             knowledge_compile = build_cli_command("compile-knowledge", paths, {})
+            delivery_gate = build_cli_command("delivery-gate", paths, {})
             option_refresh = build_cli_command("plan-research-options", paths, {"enable_live_api": True})
 
         self.assertIn("bootstrap-knowledge", platform_compile)
         self.assertIn("compile-research-records", research_compile)
         self.assertEqual(knowledge_compile[-3:], ["--knowledge-root", str(paths.knowledge_root), "--apply-cleanup"])
+        self.assertEqual(delivery_gate[-5:], ["delivery-gate", "--knowledge-root", str(paths.knowledge_root), "--runs-root", str(paths.runs_root)])
         self.assertIn("--enable-live-api", option_refresh)
         self.assertNotEqual(platform_compile, research_compile)
 

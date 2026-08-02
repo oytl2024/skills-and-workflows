@@ -21,6 +21,19 @@ def make_paths(root: Path) -> ConsolePaths:
 
 
 class ConsoleStateTests(unittest.TestCase):
+    def test_console_state_loads_latest_delivery_gate_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            report = paths.knowledge_root / "raw" / "maintenance" / "delivery_gates" / "2026-07-30.json"
+            report.parent.mkdir(parents=True)
+            report.write_text(json.dumps({"status": "passed", "generated_at": "2026-07-30T00:00:00+00:00"}), encoding="utf-8")
+
+            state = load_console_state(paths)
+
+        self.assertTrue(state["delivery_gate"]["exists"])
+        self.assertEqual(state["delivery_gate"]["status"], "passed")
+        self.assertEqual(state["delivery_gate"]["path"], str(report))
+
     def test_data_authority_summary_uses_lightweight_ledger_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"

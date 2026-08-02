@@ -110,6 +110,19 @@ def _latest_knowledge_maintenance(knowledge_root: Path) -> dict[str, Any]:
     return {**payload, "exists": bool(payload), "path": str(reports[0])}
 
 
+def _latest_delivery_gate(knowledge_root: Path) -> dict[str, Any]:
+    """Input: knowledge root. Output: delivery summary. Read the newest valid delivery gate report."""
+    reports = sorted(
+        (knowledge_root / "raw" / "maintenance" / "delivery_gates").glob("*.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if not reports:
+        return {"exists": False}
+    payload = _read_json(reports[0])
+    return {**payload, "exists": bool(payload), "path": str(reports[0])}
+
+
 def _freshness_summary(knowledge_root: Path) -> dict[str, Any]:
     """Input: knowledge root. Output: freshness counts. Evaluate the manifest when present."""
     manifest = existing_machine_resource_path(knowledge_root, "freshness_manifest")
@@ -425,6 +438,7 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
     base_state = {
         "readiness": _latest_readiness(paths.runs_root),
         "knowledge_maintenance": _latest_knowledge_maintenance(paths.knowledge_root),
+        "delivery_gate": _latest_delivery_gate(paths.knowledge_root),
         "freshness": _freshness_summary(paths.knowledge_root),
         "knowledge_contracts": evaluate_knowledge_contract_health(paths.knowledge_root),
         "data_coverage": _data_coverage_summary(paths.knowledge_root),

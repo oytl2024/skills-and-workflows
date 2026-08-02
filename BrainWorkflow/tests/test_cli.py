@@ -433,6 +433,20 @@ class CliTests(unittest.TestCase):
         maintenance.assert_called_once_with("knowledge", apply_cleanup=True, max_case_reports=7)
         self.assertEqual(json.loads(output.getvalue())["status"], "completed")
 
+    def test_delivery_gate_dispatches_with_required_roots(self):
+        output = io.StringIO()
+        with patch(
+            "sys.argv",
+            ["wqb", "delivery-gate", "--knowledge-root", "knowledge", "--runs-root", "runs", "--console-base-url", "http://127.0.0.1:8765"],
+        ), patch(
+            "wqb.cli.run_delivery_gate",
+            return_value={"status": "passed", "report_path": "knowledge/raw/maintenance/delivery_gates/2026-07-30.json"},
+        ) as gate, redirect_stdout(output):
+            main()
+
+        gate.assert_called_once_with("knowledge", "runs", console_base_url="http://127.0.0.1:8765")
+        self.assertEqual(json.loads(output.getvalue())["status"], "passed")
+
     def test_readiness_check_main_dispatches_without_simulation(self):
         output = io.StringIO()
         with patch("sys.argv", ["wqb", "readiness-check"]), patch(

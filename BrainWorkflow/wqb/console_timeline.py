@@ -69,6 +69,7 @@ def build_timeline_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
     """Input: console state. Output: timeline rows. Build the one-page workflow run tape."""
     freshness = state.get("freshness", {}) if isinstance(state.get("freshness"), dict) else {}
     maintenance = state.get("knowledge_maintenance", {}) if isinstance(state.get("knowledge_maintenance"), dict) else {}
+    delivery_gate = state.get("delivery_gate", {}) if isinstance(state.get("delivery_gate"), dict) else {}
     data_coverage = state.get("data_coverage", {}) if isinstance(state.get("data_coverage"), dict) else {}
     capture_job = _running_job_for_action(state, "capture-platform-data-fields")
     compile_job = _running_job_for_action(state, "compile-data-ledger")
@@ -118,6 +119,13 @@ def build_timeline_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
         _row("approved_queue", _stage_status_from_workflow(state, "approved_queue"), "deterministic", "Writes approved candidates to the durable queue."),
         _row("research_record_sync", _stage_status_from_workflow(state, "research_record_sync"), "deterministic", "Compiles workflow evidence into the research record."),
         _row("complete", _stage_status_from_workflow(state, "complete"), "deterministic", "Marks the durable workflow run complete."),
+        _row(
+            "delivery_gate",
+            str(delivery_gate.get("status", "waiting")),
+            "delivery gate",
+            "Verify fixed automation before handoff.",
+            str(delivery_gate.get("path", delivery_gate.get("report_path", ""))),
+        ),
     ]
     for checkpoint in state.get("ai_checkpoints", []):
         if isinstance(checkpoint, dict) and checkpoint.get("status") == "pending":

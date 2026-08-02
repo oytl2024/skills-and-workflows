@@ -381,6 +381,8 @@ def build_cli_command(action: str, paths: ConsolePaths, form: dict[str, Any] | N
         return [*base, "compile-data-ledger", "--knowledge-root", knowledge_root]
     if action == "compile-knowledge":
         return [*base, "compile-knowledge", "--knowledge-root", knowledge_root, "--apply-cleanup"]
+    if action == "delivery-gate":
+        return [*base, "delivery-gate", "--knowledge-root", knowledge_root, "--runs-root", str(paths.runs_root)]
     if action == "plan-research-options":
         command = [
             *base,
