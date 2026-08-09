@@ -561,6 +561,39 @@ class DeliveryGateTests(unittest.TestCase):
             next(check["status"] for check in report["checks"] if check["code"] == "local_verification_evidence"),
         )
 
+    def test_delivery_gate_rejects_duplicate_local_verification_check_codes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            self._write_minimal_clean_knowledge(knowledge)
+            verification_path = self._write_verification_report(knowledge)
+            payload = json.loads(verification_path.read_text(encoding="utf-8"))
+            duplicate = {
+                **payload["checks"][1],
+                "status": "failed",
+                "returncode": 1,
+                "stderr": "compileall failed before the passing duplicate",
+            }
+            payload["checks"].insert(1, duplicate)
+            self._rewrite_latest_verification_payload(verification_path, payload)
+            self._write_run_state(
+                runs,
+                "20260730T000000-paused",
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="missing candidates.csv",
+            )
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+        self.assertEqual(
+            "failed",
+            next(check["status"] for check in report["checks"] if check["code"] == "local_verification_evidence"),
+        )
+
     def test_delivery_gate_rejects_raw_source_index_substring_coverage(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

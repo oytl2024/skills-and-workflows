@@ -239,6 +239,15 @@ def _local_verification_evidence(
         and timedelta(0) <= gate_time - report_time <= timedelta(hours=LOCAL_VERIFICATION_MAX_AGE_HOURS)
     )
     checks = report.get("checks", [])
+    check_codes: list[str] = []
+    checks_have_exact_shape = False
+    if isinstance(checks, list) and all(isinstance(check, dict) for check in checks):
+        check_codes = [str(check.get("code", "")) for check in checks]
+        checks_have_exact_shape = (
+            len(checks) == len(REQUIRED_LOCAL_VERIFICATION_CHECKS)
+            and set(check_codes) == set(REQUIRED_LOCAL_VERIFICATION_CHECKS)
+            and len(check_codes) == len(set(check_codes))
+        )
     checks_by_code = {
         str(check.get("code", "")): check
         for check in checks
@@ -257,13 +266,12 @@ def _local_verification_evidence(
         and isinstance(checks_by_code[code].get("stderr"), str)
         for code in REQUIRED_LOCAL_VERIFICATION_CHECKS
     )
-    check_codes_exact = set(checks_by_code) == set(REQUIRED_LOCAL_VERIFICATION_CHECKS)
     passed = (
         fresh
         and report.get("report_type") == "delivery_verification"
         and report.get("status") == "passed"
         and report_path_matches
-        and check_codes_exact
+        and checks_have_exact_shape
         and required_checks_passed
     )
     if passed:
