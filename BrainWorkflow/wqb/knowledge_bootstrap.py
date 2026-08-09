@@ -148,6 +148,7 @@ def _ensure_activity_snapshot_contract(path: Path, knowledge_root: Path, generat
         "source_type",
         "source_family",
         "source_path",
+        "captured_at",
         "capture_tool",
         "record_count",
         "content_hash",
@@ -242,24 +243,45 @@ def _normalize_existing_manifest(path: Path, generated_at: str, initialized_name
     except (OSError, json.JSONDecodeError):
         payload = []
     existing_rows = payload if isinstance(payload, list) else []
-    normalized: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for row in existing_rows:
+    known_rows: dict[str, tuple[dict[str, Any], tuple[int, str, int]]] = {}
+    unknown_rows: list[dict[str, Any]] = []
+    for sequence, row in enumerate(existing_rows):
         if not isinstance(row, dict):
             continue
         name = str(row.get("name", ""))
-        copied = dict(row)
-        if name in canonical_by_name:
-            copied["path"] = canonical_by_name[name]["path"]
-            if not isinstance(copied.get("max_age_days"), int) or int(copied.get("max_age_days", 0)) <= 0:
-                copied["max_age_days"] = canonical_by_name[name]["max_age_days"]
-            seen.add(name)
+        if name not in canonical_by_name:
+            unknown_rows.append(dict(row))
+            continue
+        key = _manifest_preference_key(row, sequence)
+        if name not in known_rows or key > known_rows[name][1]:
+            known_rows[name] = (dict(row), key)
+    normalized: list[dict[str, Any]] = []
+    for canonical in canonical_rows:
+        name = str(canonical["name"])
+        if name not in known_rows:
+            normalized.append(dict(canonical))
+            continue
+        copied = dict(canonical)
+        copied.update(known_rows[name][0])
+        copied["name"] = name
+        copied["path"] = canonical["path"]
+        if not isinstance(copied.get("max_age_days"), int) or int(copied.get("max_age_days", 0)) <= 0:
+            copied["max_age_days"] = canonical["max_age_days"]
         normalized.append(copied)
-    for row in canonical_rows:
-        if row["name"] not in seen:
-            normalized.append(row)
+    normalized.extend(unknown_rows)
     path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
+
+
+def _manifest_preference_key(row: dict[str, Any], sequence: int) -> tuple[int, str, int]:
+    """Input: manifest row and position. Output: sort key. Prefer rows with valid, recent dates."""
+    updated_at = str(row.get("updated_at", ""))
+    try:
+        datetime.fromisoformat(updated_at)
+        valid_date = 1
+    except ValueError:
+        valid_date = 0
+    return valid_date, updated_at if valid_date else "", sequence
 
 
 def bootstrap_summary_to_dict(summary: BootstrapSummary) -> dict[str, Any]:

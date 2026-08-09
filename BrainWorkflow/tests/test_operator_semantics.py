@@ -90,6 +90,29 @@ class OperatorSemanticsTests(unittest.TestCase):
         self.assertEqual(records["group_neutralize"].source_paths, ["docs/knowledge/operator_data_semantics.md"])
         self.assertNotIn("wiki/20_semantics", preview)
 
+    def test_compile_normalizes_absolute_reviewed_legacy_operator_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            output = root / "machine" / "operator_ledger.jsonl"
+            legacy_path = root / "wiki" / "20_semantics" / "operator_catalog_official.md"
+            legacy_reviewed = OperatorSemanticRecord(
+                operator="winsorize",
+                family="reviewed_outlier_control",
+                workflow_uses=["cap_outliers"],
+                compatible_field_types=["MATRIX"],
+                template_tags=["reviewed"],
+                risk_tags=[],
+                repair_levers=["adjust_std"],
+                source_paths=[str(legacy_path)],
+            )
+            write_operator_semantics_jsonl(output, [legacy_reviewed])
+
+            compile_operator_semantics(root, generated_at="2026-07-22T01:00:00Z")
+            records = {record.operator: record for record in load_operator_semantics(output)}
+
+        self.assertEqual(records["winsorize"].family, "reviewed_outlier_control")
+        self.assertEqual(records["winsorize"].source_paths, ["docs/knowledge/operator_data_semantics.md"])
+
     def test_operator_semantic_record_loads_workflow_use_and_risk(self):
         record = operator_semantic_record_from_dict(
             {

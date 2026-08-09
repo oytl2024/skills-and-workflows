@@ -1,3 +1,4 @@
+import hashlib
 import json
 import tempfile
 import unittest
@@ -299,3 +300,94 @@ class KnowledgeBootstrapTests(unittest.TestCase):
         self.assertNotIn("content_hash: stale", text)
         self.assertNotIn("wiki/10_foundations/activity_snapshot.md", text)
         self.assertIn("Body stays.", text)
+
+    def test_bootstrap_repairs_stale_activity_captured_at(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            seed_root = Path(tmp) / "seed"
+            self.create_seed_files(seed_root)
+            activity = root / "raw" / "platform" / "activities" / "bootstrap_activity_snapshot.md"
+            activity.parent.mkdir(parents=True)
+            body = "# Existing Activity Snapshot\n\nBody stays.\n"
+            activity.write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "source_type: bootstrap_activity_snapshot",
+                        "source_family: raw/platform/activities",
+                        "source_path: raw/platform/activities/bootstrap_activity_snapshot.md",
+                        "captured_at: 2026-07-01T00:00:00Z",
+                        "capture_tool: wqb.knowledge_bootstrap",
+                        "record_count: 1",
+                        f"content_hash: {hashlib.sha256(body.encode('utf-8')).hexdigest()}",
+                        "update_check: rerun platform activity refresh or bootstrap",
+                        "compiled_targets:",
+                        "  - wiki/00_start_here.md",
+                        "---",
+                        body,
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            bootstrap_knowledge(root, seed_root, generated_at="2026-07-10T00:00:00Z")
+            text = activity.read_text(encoding="utf-8")
+
+        self.assertIn("captured_at: 2026-07-10T00:00:00Z", text)
+        self.assertNotIn("captured_at: 2026-07-01T00:00:00Z", text)
+        self.assertIn("Body stays.", text)
+
+    def test_bootstrap_merges_duplicate_known_freshness_manifest_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            seed_root = Path(tmp) / "seed"
+            self.create_seed_files(seed_root)
+            manifest = root / "machine" / "freshness_manifest.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "operator_catalog",
+                            "path": "wiki/20_semantics/operator_catalog_official.md",
+                            "updated_at": "2026-07-01",
+                            "max_age_days": 30,
+                            "status": "stale_reviewed",
+                        },
+                        {
+                            "name": "operator_catalog",
+                            "path": "machine/operator_ledger.jsonl",
+                            "updated_at": "2026-07-03",
+                            "max_age_days": 30,
+                            "status": "latest_reviewed",
+                        },
+                        {
+                            "name": "activity_snapshot",
+                            "path": "wiki/10_foundations/activity_snapshot.md",
+                            "updated_at": "2026-07-02",
+                            "max_age_days": 1,
+                            "status": "reviewed",
+                        },
+                        {
+                            "name": "custom_note",
+                            "path": "raw/community/advisor_notes/custom.md",
+                            "updated_at": "2026-07-01",
+                            "max_age_days": 7,
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            bootstrap_knowledge(root, seed_root, generated_at="2026-07-10T00:00:00Z")
+            rows = json.loads(manifest.read_text(encoding="utf-8"))
+
+        operator_rows = [row for row in rows if row["name"] == "operator_catalog"]
+        activity_rows = [row for row in rows if row["name"] == "activity_snapshot"]
+        self.assertEqual(len(operator_rows), 1)
+        self.assertEqual(operator_rows[0]["path"], "machine/operator_ledger.jsonl")
+        self.assertEqual(operator_rows[0]["updated_at"], "2026-07-03")
+        self.assertEqual(operator_rows[0]["status"], "latest_reviewed")
+        self.assertEqual(len(activity_rows), 1)
+        self.assertEqual(activity_rows[0]["path"], "raw/platform/activities/bootstrap_activity_snapshot.md")
+        self.assertIn("custom_note", {row["name"] for row in rows})
