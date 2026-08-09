@@ -38,7 +38,8 @@ def _write_report(knowledge_root: str | Path, report: dict[str, Any]) -> Path:
     """Input: knowledge root and report. Output: report path. Persist maintenance evidence."""
     generated = datetime.fromisoformat(str(report["generated_at"]).replace("Z", "+00:00"))
     stem = generated.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    directory = Path(knowledge_root) / "raw" / "maintenance" / "compile_reports"
+    root = Path(knowledge_root).resolve()
+    directory = root / "raw" / "maintenance" / "compile_reports"
     directory.mkdir(parents=True, exist_ok=True)
     index = 0
     while True:

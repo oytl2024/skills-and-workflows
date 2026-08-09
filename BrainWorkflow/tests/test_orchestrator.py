@@ -1846,6 +1846,13 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             self.advance_to_candidate_gate(started)
             orchestrator.request_candidate_approval([candidate], "2026-07-12T00:03:00Z")
             waiting = load_run_state(Path(started["run_dir"]) / "run_state.json")
+            waiting_user_approval_evidence_exists = bool(
+                waiting.stages["user_approval"].evidence_paths
+                and Path(waiting.stages["user_approval"].evidence_paths[0]).exists()
+            )
+            approval_request = json.loads(
+                Path(waiting.stages["user_approval"].evidence_paths[0]).read_text(encoding="utf-8")
+            )
             orchestrator.approve_candidates(["c1"], "2026-07-12T00:04:00Z", "user")
             approved = load_run_state(Path(started["run_dir"]) / "run_state.json")
 
@@ -1857,6 +1864,12 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(waiting.current_stage, "user_approval")
         self.assertEqual(waiting.stages["candidate_gate"].status, "completed")
         self.assertEqual(waiting.stages["user_approval"].status, "paused")
+        self.assertTrue(waiting.stages["user_approval"].evidence_paths)
+        self.assertTrue(waiting_user_approval_evidence_exists)
+        self.assertEqual(approval_request["run_id"], started["run_id"])
+        self.assertEqual(approval_request["requested_at"], "2026-07-12T00:03:00Z")
+        self.assertEqual(approval_request["candidate_count"], 1)
+        self.assertEqual(approval_request["candidate_gate_path"], str(Path(started["run_dir"]) / "candidate_gate.json"))
         self.assertTrue(waiting.waiting_for_user)
         self.assertEqual(waiting.next_action, "workflow-approve-candidates")
         self.assertEqual(approved.current_stage, "research_record_sync")

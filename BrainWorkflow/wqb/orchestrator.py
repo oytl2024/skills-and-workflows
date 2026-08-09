@@ -493,6 +493,22 @@ class WorkflowOrchestrator:
         gate_path.write_text(
             json.dumps(candidates, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        approval_request_path = run_dir / "stages" / "user_approval" / "approval_request.json"
+        approval_request_path.parent.mkdir(parents=True, exist_ok=True)
+        approval_request_path.write_text(
+            json.dumps(
+                {
+                    "run_id": state.run_id,
+                    "requested_at": now,
+                    "candidate_count": len(candidates),
+                    "candidate_gate_path": str(gate_path),
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
         state = transition_run_state(state, "waiting_for_user", "candidate approval required")
         state = self._set_stage(
             state,
@@ -509,6 +525,7 @@ class WorkflowOrchestrator:
             "paused",
             now,
             blocker="candidate approval required",
+            evidence_paths=[str(approval_request_path)],
             current_stage="user_approval",
             last_completed_stage="candidate_gate",
         )

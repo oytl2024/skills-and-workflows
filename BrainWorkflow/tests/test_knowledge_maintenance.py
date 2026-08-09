@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -138,6 +139,25 @@ class KnowledgeMaintenanceTests(unittest.TestCase):
             self.assertTrue(
                 (root / "raw" / "maintenance" / "compile_reports" / "latest.json").exists()
             )
+
+    def test_maintenance_report_path_is_absolute_with_relative_knowledge_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "knowledge"
+            self._write_machine_resources(root)
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(base)
+                report = run_knowledge_maintenance(Path("knowledge"), "2026-07-30T00:00:00+00:00")
+            finally:
+                os.chdir(old_cwd)
+
+            report_path = Path(report["report_path"])
+            latest = json.loads((root / "raw" / "maintenance" / "compile_reports" / "latest.json").read_text(encoding="utf-8"))
+
+        self.assertTrue(report_path.is_absolute())
+        self.assertEqual(report_path, (root / "raw" / "maintenance" / "compile_reports" / "20260730T000000Z.json").resolve())
+        self.assertEqual(latest["report_path"], str(report_path))
 
     def test_maintenance_removes_ordinary_root_file_and_refuses_sensitive_root_file(self):
         with tempfile.TemporaryDirectory() as tmp:

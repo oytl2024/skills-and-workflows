@@ -874,6 +874,35 @@ class DeliveryGateTests(unittest.TestCase):
             next(check["status"] for check in report["checks"] if check["code"] == "maintenance_evidence"),
         )
 
+    def test_delivery_gate_rejects_maintenance_report_wrong_type(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            maintenance = self._write_minimal_clean_knowledge(knowledge)
+            payload = json.loads(maintenance.read_text(encoding="utf-8"))
+            payload["report_type"] = "delivery_gate"
+            maintenance.write_text(json.dumps(payload), encoding="utf-8")
+            (maintenance.parent / "latest.json").write_text(json.dumps(payload), encoding="utf-8")
+            self._write_verification_report(knowledge)
+            self._write_run_state(
+                runs,
+                "20260730T000000-paused",
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="missing candidates.csv",
+            )
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(
+            "failed",
+            next(check["status"] for check in report["checks"] if check["code"] == "maintenance_evidence"),
+        )
+
     def test_delivery_gate_rejects_cleanup_log_from_different_maintenance_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

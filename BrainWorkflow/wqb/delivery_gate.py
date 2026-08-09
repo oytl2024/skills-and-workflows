@@ -119,6 +119,8 @@ def _latest_maintenance_report(knowledge_root: Path) -> tuple[dict[str, Any], Pa
             report = json.loads(report_path.read_text(encoding="utf-8"))
             if not isinstance(report, dict):
                 return {}, None
+            if report.get("report_type") != "knowledge_maintenance":
+                return {}, None
             return report, report_path
         except (OSError, UnicodeDecodeError, ValueError, TypeError, json.JSONDecodeError):
             return {}, None
@@ -203,6 +205,7 @@ def _maintenance_evidence(
     passed = (
         fresh
         and _path_value_resolves_to(report.get("report_path"), report_path)
+        and report.get("report_type") == "knowledge_maintenance"
         and report.get("status") == "completed"
         and isinstance(health, dict)
         and health.get("issue_count") == 0
