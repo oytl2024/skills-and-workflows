@@ -391,3 +391,70 @@ class KnowledgeBootstrapTests(unittest.TestCase):
         self.assertEqual(len(activity_rows), 1)
         self.assertEqual(activity_rows[0]["path"], "raw/platform/activities/bootstrap_activity_snapshot.md")
         self.assertIn("custom_note", {row["name"] for row in rows})
+
+    def test_bootstrap_prefers_date_only_manifest_rows_over_datetime_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            seed_root = Path(tmp) / "seed"
+            self.create_seed_files(seed_root)
+            manifest = root / "machine" / "freshness_manifest.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "operator_catalog",
+                            "path": "machine/operator_ledger.jsonl",
+                            "updated_at": "2026-07-03T00:00:00Z",
+                            "max_age_days": 30,
+                            "status": "datetime_should_not_win",
+                        },
+                        {
+                            "name": "operator_catalog",
+                            "path": "wiki/20_semantics/operator_catalog_official.md",
+                            "updated_at": "2026-07-02",
+                            "max_age_days": 30,
+                            "status": "date_only_wins",
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            bootstrap_knowledge(root, seed_root, generated_at="2026-07-10T00:00:00Z")
+            rows = json.loads(manifest.read_text(encoding="utf-8"))
+
+        operator_row = next(row for row in rows if row["name"] == "operator_catalog")
+        self.assertEqual(operator_row["path"], "machine/operator_ledger.jsonl")
+        self.assertEqual(operator_row["updated_at"], "2026-07-02")
+        self.assertEqual(operator_row["status"], "date_only_wins")
+
+    def test_bootstrap_uses_canonical_manifest_defaults_when_existing_dates_are_invalid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            seed_root = Path(tmp) / "seed"
+            self.create_seed_files(seed_root)
+            manifest = root / "machine" / "freshness_manifest.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "operator_catalog",
+                            "path": "wiki/20_semantics/operator_catalog_official.md",
+                            "updated_at": "2026-07-03T00:00:00Z",
+                            "max_age_days": 30,
+                            "status": "invalid_datetime",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            bootstrap_knowledge(root, seed_root, generated_at="2026-07-10T00:00:00Z")
+            rows = json.loads(manifest.read_text(encoding="utf-8"))
+
+        operator_row = next(row for row in rows if row["name"] == "operator_catalog")
+        self.assertEqual(operator_row["path"], "machine/operator_ledger.jsonl")
+        self.assertEqual(operator_row["updated_at"], "1970-01-01")
+        self.assertEqual(operator_row["status"], "not_refreshed")

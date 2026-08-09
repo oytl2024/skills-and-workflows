@@ -1,5 +1,5 @@
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -243,7 +243,7 @@ def _normalize_existing_manifest(path: Path, generated_at: str, initialized_name
     except (OSError, json.JSONDecodeError):
         payload = []
     existing_rows = payload if isinstance(payload, list) else []
-    known_rows: dict[str, tuple[dict[str, Any], tuple[int, str, int]]] = {}
+    known_rows: dict[str, tuple[dict[str, Any], tuple[str, int]]] = {}
     unknown_rows: list[dict[str, Any]] = []
     for sequence, row in enumerate(existing_rows):
         if not isinstance(row, dict):
@@ -253,7 +253,7 @@ def _normalize_existing_manifest(path: Path, generated_at: str, initialized_name
             unknown_rows.append(dict(row))
             continue
         key = _manifest_preference_key(row, sequence)
-        if name not in known_rows or key > known_rows[name][1]:
+        if key is not None and (name not in known_rows or key > known_rows[name][1]):
             known_rows[name] = (dict(row), key)
     normalized: list[dict[str, Any]] = []
     for canonical in canonical_rows:
@@ -273,15 +273,14 @@ def _normalize_existing_manifest(path: Path, generated_at: str, initialized_name
     return path
 
 
-def _manifest_preference_key(row: dict[str, Any], sequence: int) -> tuple[int, str, int]:
-    """Input: manifest row and position. Output: sort key. Prefer rows with valid, recent dates."""
+def _manifest_preference_key(row: dict[str, Any], sequence: int) -> tuple[str, int] | None:
+    """Input: manifest row and position. Output: sort key or none. Prefer date-only freshness rows."""
     updated_at = str(row.get("updated_at", ""))
     try:
-        datetime.fromisoformat(updated_at)
-        valid_date = 1
+        date.fromisoformat(updated_at)
     except ValueError:
-        valid_date = 0
-    return valid_date, updated_at if valid_date else "", sequence
+        return None
+    return updated_at, sequence
 
 
 def bootstrap_summary_to_dict(summary: BootstrapSummary) -> dict[str, Any]:

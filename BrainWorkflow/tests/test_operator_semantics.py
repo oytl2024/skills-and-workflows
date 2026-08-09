@@ -113,6 +113,32 @@ class OperatorSemanticsTests(unittest.TestCase):
         self.assertEqual(records["winsorize"].family, "reviewed_outlier_control")
         self.assertEqual(records["winsorize"].source_paths, ["docs/knowledge/operator_data_semantics.md"])
 
+    def test_compile_preserves_non_legacy_archive_source_when_normalizing_mixed_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            output = root / "machine" / "operator_ledger.jsonl"
+            legacy_path = root / "wiki" / "20_semantics" / "operator_catalog_official.md"
+            archive_path = "docs/archive/wiki/20_semantics/operator_notes.md"
+            mixed_reviewed = OperatorSemanticRecord(
+                operator="zscore",
+                family="reviewed_standardizer",
+                workflow_uses=["standardize_signal"],
+                compatible_field_types=["MATRIX"],
+                template_tags=["reviewed"],
+                risk_tags=[],
+                repair_levers=["winsorize_first"],
+                source_paths=[str(legacy_path), archive_path],
+            )
+            write_operator_semantics_jsonl(output, [mixed_reviewed])
+
+            compile_operator_semantics(root, generated_at="2026-07-22T01:00:00Z")
+            records = {record.operator: record for record in load_operator_semantics(output)}
+
+        self.assertEqual(
+            records["zscore"].source_paths,
+            [archive_path, "docs/knowledge/operator_data_semantics.md"],
+        )
+
     def test_operator_semantic_record_loads_workflow_use_and_risk(self):
         record = operator_semantic_record_from_dict(
             {

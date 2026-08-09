@@ -153,10 +153,11 @@ def normalize_operator_source_paths(source_paths: list[str]) -> list[str]:
         if not path:
             continue
         relative = path.removeprefix("knowledge/")
+        absolute_or_vault_rooted = path.startswith("/") or (len(path) > 2 and path[1:3] == ":/") or path.startswith("knowledge/")
         if any(
             relative == prefix
             or relative.startswith(prefix + "/")
-            or f"/{prefix}/" in relative
+            or (absolute_or_vault_rooted and f"/{prefix}/" in relative)
             for prefix in LEGACY_OPERATOR_SOURCE_PREFIXES
         ):
             saw_legacy = True
