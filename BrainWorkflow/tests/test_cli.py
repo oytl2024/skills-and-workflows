@@ -534,7 +534,11 @@ class CliTests(unittest.TestCase):
         )
         self.assertEqual(
             capture_learn_material.WIKI_LEARN_PAGE,
-            expected / "wiki" / "10_foundations" / "learn_material_index.md",
+            expected / "machine" / "previews" / "learn_material_index.md",
+        )
+        self.assertEqual(
+            capture_learn_material.WIKI_OPERATOR_PAGE,
+            expected / "machine" / "previews" / "operator_catalog_official.md",
         )
 
     def test_config_overrides_from_args_includes_request_hyperparameters(self):

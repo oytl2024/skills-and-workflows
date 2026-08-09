@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import quote
 
 from wqb.client import WQBClient
+from wqb.knowledge_contracts import SourceIndexRow, parse_markdown_front_matter, upsert_source_index_rows
 
 
 KNOWLEDGE_ROOT_ENV = "BRAIN_KNOWLEDGE_ROOT"
@@ -88,8 +89,17 @@ def default_json_cache_root() -> Path:
 KNOWLEDGE_ROOT = default_knowledge_root()
 RAW_LEARN_ROOT = KNOWLEDGE_ROOT / "raw" / "platform" / "learn"
 JSON_CACHE_ROOT = default_json_cache_root()
-WIKI_LEARN_PAGE = KNOWLEDGE_ROOT / "wiki" / "10_foundations" / "learn_material_index.md"
-WIKI_OPERATOR_PAGE = KNOWLEDGE_ROOT / "wiki" / "20_semantics" / "operator_catalog_official.md"
+LEARN_PREVIEW_PAGE = KNOWLEDGE_ROOT / "machine" / "previews" / "learn_material_index.md"
+OPERATOR_PREVIEW_PAGE = KNOWLEDGE_ROOT / "machine" / "previews" / "operator_catalog_official.md"
+WIKI_LEARN_PAGE = LEARN_PREVIEW_PAGE
+WIKI_OPERATOR_PAGE = OPERATOR_PREVIEW_PAGE
+RAW_LEARN_SOURCE_FAMILY = "raw/platform/learn"
+START_HERE_TARGET = "wiki/00_start_here.md"
+FACTOR_PRINCIPLES_TARGET = "wiki/10_factor_principles.md"
+DATA_SEMANTICS_TARGET = "wiki/20_data_semantics.md"
+TEMPLATE_OPERATOR_TARGET = "wiki/30_template_and_operator_patterns.md"
+BENCHMARK_REPAIR_TARGET = "wiki/40_benchmark_and_repair_rules.md"
+OPERATOR_LEDGER_TARGET = "machine/operator_ledger.jsonl"
 
 
 def write_json(path: Path, payload: Any) -> None:
@@ -108,6 +118,23 @@ def stable_json_hash(payload: Any) -> str:
     """Input: JSON-like payload. Output: sha256 hex string. Hash source content for update checks."""
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def payload_record_count(payload: Any) -> int:
+    """Input: raw payload. Output: record count int. Count rows represented by one raw source note."""
+    if isinstance(payload, list):
+        return len(payload)
+    if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+        return len(payload["results"])
+    return 1
+
+
+def knowledge_relative_path(path: Path) -> str:
+    """Input: vault path. Output: POSIX path relative to the active knowledge root."""
+    try:
+        return path.resolve().relative_to(KNOWLEDGE_ROOT.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def capture_date(generated_at: str) -> str:
@@ -130,11 +157,14 @@ def frontmatter(source_type: str, source_path: str, generated_at: str, payload: 
     lines = [
         "---",
         f"source_type: {source_type}",
+        f"source_family: {RAW_LEARN_SOURCE_FAMILY}",
         f"source_path: {source_path}",
         f"captured_at: {generated_at}",
         "capture_tool: scripts/capture_learn_material.py",
         "content_status: raw_markdown",
+        f"record_count: {payload_record_count(payload)}",
         f"content_hash: {stable_json_hash(payload)}",
+        "update_check: compare record count, content hash, and platform endpoint against the previous Learn capture",
         "compiled_targets:",
     ]
     for target in compiled_targets:
@@ -240,12 +270,13 @@ def markdown_record_value(value: Any) -> str:
 def write_raw_index(capture: dict[str, Any], manifest: dict[str, Any], output_dir: Path) -> Path:
     """Input: Learn capture, manifest, output dir. Output: index path. Write the raw capture overview."""
     generated_at = capture["generated_at"]
+    path = output_dir / "index.md"
     lines = frontmatter(
         "platform_api",
-        "learn capture aggregate",
+        knowledge_relative_path(path),
         generated_at,
         manifest,
-        ["knowledge/wiki/10_foundations/learn_material_index.md"],
+        [START_HERE_TARGET],
     )
     lines.extend(
         [
@@ -281,19 +312,19 @@ def write_raw_index(capture: dict[str, Any], manifest: dict[str, Any], output_di
             "Compare counts and content hashes against the previous capture. Count changes identify which section files need deeper review before recompiling wiki pages.",
         ]
     )
-    path = output_dir / "index.md"
     write_markdown(path, lines)
     return path
 
 
 def write_raw_operators(operators: list[dict[str, Any]], generated_at: str, output_dir: Path) -> Path:
     """Input: operator rows, timestamp, output dir. Output: path. Write raw official operator records as Markdown."""
+    path = output_dir / "operators.md"
     lines = frontmatter(
         "platform_api",
-        "/operators",
+        knowledge_relative_path(path),
         generated_at,
         operators,
-        ["knowledge/wiki/20_semantics/operator_catalog_official.md", "knowledge/wiki/20_semantics/operators.md"],
+        [TEMPLATE_OPERATOR_TARGET, OPERATOR_LEDGER_TARGET],
     )
     lines.extend(["", "# Operators", "", f"Record count: {len(operators)}", ""])
     by_category: dict[str, list[dict[str, Any]]] = {}
@@ -317,22 +348,24 @@ def write_raw_operators(operators: list[dict[str, Any]], generated_at: str, outp
                     "",
                 ]
             )
-    path = output_dir / "operators.md"
     write_markdown(path, lines)
     return path
 
 
 def write_raw_documentation_pages(pages: list[dict[str, Any]], generated_at: str, output_dir: Path) -> Path:
     """Input: documentation page rows, timestamp, output dir. Output: path. Write raw Learn documentation pages."""
+    path = output_dir / "documentation_pages.md"
     lines = frontmatter(
         "platform_api",
-        "/tutorial-pages/{id}",
+        knowledge_relative_path(path),
         generated_at,
         pages,
         [
-            "knowledge/wiki/10_foundations/learn_material_index.md",
-            "knowledge/wiki/10_foundations/metrics_and_checks.md",
-            "knowledge/wiki/60_workflows/correlation_aware_stage1.md",
+            START_HERE_TARGET,
+            FACTOR_PRINCIPLES_TARGET,
+            DATA_SEMANTICS_TARGET,
+            TEMPLATE_OPERATOR_TARGET,
+            BENCHMARK_REPAIR_TARGET,
         ],
     )
     lines.extend(["", "# Documentation Pages", "", f"Record count: {len(pages)}", ""])
@@ -350,19 +383,19 @@ def write_raw_documentation_pages(pages: list[dict[str, Any]], generated_at: str
                 "",
             ]
         )
-    path = output_dir / "documentation_pages.md"
     write_markdown(path, lines)
     return path
 
 
 def write_raw_errors(errors: list[dict[str, str]], generated_at: str, output_dir: Path) -> Path:
     """Input: fetch error rows, timestamp, output dir. Output: path. Write raw documentation fetch errors."""
+    path = output_dir / "documentation_errors.md"
     lines = frontmatter(
         "platform_api",
-        "/tutorial-pages/{id}",
+        knowledge_relative_path(path),
         generated_at,
         errors,
-        ["knowledge/wiki/10_foundations/learn_material_index.md"],
+        [START_HERE_TARGET],
     )
     lines.extend(["", "# Documentation Fetch Errors", "", f"Record count: {len(errors)}", ""])
     for error in errors:
@@ -375,7 +408,6 @@ def write_raw_errors(errors: list[dict[str, str]], generated_at: str, output_dir
                 "",
             ]
         )
-    path = output_dir / "documentation_errors.md"
     write_markdown(path, lines)
     return path
 
@@ -390,8 +422,10 @@ def write_raw_rows(
     compiled_targets: list[str],
 ) -> Path:
     """Input: row section metadata and rows. Output: path. Write raw API rows as Markdown."""
-    lines = frontmatter("platform_api", endpoint, generated_at, rows, compiled_targets)
+    path = output_dir / filename
+    lines = frontmatter("platform_api", knowledge_relative_path(path), generated_at, rows, compiled_targets)
     lines.extend(["", f"# {section_name}", "", f"Record count: {len(rows)}", ""])
+    lines.extend(["", f"Source endpoint: `{endpoint}`", ""])
     for index, row in enumerate(rows, 1):
         title = row.get("title") or row.get("name") or row.get("question") or row.get("id") or f"Record {index}"
         lines.extend([f"## {title}", ""])
@@ -406,19 +440,19 @@ def write_raw_rows(
                 else:
                     lines.append(f"- {key}: {text}")
         lines.append("")
-    path = output_dir / filename
     write_markdown(path, lines)
     return path
 
 
 def write_raw_search_results(search_results: dict[str, Any], generated_at: str, output_dir: Path) -> Path:
     """Input: search results, timestamp, output dir. Output: path. Write raw Learn search discovery results."""
+    path = output_dir / "search_results.md"
     lines = frontmatter(
         "platform_api",
-        "/search?query=...",
+        knowledge_relative_path(path),
         generated_at,
         search_results,
-        ["knowledge/wiki/10_foundations/learn_material_index.md"],
+        [START_HERE_TARGET],
     )
     lines.extend(["", "# Search Results", "", f"Query count: {len(search_results)}", ""])
     for query in sorted(search_results):
@@ -441,9 +475,28 @@ def write_raw_search_results(search_results: dict[str, Any], generated_at: str, 
                 lines.append("")
         else:
             lines.extend(["```json", json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), "```", ""])
-    path = output_dir / "search_results.md"
     write_markdown(path, lines)
     return path
+
+
+def update_learn_source_index(paths: list[Path]) -> Path:
+    """Input: raw Learn paths. Output: source index path. Register raw Learn files in machine/raw indexes."""
+    rows: list[SourceIndexRow] = []
+    for path in paths:
+        metadata, _ = parse_markdown_front_matter(path.read_text(encoding="utf-8"))
+        relative_path = knowledge_relative_path(path)
+        targets = metadata.get("compiled_targets", [])
+        rows.append(
+            SourceIndexRow(
+                path=relative_path,
+                source_family=str(metadata.get("source_family", RAW_LEARN_SOURCE_FAMILY)),
+                source_type=str(metadata.get("source_type", "platform_api")),
+                contents=f"WorldQuant BRAIN Learn capture file {path.name}",
+                update_check=str(metadata.get("update_check", "compare with previous Learn capture")),
+                compiled_targets=[str(target) for target in targets] if isinstance(targets, list) else [],
+            )
+        )
+    return upsert_source_index_rows(KNOWLEDGE_ROOT, rows)
 
 
 def write_raw_learn_markdown(capture: dict[str, Any], manifest: dict[str, Any]) -> list[Path]:
@@ -461,7 +514,7 @@ def write_raw_learn_markdown(capture: dict[str, Any], manifest: dict[str, Any]) 
             capture["generated_at"],
             output_dir,
             "faqs.md",
-            ["knowledge/wiki/10_foundations/metrics_and_checks.md"],
+            [BENCHMARK_REPAIR_TARGET],
         ),
         write_raw_rows(
             "Videos",
@@ -470,7 +523,7 @@ def write_raw_learn_markdown(capture: dict[str, Any], manifest: dict[str, Any]) 
             capture["generated_at"],
             output_dir,
             "videos.md",
-            ["knowledge/wiki/20_semantics/data_fields_and_datasets.md", "knowledge/wiki/30_templates/template_families.md"],
+            [DATA_SEMANTICS_TARGET, TEMPLATE_OPERATOR_TARGET],
         ),
         write_raw_rows(
             "Recommended Readings",
@@ -479,10 +532,11 @@ def write_raw_learn_markdown(capture: dict[str, Any], manifest: dict[str, Any]) 
             capture["generated_at"],
             output_dir,
             "recommended_readings.md",
-            ["knowledge/wiki/30_templates/template_families.md"],
+            [TEMPLATE_OPERATOR_TARGET],
         ),
         write_raw_search_results(capture["search_results"], capture["generated_at"], output_dir),
     ]
+    update_learn_source_index(paths)
     return paths
 
 
@@ -501,11 +555,11 @@ def write_json_cache(capture: dict[str, Any], manifest: dict[str, Any]) -> Path:
 
 
 def write_learn_wiki(capture: dict[str, Any]) -> None:
-    """Input: raw capture dict. Output: None. Compile Learn source inventory into the wiki."""
+    """Input: raw capture dict. Output: None. Compile Learn source inventory into a machine preview."""
     generated_at = capture["generated_at"]
     documentation_pages = capture["documentation_pages"]
     lines = [
-        "# Learn Material Index",
+        "# Learn Material Preview",
         "",
         f"Generated at: `{generated_at}`",
         "",
@@ -541,8 +595,8 @@ def write_learn_wiki(capture: dict[str, Any]) -> None:
             "",
             "## Research Workflow Use",
             "",
-            "- Read this page before creating a new research plan when platform rules may have changed.",
-            "- Use the operator catalog wiki page for operator availability and descriptions before generating templates.",
+            "- Read this preview before creating a new research plan when platform rules may have changed.",
+            "- Use the operator catalog preview for operator availability and descriptions before generating templates.",
             "- Refresh this capture when rules, activities, operators, or Learn navigation changes.",
         ]
     )
@@ -551,7 +605,7 @@ def write_learn_wiki(capture: dict[str, Any]) -> None:
 
 
 def write_operator_wiki(operators: list[dict[str, Any]], generated_at: str) -> None:
-    """Input: operator rows and timestamp. Output: None. Compile official operator metadata into the wiki."""
+    """Input: operator rows and timestamp. Output: None. Compile official operator metadata into a machine preview."""
     by_category: dict[str, list[dict[str, Any]]] = {}
     for operator in operators:
         category = str(operator.get("category") or "Uncategorized")
