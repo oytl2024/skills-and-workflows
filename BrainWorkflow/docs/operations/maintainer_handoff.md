@@ -69,21 +69,13 @@ For project continuity, update local `milestone.md` before interruption or hando
 
 ## Durable Knowledge Base Contract
 
-The Obsidian vault follows a raw-to-wiki pattern:
+The active Obsidian vault has three canonical top-level layers:
 
-- `knowledge/raw/`: source materials and daily research records.
-- `knowledge/wiki/00_principles/`: durable principles.
-- `knowledge/wiki/10_foundations/`: platform foundations, checks, activities.
-- `knowledge/wiki/20_semantics/`: data ledger, operators, datasets.
-- `knowledge/wiki/30_templates/`: template library and template families.
-- `knowledge/wiki/40_experiments/`: research session notes.
-- `knowledge/wiki/50_benchmarks/`: signal, correlation, novelty, repair benchmarks.
-- `knowledge/wiki/60_workflows/`: workflow contracts and optimization backlog.
-- `knowledge/wiki/70_decisions/`: option cards, schedules, readiness outputs.
-- `knowledge/wiki/80_maintenance/`: freshness manifest and health checks.
-- `knowledge/wiki/90_index/`: glossary, open questions, health check index.
+- `knowledge/raw/`: source materials, platform snapshots, forum/advisor material, user interaction notes, raw research records, and immutable maintenance evidence.
+- `knowledge/machine/`: JSON/JSONL resources consumed by code, including data ledgers, template libraries, benchmark rules, freshness manifests, research option cards, and maintenance reports.
+- `knowledge/wiki/`: compact human lessons and selected case reports. Wiki pages must carry metadata and backlinks to concrete raw sources.
 
-Research commands should read compiled wiki artifacts. Full source refresh and wiki compilation should be a separate maintenance loop.
+Research commands should read compiled machine resources and selected wiki lessons. Full source refresh and wiki compilation should be a separate maintenance loop.
 
 ## Data Field Coverage Contract
 
@@ -98,11 +90,11 @@ python -m wqb.cli capture-platform-data-fields --knowledge-root 'C:\Users\oytl\D
 python -m wqb.cli compile-data-ledger --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
 ```
 
-Knowledge maintenance has two official entry points:
+Knowledge maintenance has three official entry points:
 
-- Research-record compile: raw research records accumulated from completed runs are compiled into `wiki/40_experiments/research_record_compile.md` by `python -m wqb.cli compile-research-records`.
-- Platform-material maintenance: after platform data-field raw materials are refreshed, run `compile-data-ledger`, then `knowledge-health-check` and readiness maintenance before starting a research workflow. Do not run `bootstrap-knowledge` after a data-field refresh because it can replace the compiled ledger with schema-seeded partial rows. Use `bootstrap-knowledge` only for initial knowledge-structure recovery.
-- Authority and semantic maintenance: research readiness verifies compiled ledger rows against certified canonical raw captures. `knowledge-health-check` includes contract integrity, and `compile-operator-semantics` preserves reviewed rows while merging canonical operators and missing defaults.
+- Research-record compile: raw research records accumulated from completed runs are synced into `machine/research_records.jsonl`; selected human case reports are written under `wiki/60_research_cases/` by `python -m wqb.cli compile-research-records`.
+- Platform-material maintenance: after platform data-field raw materials are refreshed, run `compile-data-ledger`, then `compile-knowledge --apply-cleanup`, `knowledge-health-check`, and readiness maintenance before starting a research workflow. Do not run `bootstrap-knowledge` after a data-field refresh because it can replace missing compiled ledgers with schema-seeded partial rows. Use `bootstrap-knowledge` only for initial knowledge-structure recovery.
+- Authority and semantic maintenance: research readiness verifies compiled ledger rows against certified canonical raw captures. `knowledge-health-check` includes contract integrity, and `compile-operator-semantics` preserves reviewed rows while merging canonical operators and missing defaults into `machine/operator_ledger.jsonl` plus `machine/previews/operator_semantics.md`.
 
 ## Current Known Minor Follow-Ups
 
@@ -142,7 +134,7 @@ Long actions (`bootstrap-knowledge`, `compile-research-records`,
 `capture-platform-data-fields`, `compile-data-ledger`, and
 `plan-research-options`) must use `start_job_async`. Short local checks may use `run_job`.
 When recovering a running job, reconcile `job.json`, PID state, and the
-persisted raw, wiki, or run artifacts before retrying it. Capture jobs persist
+persisted raw, machine, wiki, or run artifacts before retrying it. Capture jobs persist
 their target raw capture directory in `job.json`; use that directory rather
 than a globally newest capture. Do not launch a second
 live capture or compile merely because the browser lost its connection.

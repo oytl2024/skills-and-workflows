@@ -17,7 +17,7 @@ from wqb.semantics import field_semantic_embedding
 RAW_CAPTURE_ROOT = Path("raw") / "platform" / "data_fields"
 DATA_LEDGER_RESOURCE = "data_ledger"
 FRESHNESS_MANIFEST_RESOURCE = "freshness_manifest"
-DATA_LEDGER_MD = Path("wiki") / "20_data_semantics.md"
+DATA_LEDGER_MD = Path("machine") / "previews" / "data_ledger.md"
 COMPILE_LOCK_NAME = DATA_CAPTURE_LOCK_NAME
 COMPILE_LOCK_TIMEOUT_SECONDS = 5.0
 COMPILE_LOCK_SLEEP_SECONDS = 0.05

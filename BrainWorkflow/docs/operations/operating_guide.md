@@ -88,7 +88,7 @@ The research workflow consumes compiled knowledge. It should not recapture all p
 
 There are two distinct maintenance situations:
 
-1. **Research-record compile after a research session.** Historical workflow runs write raw research records under `knowledge/raw/research/...`. After enough new research accumulates, manually compile those records into wiki experiment memory:
+1. **Research-record compile after a research session.** Historical workflow runs write raw research records under `knowledge/raw/research/...`. After enough new research accumulates, manually sync those records into `knowledge/machine/research_records.jsonl` and selected human case reports under `knowledge/wiki/60_research_cases/`:
 
 ```powershell
 python -m wqb.cli compile-research-records --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
@@ -107,12 +107,12 @@ python -m wqb.cli bootstrap-knowledge --knowledge-root 'C:\Users\oytl\Desktop\py
 Routine maintenance loop:
 
 ```powershell
-python -m wqb.cli compile-research-records --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
+python -m wqb.cli compile-knowledge --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --apply-cleanup
 python -m wqb.cli knowledge-health-check --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
 python -m wqb.cli readiness-check --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --readiness-mode maintenance
 ```
 
-Use the routine loop after a research session or on a scheduled maintenance day. After platform data-field capture, run `compile-data-ledger` before the health and readiness checks below.
+Use the routine loop after a research session or on a scheduled maintenance day. If the only new input is completed research runs, `compile-research-records` may be run before `compile-knowledge`; it writes the machine research ledger and selected case reports, not a mixed legacy experiment bundle. After platform data-field capture, run `compile-data-ledger` before `compile-knowledge` and the health/readiness checks below.
 
 ## Stratified Platform Data Capture
 
@@ -152,15 +152,21 @@ Then check knowledge health:
 python -m wqb.cli knowledge-health-check --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
 ```
 
+By default the health command writes the freshness report under
+`knowledge/machine/reports/freshness_report.md`; it does not create a
+maintenance page in `knowledge/wiki`.
+
 Research readiness treats a compiled data-ledger row as authoritative only when its
 canonical raw capture contains the matching field and scope, the scope outcome and
 manifest are certified complete, and the source date is valid. The health command
 also reports wiki metadata, `compiled_from` backlinks, source-index coverage, and
 orphan raw sources alongside the existing freshness results.
 
-`compile-operator-semantics` merges canonical operator captures and missing defaults
-with the existing reviewed ledger by operator ID. Reviewed records take precedence
-and are not discarded by recompilation.
+`compile-operator-semantics` merges canonical operator captures and missing
+defaults with the existing reviewed ledger by operator ID. Reviewed records
+take precedence and are not discarded by recompilation. The machine-readable
+ledger is `knowledge/machine/operator_ledger.jsonl`; the generated preview is
+`knowledge/machine/previews/operator_semantics.md`, not a wiki page.
 
 `cache-metadata` remains a targeted exploration command. It is not the authoritative data scheduling ledger.
 

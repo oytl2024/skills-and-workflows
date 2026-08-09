@@ -3499,7 +3499,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-options", type=int, default=5)
     parser.add_argument("--option-output-dir", default=default_option_output_dir())
     parser.add_argument("--freshness-manifest", default="machine/freshness_manifest.json")
-    parser.add_argument("--freshness-report", default="wiki/80_maintenance/freshness_report.md")
+    parser.add_argument("--freshness-report", default="machine/reports/freshness_report.md")
     parser.add_argument("--knowledge-root", default=str(default_knowledge_root()))
     parser.add_argument("--summary", default="")
     parser.add_argument("--category", default="")

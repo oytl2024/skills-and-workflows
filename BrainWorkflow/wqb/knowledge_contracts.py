@@ -24,16 +24,13 @@ RAW_CANONICAL_PREFIXES = (
 )
 
 WIKI_CANONICAL_PREFIXES = (
-    "wiki/00_principles",
-    "wiki/10_foundations",
-    "wiki/20_semantics",
-    "wiki/30_templates",
-    "wiki/40_experiments",
-    "wiki/50_benchmarks",
-    "wiki/60_workflows",
-    "wiki/70_decisions",
-    "wiki/80_maintenance",
-    "wiki/90_index",
+    "wiki/00_start_here.md",
+    "wiki/10_factor_principles.md",
+    "wiki/20_data_semantics.md",
+    "wiki/30_template_and_operator_patterns.md",
+    "wiki/40_benchmark_and_repair_rules.md",
+    "wiki/50_engineering_lessons.md",
+    "wiki/60_research_cases",
 )
 
 RAW_REQUIRED_FIELDS = (

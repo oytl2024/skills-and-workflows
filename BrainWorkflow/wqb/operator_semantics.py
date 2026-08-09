@@ -192,7 +192,7 @@ def compile_operator_semantics(
     """Input: vault root and timestamp. Output: compile summary. Merge canonical operators, seeds, and reviewed records."""
     root = Path(knowledge_root)
     jsonl_path = machine_resource_path(root, "operator_ledger")
-    markdown_path = root / "wiki" / "20_operator_semantics.md"
+    markdown_path = root / "machine" / "previews" / "operator_semantics.md"
     by_operator = {record.operator: record for record in default_operator_semantics()}
     for row, source_path in _canonical_operator_rows(root):
         record = _record_from_canonical_operator(row, source_path)

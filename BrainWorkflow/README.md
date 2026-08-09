@@ -105,7 +105,7 @@ Example foundation files live under `docs/knowledge/`:
 The startup layer separates maintenance from research execution:
 
 - `bootstrap-knowledge` creates missing initial Data Ledger, Template Library, Freshness Manifest, and bootstrap report scaffolds in a new or incomplete vault. It preserves existing compiled artifacts and is not a post-refresh compile command.
-- `compile-research-records` compiles raw research records from completed runs into `wiki/40_experiments/research_record_compile.md`.
+- `compile-research-records` syncs raw research records from completed runs into `machine/research_records.jsonl` and selected human case reports under `wiki/60_research_cases/`.
 - `readiness-check` validates required artifacts, parseability, freshness, batch size, live API permission, and submit confirmation.
 - `launch-workflow` writes a run manifest, readiness report, and subagent handoff packets before research execution. In strict research or submit-candidate modes, blocked readiness writes only a blocked readiness report and does not create a run manifest or handoffs.
 - `schedule-research` and live simulation/repair commands run the same readiness gate before writing schedules or contacting the API.
@@ -134,4 +134,4 @@ It shows readiness, freshness, research options, current workflow state, job his
 Knowledge maintenance is deliberately split:
 
 - Compile research records after research sessions with `compile-research-records`.
-- Compile refreshed platform data with `compile-data-ledger`, then verify with `knowledge-health-check` before starting research.
+- Compile refreshed platform data with `compile-data-ledger`, run `compile-knowledge --apply-cleanup`, then verify with `knowledge-health-check` before starting research.

@@ -939,6 +939,7 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(health_check.call_args.args[0], "custom_knowledge")
         self.assertEqual(json.loads(output.getvalue())["report_path"], "report.md")
+        self.assertEqual(health_check.call_args.args[2], "machine/reports/freshness_report.md")
 
     def test_compile_research_records_main_dispatches_without_network(self):
         output = io.StringIO()
@@ -1043,12 +1044,13 @@ class CliTests(unittest.TestCase):
 
             result = json.loads(output.getvalue())
             jsonl_path = root / "machine" / "operator_ledger.jsonl"
-            markdown_path = root / "wiki" / "20_operator_semantics.md"
+            markdown_path = root / "machine" / "previews" / "operator_semantics.md"
             self.assertEqual(result["record_count"], 3)
             self.assertEqual(Path(result["jsonl_path"]), jsonl_path)
             self.assertEqual(Path(result["markdown_path"]), markdown_path)
             self.assertTrue(jsonl_path.exists())
             self.assertIn("vec_avg", markdown_path.read_text(encoding="utf-8"))
+            self.assertFalse((root / "wiki" / "20_operator_semantics.md").exists())
 
     def test_launch_console_parse_and_dispatch(self):
         output = io.StringIO()

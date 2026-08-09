@@ -5,6 +5,8 @@ from pathlib import Path
 
 from wqb.data_ledger import load_data_ledger
 from wqb.knowledge_bootstrap import bootstrap_knowledge, bootstrap_summary_to_dict
+from wqb.knowledge_clean_compile import evaluate_clean_knowledge_structure
+from wqb.knowledge_freshness import evaluate_knowledge_contract_health
 
 
 class KnowledgeBootstrapTests(unittest.TestCase):
@@ -64,15 +66,17 @@ class KnowledgeBootstrapTests(unittest.TestCase):
 
             expected = [
                 root / "machine" / "data_ledger.jsonl",
-                root / "wiki" / "20_semantics" / "data_ledger.md",
                 root / "machine" / "template_library.jsonl",
-                root / "wiki" / "30_templates" / "template_library.md",
                 root / "machine" / "freshness_manifest.json",
-                root / "wiki" / "80_maintenance" / "bootstrap_report.md",
-                root / "wiki" / "10_foundations" / "activity_snapshot.md",
+                root / "raw" / "platform" / "activities" / "bootstrap_activity_snapshot.md",
+                root / "raw" / "maintenance" / "bootstrap_reports" / "2026-07-10.json",
             ]
 
             self.assertTrue(all(path.exists() for path in expected))
+            self.assertFalse((root / "wiki" / "20_semantics" / "data_ledger.md").exists())
+            self.assertFalse((root / "wiki" / "30_templates" / "template_library.md").exists())
+            self.assertFalse((root / "wiki" / "80_maintenance" / "bootstrap_report.md").exists())
+            self.assertFalse((root / "wiki" / "10_foundations" / "activity_snapshot.md").exists())
             self.assertFalse((root / "wiki" / "20_semantics" / "data_ledger.jsonl").exists())
             self.assertFalse((root / "wiki" / "30_templates" / "template_library.jsonl").exists())
             self.assertFalse((root / "wiki" / "80_maintenance" / "freshness_manifest.json").exists())
@@ -85,14 +89,10 @@ class KnowledgeBootstrapTests(unittest.TestCase):
             seed_root = Path(tmp) / "seed"
             self.create_seed_files(seed_root)
             ledger_jsonl = root / "machine" / "data_ledger.jsonl"
-            ledger_md = root / "wiki" / "20_semantics" / "data_ledger.md"
             template_jsonl = root / "machine" / "template_library.jsonl"
-            template_md = root / "wiki" / "30_templates" / "template_library.md"
             existing = {
                 ledger_jsonl: '{"field_id":"authoritative_field","source_quality":"platform_api"}\n',
-                ledger_md: "# Authoritative Data Ledger\n",
                 template_jsonl: '{"template_id":"curated_template","status":"submit_proven"}\n',
-                template_md: "# Curated Template Library\n",
             }
             for path, content in existing.items():
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -149,7 +149,7 @@ class KnowledgeBootstrapTests(unittest.TestCase):
             manifest = json.loads(
                 (root / "machine" / "freshness_manifest.json").read_text(encoding="utf-8")
             )
-            report = (root / "wiki" / "80_maintenance" / "bootstrap_report.md").read_text(encoding="utf-8")
+            report = json.loads((root / "raw" / "maintenance" / "bootstrap_reports" / "2026-07-10.json").read_text(encoding="utf-8"))
 
         by_name = {row["name"]: row for row in manifest}
         self.assertEqual(
@@ -164,9 +164,22 @@ class KnowledgeBootstrapTests(unittest.TestCase):
             self.assertEqual(by_name[name]["status"], "not_refreshed")
             self.assertTrue(by_name[name]["source_note"])
             self.assertGreater(by_name[name]["max_age_days"], 0)
-        self.assertIn("Coverage Status: `partial`", report)
-        self.assertIn("Source Quality: `schema_seed`", report)
-        self.assertIn("Not Refreshed", report)
+        self.assertEqual(report["coverage_status"], "partial")
+        self.assertEqual(report["source_quality"], "schema_seed")
         for name in ("benchmark_rules", "operator_catalog", "research_option_cards"):
-            self.assertIn(name, report)
+            self.assertIn(name, report["not_refreshed"])
         self.assertTrue(any("not refreshed" in warning.lower() for warning in summary.warnings))
+
+    def test_bootstrap_does_not_create_dirty_wiki_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            seed_root = Path(tmp) / "seed"
+            self.create_seed_files(seed_root)
+
+            bootstrap_knowledge(root, seed_root, generated_at="2026-07-10T00:00:00Z")
+
+            clean = evaluate_clean_knowledge_structure(root)
+            health = evaluate_knowledge_contract_health(root)
+
+        self.assertTrue(clean["clean"], clean["issues"])
+        self.assertEqual(health["issue_count"], 0, health["issues"])

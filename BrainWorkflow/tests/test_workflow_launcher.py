@@ -71,7 +71,7 @@ class WorkflowLauncherTests(unittest.TestCase):
         self.assertEqual(manifest.knowledge_artifacts, {
             name: path.relative_to(knowledge_root).as_posix()
             for name, path in legacy_paths.items()
-        } | {"activity_snapshot": "wiki/10_foundations/activity_snapshot.md"})
+        } | {"activity_snapshot": "raw/platform/activities/bootstrap_activity_snapshot.md"})
 
     def test_create_run_manifest_keeps_same_day_runs_in_separate_directories(self):
         with tempfile.TemporaryDirectory() as tmp:

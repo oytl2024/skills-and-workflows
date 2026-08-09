@@ -2,29 +2,64 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from wqb.knowledge_clean_compile import evaluate_clean_knowledge_structure
 from wqb.knowledge_compile import compile_research_records
+from wqb.knowledge_freshness import evaluate_knowledge_contract_health
+from wqb.research_record import empty_research_record, record_alpha_result, sync_research_record_to_raw
 
 
 class KnowledgeCompileTests(unittest.TestCase):
     def test_compile_research_records_writes_experiment_summary_from_raw_records(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            raw_record = root / "raw" / "research" / "runs" / "run1" / "research_record.md"
-            raw_record.parent.mkdir(parents=True)
-            raw_record.write_text(
-                "# Research Record\n\n- Run ID: `run1`\n- Objective: Power Pool\n\n## Backtest\n- `alpha1` `hash1`\n",
-                encoding="utf-8",
+            record = record_alpha_result(
+                empty_research_record("run1", "Power Pool"),
+                {
+                    "alpha_id": "alpha1",
+                    "expression_hash": "hash1",
+                    "hard_pass": False,
+                    "benchmark_label": "near_miss",
+                    "failed": ["prod_correlation"],
+                },
             )
+            sync_research_record_to_raw(record, root / "raw")
 
             result = compile_research_records(root, generated_at="2026-07-16T00:00:00Z")
 
             output = Path(result["markdown_path"])
             text = output.read_text(encoding="utf-8")
+            ledger_exists = (root / "machine" / "research_records.jsonl").exists()
+            legacy_exists = (root / "wiki" / "40_experiments").exists()
 
         self.assertEqual(result["record_count"], 1)
-        self.assertIn("Research Record Compile", text)
+        self.assertEqual(output, root / "wiki" / "60_research_cases" / "run1.md")
         self.assertIn("run1", text)
         self.assertIn("Power Pool", text)
+        self.assertTrue(ledger_exists)
+        self.assertFalse(legacy_exists)
+
+    def test_compile_research_records_outputs_contract_compliant_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            record = record_alpha_result(
+                empty_research_record("run1", "Power Pool"),
+                {
+                    "alpha_id": "alpha1",
+                    "expression_hash": "hash1",
+                    "hard_pass": False,
+                    "benchmark_label": "near_miss",
+                    "failed": ["prod_correlation"],
+                },
+            )
+            sync_research_record_to_raw(record, root / "raw")
+
+            compile_research_records(root, generated_at="2026-07-16T00:00:00Z")
+
+            clean = evaluate_clean_knowledge_structure(root)
+            health = evaluate_knowledge_contract_health(root)
+
+        self.assertTrue(clean["clean"], clean["issues"])
+        self.assertEqual(health["issue_count"], 0, health["issues"])
 
 
 if __name__ == "__main__":

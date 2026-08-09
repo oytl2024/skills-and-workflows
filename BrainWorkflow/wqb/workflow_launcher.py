@@ -14,7 +14,7 @@ DEFAULT_KNOWLEDGE_ARTIFACTS = {
     "template_library": "machine/template_library.jsonl",
     "freshness_manifest": "machine/freshness_manifest.json",
     "benchmark_rules": BENCHMARK_RULES_PATH.as_posix(),
-    "activity_snapshot": "wiki/10_foundations/activity_snapshot.md",
+    "activity_snapshot": "raw/platform/activities/bootstrap_activity_snapshot.md",
 }
 
 

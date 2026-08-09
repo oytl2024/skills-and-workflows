@@ -1,11 +1,13 @@
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 from wqb.benchmark_rules import BENCHMARK_RULES_PATH
 from wqb.data_ledger import load_data_ledger, write_data_ledger_markdown
+from wqb.knowledge_contracts import SourceIndexRow, render_front_matter, upsert_source_index_rows
 from wqb.knowledge_paths import machine_resource_path
 from wqb.template_library import load_template_library, write_template_library_markdown
 
@@ -14,12 +16,12 @@ DATA_LEDGER_RESOURCE = "data_ledger"
 TEMPLATE_LIBRARY_RESOURCE = "template_library"
 FRESHNESS_MANIFEST_RESOURCE = "freshness_manifest"
 DATA_LEDGER_JSONL = Path("machine") / "data_ledger.jsonl"
-DATA_LEDGER_MD = Path("wiki") / "20_semantics" / "data_ledger.md"
+DATA_LEDGER_MD = Path("machine") / "previews" / "data_ledger.md"
 TEMPLATE_LIBRARY_JSONL = Path("machine") / "template_library.jsonl"
-TEMPLATE_LIBRARY_MD = Path("wiki") / "30_templates" / "template_library.md"
+TEMPLATE_LIBRARY_MD = Path("machine") / "previews" / "template_library.md"
 FRESHNESS_MANIFEST = Path("machine") / "freshness_manifest.json"
-BOOTSTRAP_REPORT = Path("wiki") / "80_maintenance" / "bootstrap_report.md"
-ACTIVITY_SNAPSHOT = Path("wiki") / "10_foundations" / "activity_snapshot.md"
+BOOTSTRAP_REPORT_DIR = Path("raw") / "maintenance" / "bootstrap_reports"
+ACTIVITY_SNAPSHOT = Path("raw") / "platform" / "activities" / "bootstrap_activity_snapshot.md"
 NON_REFRESHED_BASELINE_DATE = "1970-01-01"
 
 
@@ -67,17 +69,51 @@ def _stamp_rows(
     return stamped
 
 
-def _write_activity_snapshot(path: Path, generated_at: str) -> Path:
-    """Input: output path and timestamp. Output: path. Write non-live activity snapshot note."""
+def _write_activity_snapshot(path: Path, knowledge_root: Path, generated_at: str) -> Path:
+    """Input: output path, vault root, timestamp. Output: path. Write non-live activity raw note."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    body = (
         "# Activity Snapshot\n\n"
         f"Generated at: `{generated_at}`\n\n"
         "No live platform activity refresh was executed by bootstrap. "
         "Run the research planner or maintenance refresh before activity-driven scheduling.\n",
+    )
+    body_text = "".join(body)
+    relative_path = path.relative_to(knowledge_root).as_posix()
+    metadata = {
+        "source_type": "bootstrap_activity_snapshot",
+        "source_family": "raw/platform/activities",
+        "source_path": relative_path,
+        "captured_at": generated_at,
+        "capture_tool": "wqb.knowledge_bootstrap",
+        "record_count": 1,
+        "content_hash": hashlib.sha256(body_text.encode("utf-8")).hexdigest(),
+        "update_check": "rerun platform activity refresh or bootstrap",
+        "compiled_targets": ["wiki/00_start_here.md"],
+    }
+    path.write_text(
+        render_front_matter(metadata) + body_text,
         encoding="utf-8",
     )
+    upsert_source_index_rows(
+        knowledge_root,
+        [
+            SourceIndexRow(
+                path=relative_path,
+                source_family="raw/platform/activities",
+                source_type="bootstrap_activity_snapshot",
+                contents="Bootstrap note certifying that no live activity refresh was executed.",
+                update_check="rerun platform activity refresh or bootstrap",
+                compiled_targets=["wiki/00_start_here.md"],
+            )
+        ],
+    )
     return path
+
+
+def _bootstrap_report_path(root: Path, generated_at: str) -> Path:
+    """Input: vault root and timestamp. Output: report path. Locate bootstrap maintenance evidence."""
+    return root / BOOTSTRAP_REPORT_DIR / f"{generated_at[:10]}.json"
 
 
 def _scaffold_manifest_row(
@@ -153,6 +189,8 @@ def bootstrap_knowledge(knowledge_root: str | Path, seed_root: str | Path, gener
     generated = generated_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     root = Path(knowledge_root)
     seed = Path(seed_root)
+    for name in ("raw", "machine", "wiki"):
+        (root / name).mkdir(parents=True, exist_ok=True)
     ledger_rows = _stamp_rows(
         _read_jsonl(seed / "data_ledger.example.jsonl"),
         "schema_seed",
@@ -166,7 +204,7 @@ def bootstrap_knowledge(knowledge_root: str | Path, seed_root: str | Path, gener
     template_md = root / TEMPLATE_LIBRARY_MD
     activity = root / ACTIVITY_SNAPSHOT
     manifest = machine_resource_path(root, FRESHNESS_MANIFEST_RESOURCE)
-    report = root / BOOTSTRAP_REPORT
+    report = _bootstrap_report_path(root, generated)
     initialized_names: set[str] = set()
     preserved_paths: list[str] = []
 
@@ -193,7 +231,7 @@ def bootstrap_knowledge(knowledge_root: str | Path, seed_root: str | Path, gener
     if activity.exists():
         preserved_paths.append(str(activity))
     else:
-        _write_activity_snapshot(activity, generated)
+        _write_activity_snapshot(activity, root, generated)
         initialized_names.add("activity_snapshot")
     if manifest.exists():
         preserved_paths.append(str(manifest))
@@ -216,15 +254,23 @@ def bootstrap_knowledge(knowledge_root: str | Path, seed_root: str | Path, gener
         source_quality = "schema_seed" if {"data_ledger", "template_library"} <= initialized_names else "preserved_existing"
         refreshed = ", ".join(sorted(initialized_names)) or "none"
         report.write_text(
-            "# Knowledge Bootstrap Report\n\n"
-            f"Generated at: `{generated}`\n\n"
-            f"- Data Ledger Records: {len(actual_ledger_rows)}\n"
-            f"- Template Records: {len(actual_template_rows)}\n"
-            f"- Source Quality: `{source_quality}`\n"
-            "- Coverage Status: `partial`\n"
-            "- Manifest Status: `partial`\n"
-            f"- Refreshed Artifacts: `{refreshed}`\n"
-            "- Not Refreshed (stale baseline): `benchmark_rules`, `operator_catalog`, `research_option_cards`\n",
+            json.dumps(
+                {
+                    "report_type": "knowledge_bootstrap",
+                    "generated_at": generated,
+                    "data_ledger_records": len(actual_ledger_rows),
+                    "template_records": len(actual_template_rows),
+                    "source_quality": source_quality,
+                    "coverage_status": "partial",
+                    "manifest_status": "partial",
+                    "refreshed_artifacts": sorted(initialized_names),
+                    "not_refreshed": non_refreshed,
+                    "refreshed_label": refreshed,
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            ),
             encoding="utf-8",
         )
     return BootstrapSummary(

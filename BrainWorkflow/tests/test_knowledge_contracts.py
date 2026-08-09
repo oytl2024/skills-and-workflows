@@ -17,7 +17,7 @@ from wqb.knowledge_contracts import (
 
 class KnowledgeContractTests(unittest.TestCase):
     def test_parse_and_render_front_matter_preserves_body(self):
-        text = "---\nsource_type: platform_api\nsource_family: data_fields\nrecord_count: 3\ncompiled_targets:\n  - wiki/20_semantics/data_ledger.md\n---\n# Body\n"
+        text = "---\nsource_type: platform_api\nsource_family: data_fields\nrecord_count: 3\ncompiled_targets:\n  - wiki/20_data_semantics.md\n---\n# Body\n"
 
         metadata, body = parse_markdown_front_matter(text)
         rendered = render_front_matter(metadata) + body
@@ -25,7 +25,7 @@ class KnowledgeContractTests(unittest.TestCase):
         self.assertEqual(metadata["source_type"], "platform_api")
         self.assertEqual(metadata["source_family"], "data_fields")
         self.assertEqual(metadata["record_count"], 3)
-        self.assertEqual(metadata["compiled_targets"], ["wiki/20_semantics/data_ledger.md"])
+        self.assertEqual(metadata["compiled_targets"], ["wiki/20_data_semantics.md"])
         self.assertIn("# Body", rendered)
 
     def test_parse_markdown_front_matter_preserves_body_without_trailing_newline(self):
@@ -66,13 +66,17 @@ class KnowledgeContractTests(unittest.TestCase):
 
             canonical = canonical_source_family(root / "raw" / "platform" / "learn" / "2026-07-22" / "index.md", root)
             legacy = canonical_source_family(root / "raw" / "learn" / "old.md", root)
-            wiki = canonical_source_family(root / "wiki" / "20_semantics" / "operators.md", root)
+            wiki = canonical_source_family(root / "wiki" / "20_data_semantics.md", root)
+            case_report = canonical_source_family(root / "wiki" / "60_research_cases" / "run-1.md", root)
+            old_wiki = canonical_source_family(root / "wiki" / "20_semantics" / "operators.md", root)
             machine = canonical_source_family(root / "machine" / "data_ledger.jsonl", root)
             unknown_machine = canonical_source_family(root / "machine" / "untrusted.jsonl", root)
 
         self.assertEqual(canonical, "raw/platform/learn")
         self.assertEqual(legacy, "legacy")
-        self.assertEqual(wiki, "wiki/20_semantics")
+        self.assertEqual(wiki, "wiki/20_data_semantics.md")
+        self.assertEqual(case_report, "wiki/60_research_cases")
+        self.assertEqual(old_wiki, "legacy")
         self.assertEqual(machine, "machine/data_ledger.jsonl")
         self.assertEqual(unknown_machine, "external")
 
@@ -85,7 +89,7 @@ class KnowledgeContractTests(unittest.TestCase):
                 source_type="platform_api",
                 contents="platform data-field capture manifest",
                 update_check="compare field ids and exact scopes",
-                compiled_targets=["wiki/20_semantics/data_ledger.md"],
+                compiled_targets=["wiki/20_data_semantics.md"],
             )
 
             output = update_source_index(root, [row])
@@ -98,7 +102,7 @@ class KnowledgeContractTests(unittest.TestCase):
 
         self.assertIn("raw/platform/data_fields/2026-07-22/index.md", text)
         self.assertIn("compare field ids and exact scopes", text)
-        self.assertIn("wiki/20_semantics/data_ledger.md", text)
+        self.assertIn("wiki/20_data_semantics.md", text)
         self.assertEqual(machine_rows, [
             {
                 "path": "raw/platform/data_fields/2026-07-22/index.md",
@@ -106,7 +110,7 @@ class KnowledgeContractTests(unittest.TestCase):
                 "source_type": "platform_api",
                 "contents": "platform data-field capture manifest",
                 "update_check": "compare field ids and exact scopes",
-                "compiled_targets": ["wiki/20_semantics/data_ledger.md"],
+                "compiled_targets": ["wiki/20_data_semantics.md"],
             }
         ])
 
