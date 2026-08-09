@@ -55,6 +55,27 @@ class KnowledgeCleanCompileTests(unittest.TestCase):
             self.assertIn("machine_resource_inside_wiki", codes)
             self.assertFalse(report["clean"])
 
+    def test_clean_structure_reports_retired_foundation_and_workflow_wiki_dirs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            foundation = root / "wiki" / "10_foundations" / "old.md"
+            workflow = root / "wiki" / "60_workflows" / "old.md"
+            foundation.parent.mkdir(parents=True)
+            workflow.parent.mkdir(parents=True)
+            foundation.write_text("# old foundation\n", encoding="utf-8")
+            workflow.write_text("# old workflow\n", encoding="utf-8")
+
+            report = evaluate_clean_knowledge_structure(root)
+
+        legacy_paths = {
+            Path(issue["path"]).relative_to(root).as_posix()
+            for issue in report["issues"]
+            if issue["code"] == "legacy_active_path"
+        }
+        self.assertIn("wiki/10_foundations", legacy_paths)
+        self.assertIn("wiki/60_workflows", legacy_paths)
+        self.assertFalse(report["clean"])
+
     def test_clean_structure_reports_missing_required_layers(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

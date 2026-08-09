@@ -26,10 +26,12 @@ SENSITIVE_NAME_FRAGMENTS = (
 )
 OBSOLETE_ACTIVE_PREFIXES = (
     Path("raw") / "learn",
+    Path("wiki") / "10_foundations",
     Path("wiki") / "20_semantics",
     Path("wiki") / "30_templates",
     Path("wiki") / "40_experiments",
     Path("wiki") / "50_benchmarks",
+    Path("wiki") / "60_workflows",
     Path("wiki") / "70_decisions",
     Path("wiki") / "80_maintenance",
 )
@@ -221,7 +223,7 @@ def migrate_legacy_decision_artifacts(knowledge_root: str | Path) -> dict[str, A
 
 def write_cleanup_log(knowledge_root: str | Path, rows: list[dict[str, Any]], generated_at: str) -> Path:
     """Input: knowledge root, cleanup rows, timestamp. Output: log path. Persist cleanup evidence."""
-    root = Path(knowledge_root)
+    root = Path(knowledge_root).resolve()
     path = root / "raw" / "maintenance" / "cleanup_logs" / f"{generated_at[:10]}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
@@ -305,7 +307,7 @@ def apply_obsolete_active_cleanup(
 ) -> dict[str, Any]:
     """Input: root, timestamp, dry run, compile report path. Output: cleanup summary with audit log."""
     generated = generated_at or _now()
-    root = Path(knowledge_root)
+    root = Path(knowledge_root).resolve()
     candidates = plan_obsolete_active_cleanup(root)
     evidence = _compile_verification_evidence(root, verification_report_path, dry_run)
     blocked = not evidence["verified"]

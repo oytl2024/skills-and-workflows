@@ -108,7 +108,7 @@ def _pre_cleanup_evidence(
 
 def _write_pre_cleanup_evidence(knowledge_root: str | Path, evidence: dict[str, Any]) -> Path:
     """Input: knowledge root and evidence. Output: immutable evidence path. Persist a one-time cleanup authorization record."""
-    root = Path(knowledge_root)
+    root = Path(knowledge_root).resolve()
     day = str(evidence["generated_at"])[:10]
     directory = root / "raw" / "maintenance" / "compile_reports"
     directory.mkdir(parents=True, exist_ok=True)

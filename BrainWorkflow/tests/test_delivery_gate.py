@@ -1,5 +1,6 @@
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -8,6 +9,7 @@ from unittest.mock import patch
 
 from wqb.delivery_gate import run_delivery_gate
 from wqb.delivery_verification import run_delivery_verification
+from wqb.knowledge_maintenance import run_knowledge_maintenance
 from wqb.run_readiness import ReadinessIssue, ReadinessReport
 from wqb.workflow_events import append_workflow_event
 from wqb.workflow_state import create_initial_state, write_run_state
@@ -902,6 +904,35 @@ class DeliveryGateTests(unittest.TestCase):
             "failed",
             next(check["status"] for check in report["checks"] if check["code"] == "maintenance_evidence"),
         )
+
+    def test_delivery_gate_accepts_relative_root_maintenance_cleanup_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            self._write_minimal_clean_knowledge(knowledge)
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(base)
+                run_knowledge_maintenance(Path("knowledge"), "2026-07-30T00:00:00+00:00", apply_cleanup=True)
+            finally:
+                os.chdir(old_cwd)
+            self._write_verification_report(knowledge)
+            self._write_run_state(
+                runs,
+                "20260730T000000-paused",
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="missing candidates.csv",
+            )
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+        maintenance_check = next(check for check in report["checks"] if check["code"] == "maintenance_evidence")
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(maintenance_check["status"], "passed")
 
     def test_delivery_gate_rejects_cleanup_log_from_different_maintenance_run(self):
         with tempfile.TemporaryDirectory() as tmp:

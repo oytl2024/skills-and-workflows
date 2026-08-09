@@ -48,6 +48,32 @@ class KnowledgeContractTests(unittest.TestCase):
         self.assertIn("missing content_status", issues)
         self.assertIn("missing compiled_targets", issues)
 
+    def test_validate_raw_metadata_rejects_unknown_content_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "knowledge" / "raw" / "platform" / "learn" / "2026-07-22" / "operators.md"
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                "---\n"
+                "source_type: platform_api\n"
+                "source_family: raw/platform/learn\n"
+                "source_path: raw/platform/learn/2026-07-22/operators.md\n"
+                "captured_at: 2026-07-22T00:00:00Z\n"
+                "capture_tool: test\n"
+                "content_status: typo_status\n"
+                "record_count: 1\n"
+                "content_hash: abc\n"
+                "update_check: compare\n"
+                "compiled_targets:\n"
+                "  - wiki/20_data_semantics.md\n"
+                "---\n"
+                "# Operators\n",
+                encoding="utf-8",
+            )
+
+            issues = validate_raw_metadata(path)
+
+        self.assertIn("content_status must be raw_markdown", issues)
+
     def test_validate_wiki_metadata_requires_source_and_consumers(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "knowledge" / "wiki" / "50_benchmarks" / "correlation_and_novelty.md"

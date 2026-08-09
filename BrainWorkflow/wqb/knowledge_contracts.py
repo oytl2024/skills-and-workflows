@@ -187,6 +187,9 @@ def validate_raw_metadata(path: Path) -> list[str]:
     """Input: raw Markdown path. Output: issue strings. Validate raw source metadata."""
     metadata, _ = parse_markdown_front_matter(path.read_text(encoding="utf-8"))
     issues = _missing_fields(metadata, RAW_REQUIRED_FIELDS)
+    content_status = metadata.get("content_status")
+    if content_status not in (None, "", []) and str(content_status) != "raw_markdown":
+        issues.append("content_status must be raw_markdown")
     targets = metadata.get("compiled_targets", [])
     if targets and not isinstance(targets, list):
         issues.append("compiled_targets must be a list")
