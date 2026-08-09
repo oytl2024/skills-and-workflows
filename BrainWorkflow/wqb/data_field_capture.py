@@ -195,6 +195,7 @@ def _write_index(
         "source_path": capture_dir.relative_to(knowledge_root).as_posix(),
         "captured_at": summary["generated_at"],
         "capture_tool": "wqb.data_field_capture",
+        "content_status": "raw_markdown",
         "record_count": summary["field_count"],
         "content_hash": hashlib.sha256(body.encode("utf-8")).hexdigest(),
         "update_check": "rerun stratified platform data capture",
@@ -216,6 +217,10 @@ def _write_index(
                 source_type="platform_data_field_capture",
                 contents="Platform data-field capture summary and provenance.",
                 update_check="rerun stratified platform data capture",
+                captured_at=str(metadata["captured_at"]),
+                record_count=int(metadata["record_count"]),
+                content_hash=str(metadata["content_hash"]),
+                content_status=str(metadata["content_status"]),
                 compiled_targets=[
                     "machine/data_ledger.jsonl",
                     "machine/scope_matrix.jsonl",

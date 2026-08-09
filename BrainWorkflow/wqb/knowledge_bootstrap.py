@@ -97,6 +97,7 @@ def _activity_snapshot_metadata(path: Path, knowledge_root: Path, generated_at: 
         "source_path": relative_path,
         "captured_at": generated_at,
         "capture_tool": "wqb.knowledge_bootstrap",
+        "content_status": "raw_markdown",
         "record_count": 1,
         "content_hash": hashlib.sha256(body_text.encode("utf-8")).hexdigest(),
         "update_check": "rerun platform activity refresh or bootstrap",
@@ -107,6 +108,18 @@ def _activity_snapshot_metadata(path: Path, knowledge_root: Path, generated_at: 
 def _upsert_activity_source_index(path: Path, knowledge_root: Path) -> Path:
     """Input: activity path and vault root. Output: index path. Ensure source-index coverage for activity raw note."""
     relative_path = path.relative_to(knowledge_root).as_posix()
+    metadata = _activity_snapshot_metadata(
+        path,
+        knowledge_root,
+        "1970-01-01T00:00:00+00:00",
+        _activity_snapshot_body("1970-01-01T00:00:00+00:00"),
+    )
+    try:
+        parsed, _ = parse_markdown_front_matter(path.read_text(encoding="utf-8"))
+        if parsed:
+            metadata.update(parsed)
+    except OSError:
+        pass
     return upsert_source_index_rows(
         knowledge_root,
         [
@@ -116,6 +129,10 @@ def _upsert_activity_source_index(path: Path, knowledge_root: Path) -> Path:
                 source_type="bootstrap_activity_snapshot",
                 contents="Bootstrap note certifying that no live activity refresh was executed.",
                 update_check="rerun platform activity refresh or bootstrap",
+                captured_at=str(metadata.get("captured_at", "")),
+                record_count=int(metadata.get("record_count", 0) or 0),
+                content_hash=str(metadata.get("content_hash", "")),
+                content_status=str(metadata.get("content_status", "")),
                 compiled_targets=["wiki/00_start_here.md"],
             )
         ],
@@ -150,6 +167,7 @@ def _ensure_activity_snapshot_contract(path: Path, knowledge_root: Path, generat
         "source_path",
         "captured_at",
         "capture_tool",
+        "content_status",
         "record_count",
         "content_hash",
         "update_check",

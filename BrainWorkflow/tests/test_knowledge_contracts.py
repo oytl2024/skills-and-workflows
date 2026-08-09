@@ -45,6 +45,7 @@ class KnowledgeContractTests(unittest.TestCase):
 
         self.assertIn("missing source_family", issues)
         self.assertIn("missing captured_at", issues)
+        self.assertIn("missing content_status", issues)
         self.assertIn("missing compiled_targets", issues)
 
     def test_validate_wiki_metadata_requires_source_and_consumers(self):
@@ -89,6 +90,10 @@ class KnowledgeContractTests(unittest.TestCase):
                 source_type="platform_api",
                 contents="platform data-field capture manifest",
                 update_check="compare field ids and exact scopes",
+                captured_at="2026-07-22T00:00:00+00:00",
+                record_count=10,
+                content_hash="abc123",
+                content_status="raw_markdown",
                 compiled_targets=["wiki/20_data_semantics.md"],
             )
 
@@ -110,6 +115,10 @@ class KnowledgeContractTests(unittest.TestCase):
                 "source_type": "platform_api",
                 "contents": "platform data-field capture manifest",
                 "update_check": "compare field ids and exact scopes",
+                "captured_at": "2026-07-22T00:00:00+00:00",
+                "record_count": 10,
+                "content_hash": "abc123",
+                "content_status": "raw_markdown",
                 "compiled_targets": ["wiki/20_data_semantics.md"],
             }
         ])

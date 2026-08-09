@@ -129,7 +129,11 @@ def proposal_from_issue(
         expected_benefit=expected_benefit,
         risk=risk,
         required_code_changes=affected_modules,
-        required_knowledge_updates=["knowledge/wiki/50_benchmarks", "knowledge/wiki/60_workflows"],
+        required_knowledge_updates=[
+            "knowledge/machine/benchmark_rules.jsonl",
+            "knowledge/wiki/40_benchmark_and_repair_rules.md",
+            "knowledge/wiki/50_engineering_lessons.md",
+        ],
         user_decision_options=["accepted_for_wiki", "accepted_for_implementation", "accepted_as_experiment", "rejected", "deferred"],
         status="proposed",
         current_behavior=summary,

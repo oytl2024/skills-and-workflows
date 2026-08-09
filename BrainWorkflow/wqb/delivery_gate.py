@@ -14,7 +14,7 @@ from wqb.knowledge_freshness import (
     evaluate_knowledge_contract_health,
     load_freshness_manifest,
 )
-from wqb.knowledge_contracts import canonical_source_family
+from wqb.knowledge_contracts import canonical_source_family, parse_markdown_front_matter
 from wqb.knowledge_paths import MACHINE_RESOURCE_FILES, machine_resource_path
 from wqb.research_planner import plan_research_options
 from wqb.run_readiness import evaluate_run_readiness
@@ -103,9 +103,30 @@ def _path_value_resolves_to(value: Any, expected: Path) -> bool:
 def _latest_maintenance_report(knowledge_root: Path) -> tuple[dict[str, Any], Path | None]:
     """Input: knowledge root. Output: newest final maintenance payload and path."""
     directory = knowledge_root / "raw" / "maintenance" / "compile_reports"
+    pointer = directory / "latest.json"
+    if pointer.exists():
+        try:
+            latest = json.loads(pointer.read_text(encoding="utf-8"))
+            if not isinstance(latest, dict):
+                return {}, None
+            report_path = Path(str(latest.get("report_path", "")))
+            if not report_path.is_absolute():
+                report_path = knowledge_root / report_path
+            report_path = report_path.resolve()
+            report_path.relative_to(directory.resolve())
+            if report_path == pointer.resolve():
+                return {}, None
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            if not isinstance(report, dict):
+                return {}, None
+            return report, report_path
+        except (OSError, UnicodeDecodeError, ValueError, TypeError, json.JSONDecodeError):
+            return {}, None
     reports: list[tuple[datetime, dict[str, Any], Path]] = []
     for path in directory.glob("*.json"):
         if ".pre_cleanup_evidence" in path.name:
+            continue
+        if path.name == "latest.json":
             continue
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -181,6 +202,7 @@ def _maintenance_evidence(
     )
     passed = (
         fresh
+        and _path_value_resolves_to(report.get("report_path"), report_path)
         and report.get("status") == "completed"
         and isinstance(health, dict)
         and health.get("issue_count") == 0
@@ -325,11 +347,18 @@ def _source_index_evidence(
         if markdown_index.is_file()
         else ""
     )
-    indexed_paths = {
-        str(row.get("path", "")).replace("\\", "/")
-        for row in rows
-        if isinstance(row.get("path"), str)
-    }
+    indexed_paths = []
+    rows_by_path: dict[str, dict[str, Any]] = {}
+    duplicate_machine_paths: list[str] = []
+    for row in rows:
+        if not isinstance(row.get("path"), str):
+            continue
+        normalized = str(row.get("path", "")).replace("\\", "/").strip()
+        indexed_paths.append(normalized)
+        if normalized in rows_by_path:
+            duplicate_machine_paths.append(normalized)
+        rows_by_path[normalized] = row
+    indexed_path_set = set(indexed_paths)
     markdown_paths = {
         match.group(1).replace("\\", "/").strip()
         for match in RAW_SOURCE_INDEX_HEADING.finditer(markdown_text)
@@ -346,7 +375,7 @@ def _source_index_evidence(
         if path != markdown_index
         and canonical_source_family(path, knowledge_root).startswith("raw/")
     } if (knowledge_root / "raw").exists() else set()
-    missing_machine = sorted(canonical_sources - indexed_paths)
+    missing_machine = sorted(canonical_sources - indexed_path_set)
     missing_markdown = sorted(canonical_sources - markdown_paths)
     extra_markdown = sorted(markdown_paths - canonical_sources)
     broken_markdown = sorted(
@@ -356,6 +385,26 @@ def _source_index_evidence(
         or Path(path).is_absolute()
         or not (knowledge_root / path).is_file()
     )
+    metadata_mismatches: list[str] = []
+    for source_path in sorted(canonical_sources & indexed_path_set):
+        row = rows_by_path[source_path]
+        source_file = knowledge_root / source_path
+        try:
+            metadata, _ = parse_markdown_front_matter(source_file.read_text(encoding="utf-8"))
+        except OSError:
+            metadata = {}
+        comparisons = {
+            "source_family": str(metadata.get("source_family", "")),
+            "source_type": str(metadata.get("source_type", "")),
+            "captured_at": str(metadata.get("captured_at", "")),
+            "record_count": str(metadata.get("record_count", "")),
+            "content_hash": str(metadata.get("content_hash", "")),
+            "content_status": str(metadata.get("content_status", "")),
+        }
+        for field_name, expected in comparisons.items():
+            actual = str(row.get(field_name, ""))
+            if actual != expected:
+                metadata_mismatches.append(f"{source_path}:{field_name}")
     passed = (
         markdown_index.is_file()
         and bool(markdown_text.strip())
@@ -364,6 +413,8 @@ def _source_index_evidence(
         and not missing_markdown
         and not extra_markdown
         and not broken_markdown
+        and not duplicate_machine_paths
+        and not metadata_mismatches
     )
     missing_details = []
     if missing_machine:
@@ -374,6 +425,10 @@ def _source_index_evidence(
         missing_details.append(f"unexpected raw index paths: {', '.join(extra_markdown)}")
     if broken_markdown:
         missing_details.append(f"broken raw index paths: {', '.join(broken_markdown)}")
+    if duplicate_machine_paths:
+        missing_details.append(f"duplicate machine index paths: {', '.join(sorted(set(duplicate_machine_paths)))}")
+    if metadata_mismatches:
+        missing_details.append(f"metadata mismatch: {', '.join(metadata_mismatches)}")
     return (
         passed,
         "Raw and machine source indexes cover every canonical raw Markdown source."
@@ -416,6 +471,23 @@ def _workflow_timeline_evidence(state: WorkflowRunState | None) -> tuple[bool, s
         else f"Workflow timeline/evidence is incomplete: {', '.join(diagnostics) or 'event log is empty'}."
     )
     return passed, message, str(run_dir)
+
+
+def _stage_has_existing_evidence(state: WorkflowRunState, stage_name: str) -> bool:
+    """Input: workflow state and stage name. Output: bool. Require durable evidence files for accepted boundaries."""
+    stage = state.stages.get(stage_name)
+    if stage is None or not stage.evidence_paths:
+        return False
+    if stage.status not in {"paused", "completed"}:
+        return False
+    run_dir = Path(state.run_dir)
+    for evidence_path in stage.evidence_paths:
+        path = Path(evidence_path)
+        if not path.is_absolute():
+            path = run_dir / path
+        if path.exists():
+            return True
+    return False
 
 
 def _console_checks(console_base_url: str) -> list[DeliveryGateCheck]:
@@ -597,12 +669,19 @@ def run_delivery_gate(
         and state.status == "paused"
         and state.current_stage == "scout_seed"
         and "candidates.csv" in state.pause_reason
+        and _stage_has_existing_evidence(state, "scout_seed")
     )
     expected_approval = (
         state is not None
         and state.status == "waiting_for_user"
         and state.current_stage == "user_approval"
         and state.waiting_for_user
+        and _stage_has_existing_evidence(state, "user_approval")
+    )
+    expected_terminal = (
+        state is not None
+        and state.status in {"completed", "completed_with_warnings"}
+        and _stage_has_existing_evidence(state, "research_record_sync")
     )
     evidence_path = state.run_dir if state is not None else str(runs)
     checks.append(_check(state is not None, "workflow_state_exists", "Latest workflow state is durable.", evidence_path))
@@ -619,7 +698,7 @@ def run_delivery_gate(
         _check(
             expected_pause
             or expected_approval
-            or (state is not None and state.status in {"completed", "completed_with_warnings"}),
+            or expected_terminal,
             "expected_pause",
             "Workflow reached a durable accepted boundary.",
             evidence_path,

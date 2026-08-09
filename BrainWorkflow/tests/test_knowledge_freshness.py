@@ -23,7 +23,7 @@ class KnowledgeFreshnessTest(unittest.TestCase):
             raw.write_text(
                 "---\nsource_type: platform_api\nsource_family: learn\nsource_path: /operators\n"
                 "captured_at: 2026-07-22T00:00:00Z\ncapture_tool: test\nrecord_count: 1\n"
-                "content_hash: abc\nupdate_check: compare operators\ncompiled_targets:\n"
+                "content_status: raw_markdown\ncontent_hash: abc\nupdate_check: compare operators\ncompiled_targets:\n"
                 "  - wiki/operators.md\n---\n# Operators\n",
                 encoding="utf-8",
             )
@@ -51,7 +51,7 @@ class KnowledgeFreshnessTest(unittest.TestCase):
             raw.write_text(
                 "---\nsource_type: platform_api\nsource_family: learn\nsource_path: /orphan\n"
                 "captured_at: 2026-07-22T00:00:00Z\ncapture_tool: test\nrecord_count: 1\n"
-                "content_hash: abc\nupdate_check: compare\ncompiled_targets:\n  - wiki/20_semantics/operators.md\n"
+                "content_status: raw_markdown\ncontent_hash: abc\nupdate_check: compare\ncompiled_targets:\n  - wiki/20_semantics/operators.md\n"
                 "---\n# Orphan\n",
                 encoding="utf-8",
             )

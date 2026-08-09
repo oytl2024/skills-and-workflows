@@ -122,6 +122,46 @@ class KnowledgeCompileTests(unittest.TestCase):
         self.assertEqual(len(compiled_rows), 1)
         self.assertEqual(compiled_rows[0]["raw_source_path"], str(root / "raw" / "research" / "runs" / "run1" / "research_record.md"))
 
+    def test_compile_research_records_appends_changed_same_path_raw_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            record = record_alpha_result(
+                empty_research_record("run1", "Power Pool"),
+                {
+                    "alpha_id": "alpha1",
+                    "expression_hash": "hash1",
+                    "hard_pass": False,
+                    "benchmark_label": "near_miss",
+                    "failed": ["prod_correlation"],
+                },
+            )
+            sync_research_record_to_raw(record, root / "raw")
+            compile_research_records(root, generated_at="2026-07-16T00:00:00Z")
+
+            updated = record_alpha_result(
+                record,
+                {
+                    "alpha_id": "alpha2",
+                    "expression_hash": "hash2",
+                    "hard_pass": False,
+                    "benchmark_label": "near_miss",
+                    "failed": ["self_correlation"],
+                },
+            )
+            sync_research_record_to_raw(updated, root / "raw")
+            compile_research_records(root, generated_at="2026-07-17T00:00:00Z")
+            rows = [
+                json.loads(line)
+                for line in (root / "machine" / "research_records.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+        compiled_rows = [row for row in rows if row.get("final_state") == "compiled_from_raw"]
+        self.assertEqual(len(compiled_rows), 2)
+        self.assertTrue(compiled_rows[0]["content_hash"])
+        self.assertTrue(compiled_rows[1]["content_hash"])
+        self.assertNotEqual(compiled_rows[0]["content_hash"], compiled_rows[1]["content_hash"])
+
 
 if __name__ == "__main__":
     unittest.main()

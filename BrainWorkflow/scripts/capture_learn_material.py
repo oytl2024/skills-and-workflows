@@ -493,6 +493,10 @@ def update_learn_source_index(paths: list[Path]) -> Path:
                 source_type=str(metadata.get("source_type", "platform_api")),
                 contents=f"WorldQuant BRAIN Learn capture file {path.name}",
                 update_check=str(metadata.get("update_check", "compare with previous Learn capture")),
+                captured_at=str(metadata.get("captured_at", "")),
+                record_count=int(metadata.get("record_count", 0) or 0),
+                content_hash=str(metadata.get("content_hash", "")),
+                content_status=str(metadata.get("content_status", "")),
                 compiled_targets=[str(target) for target in targets] if isinstance(targets, list) else [],
             )
         )

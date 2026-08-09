@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from wqb.knowledge_experience_compile import compile_research_case_reports
+from wqb.knowledge_contracts import parse_markdown_front_matter
 from wqb.knowledge_paths import machine_resource_path
 
 
@@ -25,14 +26,16 @@ def _extract_line_value(text: str, label: str) -> str:
 def _record_summary(path: Path) -> dict[str, Any]:
     """Input: raw research record path. Output: summary dict. Extract compact compile metadata."""
     text = path.read_text(encoding="utf-8")
-    benchmark_label = "near_miss" if "near_miss" in text else ""
+    metadata, body = parse_markdown_front_matter(text)
+    benchmark_label = "near_miss" if "near_miss" in body else ""
     return {
-        "run_id": _extract_line_value(text, "Run ID") or path.parent.name,
-        "objective": _extract_line_value(text, "Objective"),
+        "run_id": _extract_line_value(body, "Run ID") or path.parent.name,
+        "objective": _extract_line_value(body, "Objective"),
         "path": str(path),
-        "preview": "\n".join(text.splitlines()[:12]),
+        "preview": "\n".join(body.splitlines()[:12]),
         "case_reason": "near_miss" if benchmark_label else "representative_failure",
         "triage": [{"benchmark_label": benchmark_label, "failed": []}] if benchmark_label else [],
+        "content_hash": str(metadata.get("content_hash", "")),
     }
 
 
@@ -68,6 +71,7 @@ def _compiled_row_from_raw_summary(row: dict[str, Any], generated_at: str) -> di
         "final_state": "compiled_from_raw",
         "case_reason": str(row["case_reason"]),
         "raw_source_path": str(row["path"]),
+        "content_hash": str(row.get("content_hash", "")),
     }
 
 
@@ -89,16 +93,17 @@ def compile_research_records(
     rows = [_record_summary(path) for path in raw_paths]
     ledger_path = machine_resource_path(root, "research_records")
     existing_rows = _read_existing_research_rows(ledger_path)
-    compiled_raw_paths = {
-        str(row.get("raw_source_path", ""))
+    compiled_snapshots = {
+        (str(row.get("raw_source_path", "")), str(row.get("content_hash", "")))
         for row in existing_rows
         if str(row.get("raw_source_path", ""))
     }
     output_rows = list(existing_rows)
     for row in rows:
-        if str(row["path"]) not in compiled_raw_paths:
+        identity = (str(row["path"]), str(row.get("content_hash", "")))
+        if identity not in compiled_snapshots:
             output_rows.append(_compiled_row_from_raw_summary(row, generated))
-            compiled_raw_paths.add(str(row["path"]))
+            compiled_snapshots.add(identity)
     _write_research_rows(ledger_path, output_rows)
     case_report_paths = compile_research_case_reports(root, generated, max_records)
     output_json = root / RESEARCH_COMPILE_JSON

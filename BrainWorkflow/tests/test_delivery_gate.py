@@ -26,6 +26,7 @@ class DeliveryGateTests(unittest.TestCase):
             "source_path: /learn/doc\n"
             "captured_at: 2026-07-30T00:00:00+00:00\n"
             "capture_tool: delivery_test\n"
+            "content_status: raw_markdown\n"
             "record_count: 1\n"
             "content_hash: abc\n"
             "update_check: compare source\n"
@@ -95,6 +96,10 @@ class DeliveryGateTests(unittest.TestCase):
             "source_type": "platform_document",
             "contents": "Delivery test source.",
             "update_check": "compare source",
+            "captured_at": "2026-07-30T00:00:00+00:00",
+            "record_count": 1,
+            "content_hash": "abc",
+            "content_status": "raw_markdown",
             "compiled_targets": ["wiki/00_start_here.md"],
         }
         jsonl_rows = {
@@ -157,23 +162,21 @@ class DeliveryGateTests(unittest.TestCase):
         )
         maintenance = root / "raw" / "maintenance" / "compile_reports" / "20260730T000000Z.json"
         maintenance.parent.mkdir(parents=True)
-        maintenance.write_text(
-            json.dumps(
-                {
-                    "report_type": "knowledge_maintenance",
-                    "generated_at": "2026-07-30T00:00:00+00:00",
-                    "status": "completed",
-                    "health": {"issue_count": 0},
-                    "cleanup": {
-                        "status": "completed",
-                        "dry_run": False,
-                        "blocked": False,
-                        "cleanup_log_path": str(cleanup_log),
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
+        maintenance_payload = {
+            "report_type": "knowledge_maintenance",
+            "generated_at": "2026-07-30T00:00:00+00:00",
+            "status": "completed",
+            "health": {"issue_count": 0},
+            "cleanup": {
+                "status": "completed",
+                "dry_run": False,
+                "blocked": False,
+                "cleanup_log_path": str(cleanup_log),
+            },
+            "report_path": str(maintenance),
+        }
+        maintenance.write_text(json.dumps(maintenance_payload), encoding="utf-8")
+        (maintenance.parent / "latest.json").write_text(json.dumps(maintenance_payload), encoding="utf-8")
         return maintenance
 
     def _write_verification_report(
@@ -253,11 +256,27 @@ class DeliveryGateTests(unittest.TestCase):
         updated_at: str,
         pause_reason: str = "",
         waiting_for_user: bool = False,
+        evidence_stage: str = "",
+        with_stage_evidence: bool = True,
     ) -> Path:
         """Input: workflow state fields. Output: run directory. Write one durable real-schema workflow state."""
         run_dir = runs / run_id
         run_dir.mkdir(parents=True)
         state = create_initial_state(run_id, run_dir, "Delivery test", "2026-07-30T00:00:00+00:00")
+        stages = dict(state.stages)
+        if with_stage_evidence:
+            stage_name = evidence_stage or current_stage
+            evidence_path = run_dir / "stages" / stage_name / "handoff.json"
+            evidence_path.parent.mkdir(parents=True, exist_ok=True)
+            evidence_path.write_text(json.dumps({"stage": stage_name}), encoding="utf-8")
+            stages[stage_name] = replace(
+                stages[stage_name],
+                status="paused" if status == "paused" else "completed",
+                started_at=updated_at,
+                completed_at=updated_at if status != "paused" else "",
+                evidence_paths=[str(evidence_path)],
+                blocker=pause_reason if status == "paused" else "",
+            )
         write_run_state(
             run_dir / "run_state.json",
             replace(
@@ -267,6 +286,7 @@ class DeliveryGateTests(unittest.TestCase):
                 pause_reason=pause_reason,
                 waiting_for_user=waiting_for_user,
                 updated_at=updated_at,
+                stages=stages,
             ),
         )
         append_workflow_event(
@@ -298,6 +318,31 @@ class DeliveryGateTests(unittest.TestCase):
 
             self.assertEqual(report["status"], "passed")
             self.assertIn("expected_pause", {check["code"] for check in report["checks"]})
+
+    def test_delivery_gate_rejects_pause_without_boundary_stage_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            self._write_minimal_clean_knowledge(knowledge)
+            self._write_verification_report(knowledge)
+            self._write_run_state(
+                runs,
+                "20260730T000000-paused",
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="missing candidates.csv",
+                with_stage_evidence=False,
+            )
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+        boundary_check = next(check for check in report["checks"] if check["code"] == "expected_pause")
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(boundary_check["status"], "failed")
+        self.assertIn("durable accepted boundary", boundary_check["message"])
 
     def test_delivery_gate_accepts_waiting_for_user_approval_boundary(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -668,6 +713,7 @@ class DeliveryGateTests(unittest.TestCase):
                 "source_path: /forum/thread\n"
                 "captured_at: 2026-07-30T00:00:00+00:00\n"
                 "capture_tool: delivery_test\n"
+                "content_status: raw_markdown\n"
                 "record_count: 1\n"
                 "content_hash: def\n"
                 "update_check: compare source\n"
@@ -700,6 +746,34 @@ class DeliveryGateTests(unittest.TestCase):
         self.assertEqual(source_check["status"], "failed")
         self.assertIn("raw/community/forum/thread.md", source_check["message"])
 
+    def test_delivery_gate_rejects_stale_machine_source_index_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            self._write_minimal_clean_knowledge(knowledge)
+            self._write_verification_report(knowledge)
+            machine_index = knowledge / "machine" / "source_index.jsonl"
+            row = json.loads(machine_index.read_text(encoding="utf-8"))
+            row["content_hash"] = "stale"
+            machine_index.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            self._write_run_state(
+                runs,
+                "20260730T000000-paused",
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="missing candidates.csv",
+            )
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+        source_check = next(check for check in report["checks"] if check["code"] == "source_index_evidence")
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(source_check["status"], "failed")
+        self.assertIn("metadata mismatch", source_check["message"])
+
     def test_delivery_gate_fails_when_machine_ledger_is_inside_wiki(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -725,6 +799,63 @@ class DeliveryGateTests(unittest.TestCase):
             payload = json.loads(maintenance.read_text(encoding="utf-8"))
             payload["status"] = "blocked"
             maintenance.write_text(json.dumps(payload), encoding="utf-8")
+            self._write_run_state(
+                runs,
+                "20260730T000000-paused",
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="missing candidates.csv",
+            )
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(
+            "failed",
+            next(check["status"] for check in report["checks"] if check["code"] == "maintenance_evidence"),
+        )
+
+    def test_delivery_gate_rejects_latest_json_as_maintenance_report_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            maintenance = self._write_minimal_clean_knowledge(knowledge)
+            payload = json.loads(maintenance.read_text(encoding="utf-8"))
+            pointer = maintenance.parent / "latest.json"
+            maintenance.unlink()
+            pointer.write_text(json.dumps({**payload, "report_path": str(pointer)}), encoding="utf-8")
+            self._write_verification_report(knowledge)
+            self._write_run_state(
+                runs,
+                "20260730T000000-paused",
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="missing candidates.csv",
+            )
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(
+            "failed",
+            next(check["status"] for check in report["checks"] if check["code"] == "maintenance_evidence"),
+        )
+
+    def test_delivery_gate_rejects_maintenance_report_path_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            maintenance = self._write_minimal_clean_knowledge(knowledge)
+            payload = json.loads(maintenance.read_text(encoding="utf-8"))
+            payload["report_path"] = str(maintenance.parent / "other.json")
+            maintenance.write_text(json.dumps(payload), encoding="utf-8")
+            self._write_verification_report(knowledge)
             self._write_run_state(
                 runs,
                 "20260730T000000-paused",

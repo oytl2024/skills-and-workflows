@@ -72,9 +72,9 @@ The active vault has three layers:
 - `knowledge/wiki`: compact human lessons and selected case reports.
 
 Active option cards, workflow proposals, schedules, and AI checkpoints live
-under `knowledge/machine/decisions`. Maintenance migrates legacy
-`knowledge/wiki/70_decisions` files before cleanup and refuses deletion when
-the canonical copy is missing or has a different hash.
+under `knowledge/machine/decisions`. Maintenance migrates legacy decision
+artifacts before cleanup and refuses deletion when the canonical copy is
+missing or has a different hash.
 
 Normal maintenance command:
 

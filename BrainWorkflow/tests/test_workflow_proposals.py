@@ -100,6 +100,24 @@ class WorkflowProposalsTest(unittest.TestCase):
         self.assertNotIn("prod_correlation_novelty_required", proposal.expected_benefit)
         self.assertIn("template_library", proposal.affected_modules)
 
+    def test_default_proposal_knowledge_updates_are_canonical(self):
+        proposal = proposal_from_issue(
+            {"issue_type": "manual_review", "summary": "Record repeated workflow issue."},
+            "2026-07-22T00:00:00Z",
+        )
+
+        combined = "\n".join(proposal.required_knowledge_updates)
+        self.assertNotIn("wiki/50_benchmarks", combined)
+        self.assertNotIn("wiki/60_workflows", combined)
+        self.assertEqual(
+            proposal.required_knowledge_updates,
+            [
+                "knowledge/machine/benchmark_rules.jsonl",
+                "knowledge/wiki/40_benchmark_and_repair_rules.md",
+                "knowledge/wiki/50_engineering_lessons.md",
+            ],
+        )
+
     def test_write_workflow_proposals_creates_jsonl_and_markdown(self):
         proposal = proposal_from_issue(
             {

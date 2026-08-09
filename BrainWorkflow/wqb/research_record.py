@@ -322,6 +322,7 @@ def sync_research_record_to_raw(record: ResearchRecord, raw_root: str | Path) ->
         "source_path": relative_path,
         "captured_at": captured_at,
         "capture_tool": "wqb.research_record",
+        "content_status": "raw_markdown",
         "record_count": 1,
         "content_hash": hashlib.sha256(body.encode("utf-8")).hexdigest(),
         "update_check": "sync after workflow state changes",
@@ -340,6 +341,10 @@ def sync_research_record_to_raw(record: ResearchRecord, raw_root: str | Path) ->
                 source_type="workflow_research_record",
                 contents=f"Workflow research record for {record.run_id}.",
                 update_check="sync after workflow state changes",
+                captured_at=str(metadata["captured_at"]),
+                record_count=int(metadata["record_count"]),
+                content_hash=str(metadata["content_hash"]),
+                content_status=str(metadata["content_status"]),
                 compiled_targets=[
                     "machine/research_records.jsonl",
                     "wiki/60_research_cases",

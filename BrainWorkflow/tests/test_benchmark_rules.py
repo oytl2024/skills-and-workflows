@@ -370,6 +370,10 @@ class BenchmarkRulesTests(unittest.TestCase):
         self.assertIn("prod_correlation_novelty_required", ids)
         self.assertTrue(rules_for_issue_type(rules, "pnl_signal"))
         self.assertTrue(rules_for_issue_type(rules, "prod_correlation"))
+        all_evidence = "\n".join(path for rule in rules for path in rule.evidence_paths)
+        self.assertNotIn("wiki/50_benchmarks", all_evidence)
+        self.assertIn("machine/benchmark_rules.jsonl", all_evidence)
+        self.assertIn("wiki/40_benchmark_and_repair_rules.md", all_evidence)
 
     def test_write_and_load_benchmark_rules(self):
         with tempfile.TemporaryDirectory() as tmp:

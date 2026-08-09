@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import json
 from pathlib import Path
 from typing import Any
@@ -39,6 +39,7 @@ RAW_REQUIRED_FIELDS = (
     "source_path",
     "captured_at",
     "capture_tool",
+    "content_status",
     "record_count",
     "content_hash",
     "update_check",
@@ -87,7 +88,11 @@ class SourceIndexRow:
     source_type: str
     contents: str
     update_check: str
-    compiled_targets: list[str]
+    compiled_targets: list[str] = field(default_factory=list)
+    captured_at: str = ""
+    record_count: int = 0
+    content_hash: str = ""
+    content_status: str = ""
 
 
 def _coerce_scalar(value: str) -> Any:
@@ -241,6 +246,10 @@ def update_source_index(knowledge_root: str | Path, rows: list[SourceIndexRow]) 
                 f"- Source Family: `{row.source_family}`",
                 f"- Source Type: `{row.source_type}`",
                 f"- Contents: {row.contents}",
+                f"- Captured At: `{row.captured_at}`",
+                f"- Record Count: `{row.record_count}`",
+                f"- Content Hash: `{row.content_hash}`",
+                f"- Content Status: `{row.content_status}`",
                 f"- Update Check: {row.update_check}",
                 "- Compiled Targets:",
                 *[f"  - `{target}`" for target in row.compiled_targets],
@@ -275,6 +284,10 @@ def upsert_source_index_rows(
                     contents=str(payload["contents"]),
                     update_check=str(payload["update_check"]),
                     compiled_targets=[str(item) for item in payload["compiled_targets"]],
+                    captured_at=str(payload.get("captured_at", "")),
+                    record_count=int(payload.get("record_count", 0) or 0),
+                    content_hash=str(payload.get("content_hash", "")),
+                    content_status=str(payload.get("content_status", "")),
                 )
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
                 raise ValueError(
