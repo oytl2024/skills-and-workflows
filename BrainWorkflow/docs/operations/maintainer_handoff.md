@@ -108,15 +108,33 @@ Use this baseline before claiming completion:
 
 ```powershell
 Set-Location 'C:\Users\oytl\Desktop\pyproject\brain\skills-and-workflows\BrainWorkflow'
+$env:SystemRoot='C:\Windows'
+$env:windir='C:\Windows'
 python -c "import sys, runpy; sys.platform='linux'; runpy.run_module('unittest', run_name='__main__')" discover -s tests -q
-python -m compileall -q wqb tests
+python -m compileall -q wqb tests scripts
 ```
 
 Latest clean implementation review:
 
-- Range: `2711667..974158a`
-- Result: 0 Critical, 0 Important
-- Full non-live tests: 418 passed
+- Range: `f7ae8cb..4214a0e`
+- Result: final whole-branch review findings were fixed, and scoped re-review of the final fix found 0 Critical, 0 Important, and 0 Minor issues.
+- Full non-live tests: 756 passed
+- Additional checks: `python -m compileall -q wqb tests scripts`, `git diff --check f7ae8cb..HEAD`, and the obsolete wiki path scan over production/docs/scripts passed.
+
+## GitHub Sync On Windows
+
+This Codex Windows shell may start without `SystemRoot` and `windir`. When those
+variables are missing, Git network operations can fail with WinSock error
+`10106` even when the Clash proxy variables are already set. Before `git push`
+or `git ls-remote`, set:
+
+```powershell
+$env:SystemRoot='C:\Windows'
+$env:windir='C:\Windows'
+```
+
+The local proxy is normally available at `127.0.0.1:7897`; check the root
+`AGENTS.md` before changing proxy settings.
 
 ## Console Timeline Maintenance Contract
 
