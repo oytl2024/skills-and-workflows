@@ -65,6 +65,31 @@ class OperatorSemanticsTests(unittest.TestCase):
             )
         self.assertNotIn("wiki/20_semantics", preview)
 
+    def test_compile_normalizes_reviewed_legacy_operator_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            output = root / "machine" / "operator_ledger.jsonl"
+            legacy_reviewed = OperatorSemanticRecord(
+                operator="group_neutralize",
+                family="reviewed_neutralization",
+                workflow_uses=["reviewed_bias_control"],
+                compatible_field_types=["MATRIX"],
+                template_tags=["reviewed"],
+                risk_tags=["over_neutralization"],
+                repair_levers=["neutralization_subindustry"],
+                source_paths=["wiki/20_semantics/operator_catalog_official.md"],
+            )
+            write_operator_semantics_jsonl(output, [legacy_reviewed])
+
+            summary = compile_operator_semantics(root, generated_at="2026-07-22T01:00:00Z")
+            records = {record.operator: record for record in load_operator_semantics(output)}
+            preview = Path(summary["markdown_path"]).read_text(encoding="utf-8")
+
+        self.assertEqual(records["group_neutralize"].family, "reviewed_neutralization")
+        self.assertEqual(records["group_neutralize"].workflow_uses, ["reviewed_bias_control"])
+        self.assertEqual(records["group_neutralize"].source_paths, ["docs/knowledge/operator_data_semantics.md"])
+        self.assertNotIn("wiki/20_semantics", preview)
+
     def test_operator_semantic_record_loads_workflow_use_and_risk(self):
         record = operator_semantic_record_from_dict(
             {

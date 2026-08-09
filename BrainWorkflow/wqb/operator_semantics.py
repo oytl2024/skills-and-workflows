@@ -12,6 +12,10 @@ FIELD_TYPE_BONUS = 3.0
 TAG_MATCH_BONUS = 0.8
 RISK_PENALTY = 0.4
 DEFAULT_OPERATOR_SOURCE_PATH = "docs/knowledge/operator_data_semantics.md"
+LEGACY_OPERATOR_SOURCE_PREFIXES = (
+    (Path("wiki") / "20_semantics").as_posix(),
+    (Path("wiki") / "30_templates").as_posix(),
+)
 
 
 @dataclass(frozen=True)
@@ -140,6 +144,39 @@ def write_operator_semantics_markdown(path: Path, records: list[OperatorSemantic
     return path
 
 
+def normalize_operator_source_paths(source_paths: list[str]) -> list[str]:
+    """Input: source path list. Output: canonicalized source list. Replace obsolete wiki provenance."""
+    normalized: list[str] = []
+    saw_legacy = False
+    for value in source_paths:
+        path = str(value).replace("\\", "/").strip()
+        if not path:
+            continue
+        relative = path.removeprefix("knowledge/")
+        if any(relative == prefix or relative.startswith(prefix + "/") for prefix in LEGACY_OPERATOR_SOURCE_PREFIXES):
+            saw_legacy = True
+            continue
+        if path not in normalized:
+            normalized.append(path)
+    if saw_legacy and DEFAULT_OPERATOR_SOURCE_PATH not in normalized:
+        normalized.append(DEFAULT_OPERATOR_SOURCE_PATH)
+    return normalized or [DEFAULT_OPERATOR_SOURCE_PATH]
+
+
+def normalize_operator_record_sources(record: OperatorSemanticRecord) -> OperatorSemanticRecord:
+    """Input: operator record. Output: record with canonical source paths. Preserve reviewed semantic fields."""
+    return OperatorSemanticRecord(
+        operator=record.operator,
+        family=record.family,
+        workflow_uses=list(record.workflow_uses),
+        compatible_field_types=list(record.compatible_field_types),
+        template_tags=list(record.template_tags),
+        risk_tags=list(record.risk_tags),
+        repair_levers=list(record.repair_levers),
+        source_paths=normalize_operator_source_paths(record.source_paths),
+    )
+
+
 def score_operator_for_template(record: OperatorSemanticRecord, field_type: str, template_tags: list[str]) -> float:
     """Input: operator record, field type, template tags. Output: score. Rank operator fit for template work."""
     score = 0.0
@@ -202,7 +239,7 @@ def compile_operator_semantics(
     reviewed = load_operator_semantics(existing_machine_resource_path(root, "operator_ledger"))
     for record in reviewed:
         by_operator[record.operator] = record
-    records = list(by_operator.values())
+    records = [normalize_operator_record_sources(record) for record in by_operator.values()]
     write_operator_semantics_jsonl(jsonl_path, records)
     write_operator_semantics_markdown(markdown_path, records, generated_at)
     return {

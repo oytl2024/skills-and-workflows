@@ -80,10 +80,10 @@ def _activity_snapshot_body(generated_at: str) -> str:
     """Input: timestamp. Output: markdown body. Build the bootstrap activity note body."""
     return "".join(
         (
-        "# Activity Snapshot\n\n"
-        f"Generated at: `{generated_at}`\n\n"
-        "No live platform activity refresh was executed by bootstrap. "
-        "Run the research planner or maintenance refresh before activity-driven scheduling.\n",
+            "# Activity Snapshot\n\n"
+            f"Generated at: `{generated_at}`\n\n"
+            "No live platform activity refresh was executed by bootstrap. "
+            "Run the research planner or maintenance refresh before activity-driven scheduling.\n",
         )
     )
 
@@ -144,7 +144,18 @@ def _ensure_activity_snapshot_contract(path: Path, knowledge_root: Path, generat
     body_text = body if metadata else text
     expected = _activity_snapshot_metadata(path, knowledge_root, generated_at, body_text)
     needs_metadata = any(metadata.get(field) in (None, "", []) for field in RAW_REQUIRED_FIELDS)
-    if needs_metadata or metadata.get("source_path") != expected["source_path"]:
+    managed_fields = (
+        "source_type",
+        "source_family",
+        "source_path",
+        "capture_tool",
+        "record_count",
+        "content_hash",
+        "update_check",
+        "compiled_targets",
+    )
+    needs_managed_repair = any(metadata.get(field) != expected[field] for field in managed_fields)
+    if needs_metadata or needs_managed_repair:
         path.write_text(render_front_matter(expected) + body_text, encoding="utf-8")
     _upsert_activity_source_index(path, knowledge_root)
     return path
@@ -184,8 +195,14 @@ def _scaffold_manifest_row(
 def _write_manifest(path: Path, generated_at: str, initialized_names: set[str]) -> Path:
     """Input: manifest path, timestamp, initialized names. Output: path. Write a conservative scaffold manifest."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_manifest_rows(generated_at, initialized_names), ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def _manifest_rows(generated_at: str, initialized_names: set[str]) -> list[dict[str, Any]]:
+    """Input: timestamp and initialized names. Output: manifest rows. Build canonical bootstrap manifest rows."""
     day = generated_at[:10]
-    rows = [
+    return [
         _scaffold_manifest_row("data_ledger", DATA_LEDGER_JSONL, 1, day, initialized_names),
         _scaffold_manifest_row("template_library", TEMPLATE_LIBRARY_JSONL, 7, day, initialized_names),
         {
@@ -214,7 +231,34 @@ def _write_manifest(path: Path, generated_at: str, initialized_names: set[str]) 
             "source_note": "Bootstrap does not create or refresh research option cards.",
         },
     ]
-    path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _normalize_existing_manifest(path: Path, generated_at: str, initialized_names: set[str]) -> Path:
+    """Input: manifest path, timestamp, initialized names. Output: path. Normalize known artifact paths in place."""
+    canonical_rows = _manifest_rows(generated_at, initialized_names)
+    canonical_by_name = {row["name"]: row for row in canonical_rows}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = []
+    existing_rows = payload if isinstance(payload, list) else []
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in existing_rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name", ""))
+        copied = dict(row)
+        if name in canonical_by_name:
+            copied["path"] = canonical_by_name[name]["path"]
+            if not isinstance(copied.get("max_age_days"), int) or int(copied.get("max_age_days", 0)) <= 0:
+                copied["max_age_days"] = canonical_by_name[name]["max_age_days"]
+            seen.add(name)
+        normalized.append(copied)
+    for row in canonical_rows:
+        if row["name"] not in seen:
+            normalized.append(row)
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
 
 
@@ -275,6 +319,7 @@ def bootstrap_knowledge(knowledge_root: str | Path, seed_root: str | Path, gener
         initialized_names.add("activity_snapshot")
     if manifest.exists():
         preserved_paths.append(str(manifest))
+        _normalize_existing_manifest(manifest, generated, initialized_names)
     else:
         _write_manifest(manifest, generated, initialized_names)
 

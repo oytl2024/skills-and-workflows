@@ -95,6 +95,33 @@ class KnowledgeCompileTests(unittest.TestCase):
 
         self.assertEqual(rows, [first, second])
 
+    def test_compile_research_records_is_idempotent_for_same_raw_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            record = record_alpha_result(
+                empty_research_record("run1", "Power Pool"),
+                {
+                    "alpha_id": "alpha1",
+                    "expression_hash": "hash1",
+                    "hard_pass": False,
+                    "benchmark_label": "near_miss",
+                    "failed": ["prod_correlation"],
+                },
+            )
+            sync_research_record_to_raw(record, root / "raw")
+
+            compile_research_records(root, generated_at="2026-07-16T00:00:00Z")
+            compile_research_records(root, generated_at="2026-07-17T00:00:00Z")
+            rows = [
+                json.loads(line)
+                for line in (root / "machine" / "research_records.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+        compiled_rows = [row for row in rows if row.get("final_state") == "compiled_from_raw"]
+        self.assertEqual(len(compiled_rows), 1)
+        self.assertEqual(compiled_rows[0]["raw_source_path"], str(root / "raw" / "research" / "runs" / "run1" / "research_record.md"))
+
 
 if __name__ == "__main__":
     unittest.main()

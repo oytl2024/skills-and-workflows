@@ -215,3 +215,87 @@ class KnowledgeBootstrapTests(unittest.TestCase):
             "raw/platform/activities/bootstrap_activity_snapshot.md",
             {row["path"] for row in rows},
         )
+
+    def test_bootstrap_normalizes_existing_freshness_manifest_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            seed_root = Path(tmp) / "seed"
+            self.create_seed_files(seed_root)
+            manifest = root / "machine" / "freshness_manifest.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "operator_catalog",
+                            "path": "wiki/20_semantics/operator_catalog_official.md",
+                            "updated_at": "2026-07-01",
+                            "max_age_days": 30,
+                            "status": "reviewed",
+                        },
+                        {
+                            "name": "activity_snapshot",
+                            "path": "wiki/10_foundations/activity_snapshot.md",
+                            "updated_at": "2026-07-01",
+                            "max_age_days": 1,
+                            "status": "reviewed",
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            bootstrap_knowledge(root, seed_root, generated_at="2026-07-10T00:00:00Z")
+            rows = json.loads(manifest.read_text(encoding="utf-8"))
+
+        by_name = {row["name"]: row for row in rows}
+        self.assertEqual(by_name["operator_catalog"]["path"], "machine/operator_ledger.jsonl")
+        self.assertEqual(
+            by_name["activity_snapshot"]["path"],
+            "raw/platform/activities/bootstrap_activity_snapshot.md",
+        )
+        self.assertEqual(by_name["operator_catalog"]["updated_at"], "2026-07-01")
+        self.assertEqual(by_name["operator_catalog"]["status"], "reviewed")
+        for name in ("data_ledger", "template_library", "benchmark_rules", "research_option_cards"):
+            self.assertIn(name, by_name)
+
+    def test_bootstrap_rewrites_stale_activity_metadata_managed_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            seed_root = Path(tmp) / "seed"
+            self.create_seed_files(seed_root)
+            activity = root / "raw" / "platform" / "activities" / "bootstrap_activity_snapshot.md"
+            activity.parent.mkdir(parents=True)
+            body = "# Existing Activity Snapshot\n\nBody stays.\n"
+            activity.write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "source_type: old_type",
+                        "source_family: wiki/10_foundations",
+                        "source_path: raw/platform/activities/bootstrap_activity_snapshot.md",
+                        "captured_at: 2026-07-01T00:00:00Z",
+                        "capture_tool: old_tool",
+                        "record_count: 1",
+                        "content_hash: stale",
+                        "update_check: stale",
+                        "compiled_targets:",
+                        "  - wiki/10_foundations/activity_snapshot.md",
+                        "---",
+                        body,
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            bootstrap_knowledge(root, seed_root, generated_at="2026-07-10T00:00:00Z")
+            text = activity.read_text(encoding="utf-8")
+
+        self.assertIn("source_type: bootstrap_activity_snapshot", text)
+        self.assertIn("source_family: raw/platform/activities", text)
+        self.assertIn("capture_tool: wqb.knowledge_bootstrap", text)
+        self.assertIn("update_check: rerun platform activity refresh or bootstrap", text)
+        self.assertIn("  - wiki/00_start_here.md", text)
+        self.assertNotIn("content_hash: stale", text)
+        self.assertNotIn("wiki/10_foundations/activity_snapshot.md", text)
+        self.assertIn("Body stays.", text)
