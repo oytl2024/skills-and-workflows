@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 from wqb.operator_semantics import (
@@ -44,6 +45,26 @@ class OperatorSemanticsTests(unittest.TestCase):
         self.assertEqual(records["rank"].family, "reviewed_family")
         self.assertIn("group_rank", records)
 
+    def test_compile_default_operator_sources_do_not_publish_legacy_wiki_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+
+            summary = compile_operator_semantics(root, generated_at="2026-07-22T01:00:00Z")
+            rows = [
+                json.loads(line)
+                for line in (root / "machine" / "operator_ledger.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            preview = Path(summary["markdown_path"]).read_text(encoding="utf-8")
+
+        for row in rows:
+            self.assertTrue(row["source_paths"])
+            self.assertFalse(
+                any(str(path).startswith("wiki/20_semantics") for path in row["source_paths"]),
+                row,
+            )
+        self.assertNotIn("wiki/20_semantics", preview)
+
     def test_operator_semantic_record_loads_workflow_use_and_risk(self):
         record = operator_semantic_record_from_dict(
             {
@@ -54,7 +75,7 @@ class OperatorSemanticsTests(unittest.TestCase):
                 "template_tags": ["cross_sectional_normalizer", "repair"],
                 "risk_tags": ["over_neutralization"],
                 "repair_levers": ["neutralization_industry", "neutralization_subindustry"],
-                "source_paths": ["wiki/20_semantics/operator_catalog_official.md"],
+                "source_paths": ["docs/knowledge/operator_data_semantics.md"],
             }
         )
 
@@ -76,7 +97,7 @@ class OperatorSemanticsTests(unittest.TestCase):
                 "template_tags": "cross_sectional",
                 "risk_tags": None,
                 "repair_levers": "group_rank",
-                "source_paths": "wiki/20_semantics/operator_catalog_official.md",
+                "source_paths": "docs/knowledge/operator_data_semantics.md",
             }
         )
 
@@ -85,7 +106,7 @@ class OperatorSemanticsTests(unittest.TestCase):
         self.assertEqual(record.template_tags, ["cross_sectional"])
         self.assertEqual(record.risk_tags, [])
         self.assertEqual(record.repair_levers, ["group_rank"])
-        self.assertEqual(record.source_paths, ["wiki/20_semantics/operator_catalog_official.md"])
+        self.assertEqual(record.source_paths, ["docs/knowledge/operator_data_semantics.md"])
 
     def test_write_and_load_operator_semantics_jsonl_and_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -100,7 +121,7 @@ class OperatorSemanticsTests(unittest.TestCase):
                 template_tags=["event_value"],
                 risk_tags=["invalid_raw_vector_use"],
                 repair_levers=["replace_vec_count_with_vec_avg"],
-                source_paths=["wiki/20_semantics/operators.md"],
+                source_paths=["docs/knowledge/operator_data_semantics.md"],
             )
 
             write_operator_semantics_jsonl(jsonl, [record])
@@ -112,7 +133,7 @@ class OperatorSemanticsTests(unittest.TestCase):
         self.assertIn("vector_to_matrix", markdown)
         self.assertIn("summarize_vector_values", markdown)
         self.assertIn("Sources", markdown)
-        self.assertIn("wiki/20_semantics/operators.md", markdown)
+        self.assertIn("docs/knowledge/operator_data_semantics.md", markdown)
 
 
 if __name__ == "__main__":

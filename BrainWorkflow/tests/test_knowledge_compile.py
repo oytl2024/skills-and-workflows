@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 from wqb.knowledge_clean_compile import evaluate_clean_knowledge_structure
@@ -60,6 +61,39 @@ class KnowledgeCompileTests(unittest.TestCase):
 
         self.assertTrue(clean["clean"], clean["issues"])
         self.assertEqual(health["issue_count"], 0, health["issues"])
+
+    def test_compile_research_records_preserves_existing_snapshots_for_same_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ledger = root / "machine" / "research_records.jsonl"
+            ledger.parent.mkdir(parents=True)
+            first = {
+                "run_id": "run1",
+                "objective": "Power Pool",
+                "synced_at": "2026-07-15T00:00:00Z",
+                "final_state": "repair",
+                "candidate_gate": [{"candidate_id": "c1"}],
+            }
+            second = {
+                "run_id": "run1",
+                "objective": "Power Pool",
+                "synced_at": "2026-07-16T00:00:00Z",
+                "final_state": "waiting_for_user",
+                "candidate_gate": [{"candidate_id": "c2"}],
+            }
+            ledger.write_text(
+                json.dumps(first, sort_keys=True) + "\n" + json.dumps(second, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            compile_research_records(root, generated_at="2026-07-17T00:00:00Z")
+            rows = [
+                json.loads(line)
+                for line in ledger.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(rows, [first, second])
 
 
 if __name__ == "__main__":

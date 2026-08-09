@@ -47,9 +47,28 @@ def _write_research_rows(path: Path, rows: list[dict[str, Any]]) -> Path:
     """Input: machine ledger path and rows. Output: path. Write deterministic research record JSONL."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
-        for row in sorted(rows, key=lambda item: str(item.get("run_id", ""))):
+        for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
     return path
+
+
+def _compiled_row_from_raw_summary(row: dict[str, Any], generated_at: str) -> dict[str, Any]:
+    """Input: raw summary and timestamp. Output: machine ledger row. Convert one raw record snapshot."""
+    return {
+        "run_id": str(row["run_id"]),
+        "objective": str(row["objective"]),
+        "backtest": [],
+        "triage": row["triage"],
+        "repair": {},
+        "candidate_gate": [],
+        "user_approval": [],
+        "approved_queue": [],
+        "manual_submission_status": [],
+        "synced_at": generated_at,
+        "final_state": "compiled_from_raw",
+        "case_reason": str(row["case_reason"]),
+        "raw_source_path": str(row["path"]),
+    }
 
 
 def compile_research_records(
@@ -69,31 +88,18 @@ def compile_research_records(
     )[:max_records]
     rows = [_record_summary(path) for path in raw_paths]
     ledger_path = machine_resource_path(root, "research_records")
-    existing_by_run = {
-        str(row.get("run_id", "")): row
-        for row in _read_existing_research_rows(ledger_path)
-        if str(row.get("run_id", ""))
+    existing_rows = _read_existing_research_rows(ledger_path)
+    compiled_raw_paths = {
+        str(row.get("raw_source_path", ""))
+        for row in existing_rows
+        if str(row.get("raw_source_path", ""))
     }
+    output_rows = list(existing_rows)
     for row in rows:
-        existing_by_run.setdefault(
-            str(row["run_id"]),
-            {
-                "run_id": str(row["run_id"]),
-                "objective": str(row["objective"]),
-                "backtest": [],
-                "triage": row["triage"],
-                "repair": {},
-                "candidate_gate": [],
-                "user_approval": [],
-                "approved_queue": [],
-                "manual_submission_status": [],
-                "synced_at": generated,
-                "final_state": "compiled_from_raw",
-                "case_reason": str(row["case_reason"]),
-                "raw_source_path": str(row["path"]),
-            },
-        )
-    _write_research_rows(ledger_path, list(existing_by_run.values()))
+        if str(row["path"]) not in compiled_raw_paths:
+            output_rows.append(_compiled_row_from_raw_summary(row, generated))
+            compiled_raw_paths.add(str(row["path"]))
+    _write_research_rows(ledger_path, output_rows)
     case_report_paths = compile_research_case_reports(root, generated, max_records)
     output_json = root / RESEARCH_COMPILE_JSON
     output_json.parent.mkdir(parents=True, exist_ok=True)

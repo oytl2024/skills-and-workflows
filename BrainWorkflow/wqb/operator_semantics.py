@@ -11,6 +11,7 @@ from wqb.knowledge_paths import existing_machine_resource_path, machine_resource
 FIELD_TYPE_BONUS = 3.0
 TAG_MATCH_BONUS = 0.8
 RISK_PENALTY = 0.4
+DEFAULT_OPERATOR_SOURCE_PATH = "docs/knowledge/operator_data_semantics.md"
 
 
 @dataclass(frozen=True)
@@ -36,7 +37,7 @@ def default_operator_semantics() -> list[OperatorSemanticRecord]:
             template_tags=["cross_sectional_normalizer"],
             risk_tags=["crowded_when_used_on_price_volume_only"],
             repair_levers=["group_rank", "group_neutralize"],
-            source_paths=["wiki/20_semantics/operator_catalog_official.md"],
+            source_paths=[DEFAULT_OPERATOR_SOURCE_PATH],
         ),
         OperatorSemanticRecord(
             operator="ts_delta",
@@ -46,7 +47,7 @@ def default_operator_semantics() -> list[OperatorSemanticRecord]:
             template_tags=["time_series_surprise", "event"],
             risk_tags=["turnover_inflation"],
             repair_levers=["increase_window", "add_decay"],
-            source_paths=["wiki/20_semantics/operator_catalog_official.md"],
+            source_paths=[DEFAULT_OPERATOR_SOURCE_PATH],
         ),
         OperatorSemanticRecord(
             operator="vec_avg",
@@ -56,7 +57,7 @@ def default_operator_semantics() -> list[OperatorSemanticRecord]:
             template_tags=["event_value", "vector_to_matrix"],
             risk_tags=["invalid_raw_vector_use"],
             repair_levers=["replace_vec_count_with_vec_avg"],
-            source_paths=["wiki/20_semantics/operators.md"],
+            source_paths=[DEFAULT_OPERATOR_SOURCE_PATH],
         ),
     ]
 

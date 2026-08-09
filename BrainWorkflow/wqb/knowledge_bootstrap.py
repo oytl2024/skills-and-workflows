@@ -7,7 +7,13 @@ from typing import Any
 
 from wqb.benchmark_rules import BENCHMARK_RULES_PATH
 from wqb.data_ledger import load_data_ledger, write_data_ledger_markdown
-from wqb.knowledge_contracts import SourceIndexRow, render_front_matter, upsert_source_index_rows
+from wqb.knowledge_contracts import (
+    RAW_REQUIRED_FIELDS,
+    SourceIndexRow,
+    parse_markdown_front_matter,
+    render_front_matter,
+    upsert_source_index_rows,
+)
 from wqb.knowledge_paths import machine_resource_path
 from wqb.template_library import load_template_library, write_template_library_markdown
 
@@ -20,6 +26,7 @@ DATA_LEDGER_MD = Path("machine") / "previews" / "data_ledger.md"
 TEMPLATE_LIBRARY_JSONL = Path("machine") / "template_library.jsonl"
 TEMPLATE_LIBRARY_MD = Path("machine") / "previews" / "template_library.md"
 FRESHNESS_MANIFEST = Path("machine") / "freshness_manifest.json"
+OPERATOR_LEDGER = Path("machine") / "operator_ledger.jsonl"
 BOOTSTRAP_REPORT_DIR = Path("raw") / "maintenance" / "bootstrap_reports"
 ACTIVITY_SNAPSHOT = Path("raw") / "platform" / "activities" / "bootstrap_activity_snapshot.md"
 NON_REFRESHED_BASELINE_DATE = "1970-01-01"
@@ -69,18 +76,22 @@ def _stamp_rows(
     return stamped
 
 
-def _write_activity_snapshot(path: Path, knowledge_root: Path, generated_at: str) -> Path:
-    """Input: output path, vault root, timestamp. Output: path. Write non-live activity raw note."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    body = (
+def _activity_snapshot_body(generated_at: str) -> str:
+    """Input: timestamp. Output: markdown body. Build the bootstrap activity note body."""
+    return "".join(
+        (
         "# Activity Snapshot\n\n"
         f"Generated at: `{generated_at}`\n\n"
         "No live platform activity refresh was executed by bootstrap. "
         "Run the research planner or maintenance refresh before activity-driven scheduling.\n",
+        )
     )
-    body_text = "".join(body)
+
+
+def _activity_snapshot_metadata(path: Path, knowledge_root: Path, generated_at: str, body_text: str) -> dict[str, Any]:
+    """Input: path, root, timestamp, body. Output: metadata dict. Build raw source metadata for bootstrap activity."""
     relative_path = path.relative_to(knowledge_root).as_posix()
-    metadata = {
+    return {
         "source_type": "bootstrap_activity_snapshot",
         "source_family": "raw/platform/activities",
         "source_path": relative_path,
@@ -91,11 +102,12 @@ def _write_activity_snapshot(path: Path, knowledge_root: Path, generated_at: str
         "update_check": "rerun platform activity refresh or bootstrap",
         "compiled_targets": ["wiki/00_start_here.md"],
     }
-    path.write_text(
-        render_front_matter(metadata) + body_text,
-        encoding="utf-8",
-    )
-    upsert_source_index_rows(
+
+
+def _upsert_activity_source_index(path: Path, knowledge_root: Path) -> Path:
+    """Input: activity path and vault root. Output: index path. Ensure source-index coverage for activity raw note."""
+    relative_path = path.relative_to(knowledge_root).as_posix()
+    return upsert_source_index_rows(
         knowledge_root,
         [
             SourceIndexRow(
@@ -108,6 +120,33 @@ def _write_activity_snapshot(path: Path, knowledge_root: Path, generated_at: str
             )
         ],
     )
+
+
+def _write_activity_snapshot(path: Path, knowledge_root: Path, generated_at: str) -> Path:
+    """Input: output path, vault root, timestamp. Output: path. Write non-live activity raw note."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body_text = _activity_snapshot_body(generated_at)
+    metadata = _activity_snapshot_metadata(path, knowledge_root, generated_at, body_text)
+    path.write_text(
+        render_front_matter(metadata) + body_text,
+        encoding="utf-8",
+    )
+    _upsert_activity_source_index(path, knowledge_root)
+    return path
+
+
+def _ensure_activity_snapshot_contract(path: Path, knowledge_root: Path, generated_at: str) -> Path:
+    """Input: activity path, root, timestamp. Output: path. Backfill raw metadata and source index."""
+    if not path.exists():
+        return _write_activity_snapshot(path, knowledge_root, generated_at)
+    text = path.read_text(encoding="utf-8")
+    metadata, body = parse_markdown_front_matter(text)
+    body_text = body if metadata else text
+    expected = _activity_snapshot_metadata(path, knowledge_root, generated_at, body_text)
+    needs_metadata = any(metadata.get(field) in (None, "", []) for field in RAW_REQUIRED_FIELDS)
+    if needs_metadata or metadata.get("source_path") != expected["source_path"]:
+        path.write_text(render_front_matter(expected) + body_text, encoding="utf-8")
+    _upsert_activity_source_index(path, knowledge_root)
     return path
 
 
@@ -160,7 +199,7 @@ def _write_manifest(path: Path, generated_at: str, initialized_names: set[str]) 
         _scaffold_manifest_row("activity_snapshot", ACTIVITY_SNAPSHOT, 1, day, initialized_names),
         {
             "name": "operator_catalog",
-            "path": "wiki/20_semantics/operator_catalog_official.md",
+            "path": OPERATOR_LEDGER.as_posix(),
             "updated_at": NON_REFRESHED_BASELINE_DATE,
             "max_age_days": 30,
             "status": "not_refreshed",
@@ -230,6 +269,7 @@ def bootstrap_knowledge(knowledge_root: str | Path, seed_root: str | Path, gener
 
     if activity.exists():
         preserved_paths.append(str(activity))
+        _ensure_activity_snapshot_contract(activity, root, generated)
     else:
         _write_activity_snapshot(activity, root, generated)
         initialized_names.add("activity_snapshot")

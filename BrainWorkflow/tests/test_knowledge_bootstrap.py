@@ -156,6 +156,10 @@ class KnowledgeBootstrapTests(unittest.TestCase):
             by_name["benchmark_rules"]["path"],
             "machine/benchmark_rules.jsonl",
         )
+        self.assertEqual(
+            by_name["operator_catalog"]["path"],
+            "machine/operator_ledger.jsonl",
+        )
         for name in ("data_ledger", "template_library", "activity_snapshot"):
             self.assertEqual(by_name[name]["updated_at"], "2026-07-10")
             self.assertEqual(by_name[name]["status"], "refreshed")
@@ -183,3 +187,31 @@ class KnowledgeBootstrapTests(unittest.TestCase):
 
         self.assertTrue(clean["clean"], clean["issues"])
         self.assertEqual(health["issue_count"], 0, health["issues"])
+
+    def test_bootstrap_backfills_metadata_and_source_index_for_existing_activity_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            seed_root = Path(tmp) / "seed"
+            self.create_seed_files(seed_root)
+            activity = root / "raw" / "platform" / "activities" / "bootstrap_activity_snapshot.md"
+            activity.parent.mkdir(parents=True)
+            activity.write_text("# Existing Activity Snapshot\n", encoding="utf-8")
+
+            bootstrap_knowledge(root, seed_root, generated_at="2026-07-10T00:00:00Z")
+
+            machine_index = root / "machine" / "source_index.jsonl"
+            raw_index = root / "raw" / "source_index.md"
+            health = evaluate_knowledge_contract_health(root)
+            rows = [
+                json.loads(line)
+                for line in machine_index.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            raw_index_exists = raw_index.exists()
+
+        self.assertEqual(health["issue_count"], 0, health["issues"])
+        self.assertTrue(raw_index_exists)
+        self.assertIn(
+            "raw/platform/activities/bootstrap_activity_snapshot.md",
+            {row["path"] for row in rows},
+        )
