@@ -1,11 +1,13 @@
 from dataclasses import replace
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from wqb.delivery_gate import run_delivery_gate
+from wqb.delivery_verification import run_delivery_verification
 from wqb.run_readiness import ReadinessIssue, ReadinessReport
 from wqb.workflow_events import append_workflow_event
 from wqb.workflow_state import create_initial_state, write_run_state
@@ -177,10 +179,25 @@ class DeliveryGateTests(unittest.TestCase):
     def _write_verification_report(
         self,
         root: Path,
+        generated_at: str = "2026-07-30T00:00:00+00:00",
+    ) -> Path:
+        """Input: vault root and timestamp. Output: verification report path. Write real runner-shaped local evidence."""
+        project_root = Path(__file__).resolve().parent.parent
+        results = [
+            subprocess.CompletedProcess(["unittest"], 0, "Ran 720 tests\nOK\n", ""),
+            subprocess.CompletedProcess(["compileall"], 0, "", ""),
+        ]
+        with patch("wqb.delivery_verification.subprocess.run", side_effect=results):
+            report = run_delivery_verification(root, project_root=project_root, generated_at=generated_at)
+        return Path(report["report_path"])
+
+    def _write_manual_verification_report(
+        self,
+        root: Path,
         check_codes: tuple[str, ...] = ("unittest_discovery", "compileall"),
         generated_at: str = "2026-07-30T00:00:00+00:00",
     ) -> Path:
-        """Input: vault root, check codes, timestamp. Output: verification report path. Write local test evidence."""
+        """Input: vault root, check codes, timestamp. Output: report path. Write a hand-made claim for rejection tests."""
         commands = {
             "unittest_discovery": [
                 "python",
@@ -214,6 +231,14 @@ class DeliveryGateTests(unittest.TestCase):
         report_path.write_text(json.dumps(report), encoding="utf-8")
         (directory / "latest.json").write_text(json.dumps(report), encoding="utf-8")
         return report_path
+
+    def _rewrite_latest_verification_payload(self, report_path: Path, payload: dict) -> None:
+        """Input: report path and payload. Output: none. Rewrite report and latest pointer in test fixtures."""
+        report_path.write_text(json.dumps(payload), encoding="utf-8")
+        (report_path.parent / "latest.json").write_text(
+            json.dumps({**payload, "report_path": str(report_path)}),
+            encoding="utf-8",
+        )
 
     def _passing_readiness(self) -> ReadinessReport:
         """Input: none. Output: ReadinessReport. Build a non-live readiness pass for delivery tests."""
@@ -389,7 +414,7 @@ class DeliveryGateTests(unittest.TestCase):
             knowledge = base / "knowledge"
             runs = base / "runs"
             self._write_minimal_clean_knowledge(knowledge)
-            self._write_verification_report(knowledge, ("unittest_discovery",))
+            self._write_manual_verification_report(knowledge, ("unittest_discovery",))
             self._write_run_state(
                 runs,
                 "20260730T000000-paused",
@@ -431,6 +456,168 @@ class DeliveryGateTests(unittest.TestCase):
         self.assertEqual(report["status"], "passed")
         self.assertEqual(check["status"], "passed")
         self.assertEqual(check["evidence_path"], str(verification_path))
+
+    def test_delivery_gate_rejects_handwritten_local_verification_claim_without_runner_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            self._write_minimal_clean_knowledge(knowledge)
+            self._write_manual_verification_report(knowledge)
+            self._write_run_state(
+                runs,
+                "20260730T000000-paused",
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="missing candidates.csv",
+            )
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+        check = next(check for check in report["checks"] if check["code"] == "local_verification_evidence")
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(check["status"], "failed")
+
+    def test_delivery_gate_rejects_local_verification_report_path_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            self._write_minimal_clean_knowledge(knowledge)
+            verification_path = self._write_verification_report(knowledge)
+            payload = json.loads(verification_path.read_text(encoding="utf-8"))
+            payload["report_path"] = str(verification_path.parent / "other.json")
+            verification_path.write_text(json.dumps(payload), encoding="utf-8")
+            self._write_run_state(
+                runs,
+                "20260730T000000-paused",
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="missing candidates.csv",
+            )
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+        self.assertEqual(
+            "failed",
+            next(check["status"] for check in report["checks"] if check["code"] == "local_verification_evidence"),
+        )
+
+    def test_delivery_gate_rejects_local_verification_wrong_cwd(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            self._write_minimal_clean_knowledge(knowledge)
+            verification_path = self._write_verification_report(knowledge)
+            payload = json.loads(verification_path.read_text(encoding="utf-8"))
+            payload["checks"][0]["cwd"] = str(base / "WrongProject")
+            self._rewrite_latest_verification_payload(verification_path, payload)
+            self._write_run_state(
+                runs,
+                "20260730T000000-paused",
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="missing candidates.csv",
+            )
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+        self.assertEqual(
+            "failed",
+            next(check["status"] for check in report["checks"] if check["code"] == "local_verification_evidence"),
+        )
+
+    def test_delivery_gate_rejects_local_verification_wrong_command_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            self._write_minimal_clean_knowledge(knowledge)
+            verification_path = self._write_verification_report(knowledge)
+            payload = json.loads(verification_path.read_text(encoding="utf-8"))
+            payload["checks"][0]["command"][0] = "python"
+            self._rewrite_latest_verification_payload(verification_path, payload)
+            self._write_run_state(
+                runs,
+                "20260730T000000-paused",
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="missing candidates.csv",
+            )
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+        self.assertEqual(
+            "failed",
+            next(check["status"] for check in report["checks"] if check["code"] == "local_verification_evidence"),
+        )
+
+    def test_delivery_gate_rejects_raw_source_index_substring_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            self._write_minimal_clean_knowledge(knowledge)
+            self._write_verification_report(knowledge)
+            (knowledge / "raw" / "source_index.md").write_text(
+                "# Raw Source Index\n\n## `raw/platform/learn/doc.md.bak`\n",
+                encoding="utf-8",
+            )
+            self._write_run_state(
+                runs,
+                "20260730T000000-paused",
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="missing candidates.csv",
+            )
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+        source_check = next(check for check in report["checks"] if check["code"] == "source_index_evidence")
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(source_check["status"], "failed")
+        self.assertIn("raw/platform/learn/doc.md", source_check["message"])
+
+    def test_delivery_gate_rejects_broken_raw_source_index_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            self._write_minimal_clean_knowledge(knowledge)
+            self._write_verification_report(knowledge)
+            (knowledge / "raw" / "source_index.md").write_text(
+                "# Raw Source Index\n\n"
+                "## `raw/platform/learn/doc.md`\n\n"
+                "## `raw/platform/learn/missing.md`\n",
+                encoding="utf-8",
+            )
+            self._write_run_state(
+                runs,
+                "20260730T000000-paused",
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="missing candidates.csv",
+            )
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+        source_check = next(check for check in report["checks"] if check["code"] == "source_index_evidence")
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(source_check["status"], "failed")
+        self.assertIn("raw/platform/learn/missing.md", source_check["message"])
 
     def test_delivery_gate_rejects_raw_source_missing_from_machine_index(self):
         with tempfile.TemporaryDirectory() as tmp:

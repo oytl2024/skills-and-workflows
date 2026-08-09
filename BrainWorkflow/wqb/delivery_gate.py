@@ -4,10 +4,12 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+import re
 from typing import Any
 import urllib.request
 
 from wqb.knowledge_clean_compile import evaluate_clean_knowledge_structure
+from wqb.delivery_verification import verification_commands
 from wqb.knowledge_freshness import (
     evaluate_knowledge_contract_health,
     load_freshness_manifest,
@@ -37,6 +39,7 @@ REQUIRED_LOCAL_VERIFICATION_CHECKS = (
     "unittest_discovery",
     "compileall",
 )
+RAW_SOURCE_INDEX_HEADING = re.compile(r"^## `([^`]+)`\s*$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -82,6 +85,19 @@ def _parse_timestamp(value: str) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _project_root() -> Path:
+    """Input: none. Output: BrainWorkflow project root path. Locate where local checks must run."""
+    return Path(__file__).resolve().parent.parent
+
+
+def _path_value_resolves_to(value: Any, expected: Path) -> bool:
+    """Input: path-like value and expected path. Output: bool. Require a non-empty absolute path match."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    path = Path(value)
+    return path.is_absolute() and path.resolve() == expected
 
 
 def _latest_maintenance_report(knowledge_root: Path) -> tuple[dict[str, Any], Path | None]:
@@ -228,37 +244,27 @@ def _local_verification_evidence(
         for check in checks
         if isinstance(check, dict)
     } if isinstance(checks, list) else {}
-    unittest_check = checks_by_code.get("unittest_discovery", {})
-    compileall_check = checks_by_code.get("compileall", {})
-    unittest_command = unittest_check.get("command", [])
-    compileall_command = compileall_check.get("command", [])
-    unittest_command_ok = (
-        isinstance(unittest_command, list)
-        and unittest_command[-4:] == ["discover", "-s", "tests", "-q"]
-        and any(
-            isinstance(part, str)
-            and "sys.platform='linux'" in part
-            and "runpy.run_module('unittest'" in part
-            for part in unittest_command
-        )
-    )
-    compileall_command_ok = (
-        isinstance(compileall_command, list)
-        and compileall_command[1:] == ["-m", "compileall", "-q", "wqb", "tests"]
-    )
+    expected_commands = {code: command for code, command in verification_commands()}
+    expected_project = _project_root().resolve()
+    report_path_matches = _path_value_resolves_to(report.get("report_path"), report_path)
     required_checks_passed = all(
         isinstance(checks_by_code.get(code), dict)
         and checks_by_code[code].get("status") == "passed"
         and checks_by_code[code].get("returncode") == 0
+        and checks_by_code[code].get("command") == expected_commands.get(code)
+        and _path_value_resolves_to(checks_by_code[code].get("cwd"), expected_project)
+        and isinstance(checks_by_code[code].get("stdout"), str)
+        and isinstance(checks_by_code[code].get("stderr"), str)
         for code in REQUIRED_LOCAL_VERIFICATION_CHECKS
     )
+    check_codes_exact = set(checks_by_code) == set(REQUIRED_LOCAL_VERIFICATION_CHECKS)
     passed = (
         fresh
         and report.get("report_type") == "delivery_verification"
         and report.get("status") == "passed"
+        and report_path_matches
+        and check_codes_exact
         and required_checks_passed
-        and unittest_command_ok
-        and compileall_command_ok
     )
     if passed:
         message = "Fresh successful unittest discovery and compileall evidence is present."
@@ -269,7 +275,7 @@ def _local_verification_evidence(
             if code not in checks_by_code
         ]
         suffix = f" Missing checks: {', '.join(missing)}." if missing else ""
-        message = f"Local verification must be fresh and contain successful controller-compatible checks.{suffix}"
+        message = f"Local verification must be fresh, runner-generated, and contain successful controller-compatible checks.{suffix}"
     return passed, message, str(report_path)
 
 
@@ -316,6 +322,10 @@ def _source_index_evidence(
         for row in rows
         if isinstance(row.get("path"), str)
     }
+    markdown_paths = {
+        match.group(1).replace("\\", "/").strip()
+        for match in RAW_SOURCE_INDEX_HEADING.finditer(markdown_text)
+    }
     valid_rows = bool(rows) and all(
         isinstance(row.get("path"), str)
         and bool(str(row.get("path", "")).strip())
@@ -329,19 +339,33 @@ def _source_index_evidence(
         and canonical_source_family(path, knowledge_root).startswith("raw/")
     } if (knowledge_root / "raw").exists() else set()
     missing_machine = sorted(canonical_sources - indexed_paths)
-    missing_markdown = sorted(path for path in canonical_sources if path not in markdown_text)
+    missing_markdown = sorted(canonical_sources - markdown_paths)
+    extra_markdown = sorted(markdown_paths - canonical_sources)
+    broken_markdown = sorted(
+        path
+        for path in markdown_paths
+        if not path.startswith("raw/")
+        or Path(path).is_absolute()
+        or not (knowledge_root / path).is_file()
+    )
     passed = (
         markdown_index.is_file()
         and bool(markdown_text.strip())
         and valid_rows
         and not missing_machine
         and not missing_markdown
+        and not extra_markdown
+        and not broken_markdown
     )
     missing_details = []
     if missing_machine:
         missing_details.append(f"missing from machine index: {', '.join(missing_machine)}")
     if missing_markdown:
         missing_details.append(f"missing from raw index: {', '.join(missing_markdown)}")
+    if extra_markdown:
+        missing_details.append(f"unexpected raw index paths: {', '.join(extra_markdown)}")
+    if broken_markdown:
+        missing_details.append(f"broken raw index paths: {', '.join(broken_markdown)}")
     return (
         passed,
         "Raw and machine source indexes cover every canonical raw Markdown source."

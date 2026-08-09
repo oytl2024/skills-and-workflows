@@ -19,7 +19,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _verification_commands() -> tuple[tuple[str, list[str]], ...]:
+def verification_commands() -> tuple[tuple[str, list[str]], ...]:
     """Input: none. Output: named command lists. Build controller-compatible local verification commands."""
     return (
         (
@@ -119,7 +119,7 @@ def run_delivery_verification(
     generated = generated_at or _now()
     checks = [
         _run_check(code, command, project)
-        for code, command in _verification_commands()
+        for code, command in verification_commands()
     ]
     report = {
         "report_type": "delivery_verification",
