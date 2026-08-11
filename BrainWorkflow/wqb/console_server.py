@@ -322,6 +322,11 @@ def render_dashboard(state: dict[str, Any]) -> str:
     workflow_progress = f"""
 <p>Active run: <code>{escape(str(active.get('run_id', 'none')))}</code></p>
 <form method="post" action="/actions/run"><input type="hidden" name="action" value="workflow-continue"><button>Continue workflow</button></form>
+<form method="post" action="/actions/run">
+<input type="hidden" name="action" value="workflow-import-scout-seed-artifacts">
+<label>Source run ID <input name="source_run_id" required placeholder="source-stage1-run"></label>
+<button>Import Scout/Seed artifacts</button>
+</form>
 """
     knowledge_forms = """
 <form method="post" action="/actions/run"><input type="hidden" name="action" value="readiness-check"><button>Run readiness check</button></form>

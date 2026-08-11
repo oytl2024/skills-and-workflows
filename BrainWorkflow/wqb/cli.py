@@ -3460,6 +3460,7 @@ def parse_args() -> argparse.Namespace:
             "workflow-status",
             "workflow-resume",
             "workflow-abort",
+            "workflow-import-scout-seed-artifacts",
             "workflow-approve-candidates",
             "workflow-request-candidate-approval",
             "workflow-update-candidate-status",
@@ -3674,6 +3675,10 @@ def main() -> None:
             if not args.reason:
                 raise SystemExit("--reason is required for workflow-abort")
             result = orchestrator.abort(args.reason, now)
+        elif args.command == "workflow-import-scout-seed-artifacts":
+            if not args.source_run_id:
+                raise SystemExit("--source-run-id is required for workflow-import-scout-seed-artifacts")
+            result = orchestrator.import_scout_seed_artifacts(args.source_run_id, now)
         elif args.command == "workflow-approve-candidates":
             result = orchestrator.approve_candidates(args.candidate_id, now, args.approved_by)
         elif args.command == "workflow-request-candidate-approval":

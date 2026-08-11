@@ -207,6 +207,43 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertNotIn('<input name="objective"', html)
         self.assertNotIn('type="text" name="selected_option_id"', html)
 
+    def test_render_dashboard_exposes_scout_seed_artifact_import_control(self):
+        state = {
+            "readiness": {"exists": True, "passed": True, "blocked": False},
+            "freshness": {"exists": True, "valid": True, "record_count": 6, "stale_count": 0, "missing_count": 0},
+            "data_coverage": {"exists": True, "field_count": 120, "scope_count": 4, "data_set_count": 8, "error_count": 0, "status": "completed"},
+            "startable_scopes": [],
+            "option_cards": [],
+            "schedule": {"preview": "# Schedule"},
+            "jobs": [],
+            "proposal_counts": {},
+            "active_workflow": {"exists": True, "run_id": "active", "current_stage": "scout_seed", "status": "paused"},
+            "approved_queue": [],
+            "queue_diagnostics": [],
+            "workflow_events": [],
+        }
+
+        html = render_dashboard(state)
+
+        self.assertIn('value="workflow-import-scout-seed-artifacts"', html)
+        self.assertIn('name="source_run_id"', html)
+        self.assertIn("Import Scout/Seed artifacts", html)
+
+    def test_workflow_import_scout_seed_artifacts_action_builds_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+
+            command = build_action_command(
+                "workflow-import-scout-seed-artifacts",
+                paths,
+                {"source_run_id": "source-stage1"},
+            )
+
+        self.assertIn("workflow-import-scout-seed-artifacts", command)
+        self.assertIn("--source-run-id", command)
+        self.assertIn("source-stage1", command)
+
     def test_render_dashboard_exposes_data_capture_and_compile_controls(self):
         state = {
             "readiness": {"exists": True, "passed": False, "blocked": True},

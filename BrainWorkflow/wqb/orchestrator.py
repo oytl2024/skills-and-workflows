@@ -32,7 +32,13 @@ from wqb.research_record import (
     write_research_record,
 )
 from wqb.workflow_events import append_workflow_event, read_workflow_events
-from wqb.workflow_stage_adapters import POST_SCHEDULE_STAGES, advance_post_schedule_stage, create_start_snapshot, schedule_research_stage
+from wqb.workflow_stage_adapters import (
+    POST_SCHEDULE_STAGES,
+    advance_post_schedule_stage,
+    create_start_snapshot,
+    import_scout_seed_artifacts as import_scout_seed_artifacts_from_run,
+    schedule_research_stage,
+)
 from wqb.workflow_state import (
     STATE_FILENAME,
     WorkflowRunState,
@@ -267,6 +273,93 @@ class WorkflowOrchestrator:
         summary.update({"warnings": warnings, "raw_path": raw_path})
         return summary
 
+    def import_scout_seed_artifacts(
+        self,
+        source_run_id: str,
+        imported_at: str,
+    ) -> dict[str, object]:
+        """Input: source run id and timestamp. Output: workflow summary. Import Scout/Seed artifacts into the active run."""
+        with _workflow_mutation_lock(self.paths.run_root):
+            return self._import_scout_seed_artifacts_unlocked(source_run_id, imported_at)
+
+    def _import_scout_seed_artifacts_unlocked(
+        self,
+        source_run_id: str,
+        imported_at: str,
+    ) -> dict[str, object]:
+        """Input: source run id and timestamp. Output: workflow summary. Import while preserving the state machine boundary."""
+        discovery = self._active_discovery()
+        state = discovery.state
+        if state is None:
+            return self._missing_state_summary(discovery)
+        diagnostics = diagnose_state_consistency(state.run_dir)
+        state = self._pause_for_diagnostics(state, diagnostics, imported_at)
+        if diagnostics:
+            return self._summary(state, diagnostics)
+        if state.current_stage != "scout_seed":
+            raise ValueError("scout/seed artifact import requires the active run to be at scout_seed")
+        if state.status not in {"running", "paused"}:
+            raise ValueError("scout/seed artifact import requires a running or paused active run")
+        selector = str(source_run_id).strip()
+        if not selector:
+            raise ValueError("source_run_id is required for scout/seed artifact import")
+        if selector in {".", ".."} or Path(selector).name != selector:
+            raise ValueError("source_run_id must be a run identifier")
+        if selector == state.run_id:
+            raise ValueError("source_run_id must differ from the active workflow run")
+        source_run_dir = self.paths.run_root / selector
+        resolved_run_root = self.paths.run_root.resolve()
+        resolved_source_run_dir = source_run_dir.resolve()
+        if resolved_source_run_dir != resolved_run_root / selector:
+            raise ValueError("source_run_id must resolve to a direct child of run_root")
+        result = import_scout_seed_artifacts_from_run(
+            Path(state.run_dir),
+            source_run_dir,
+            imported_at,
+        )
+        stage = state.stages["scout_seed"]
+        evidence_paths = list(stage.evidence_paths)
+        for item in result["evidence_paths"]:
+            if str(item) not in evidence_paths:
+                evidence_paths.append(str(item))
+        import_pause_reason = "scout/seed artifacts imported; resume workflow to complete local artifact validation"
+        state = self._set_stage(
+            state,
+            "scout_seed",
+            stage.status,
+            imported_at,
+            evidence_paths=evidence_paths,
+            blocker=import_pause_reason if state.status == "paused" else "",
+        )
+        state = replace(
+            state,
+            pause_reason=import_pause_reason if state.status == "paused" else state.pause_reason,
+            updated_at=imported_at,
+        )
+        write_run_state(Path(state.run_dir) / STATE_FILENAME, state)
+        append_workflow_event(
+            state.run_dir,
+            "scout_seed_artifacts_imported",
+            {
+                "stage": "scout_seed",
+                "source_run_id": selector,
+                "candidate_count": result.get("candidate_count", 0),
+                "imported_artifacts": list(result.get("imported_artifacts", [])),
+                "evidence_paths": list(result.get("evidence_paths", [])),
+            },
+            imported_at,
+        )
+        summary = self._summary(state)
+        summary.update(
+            {
+                "source_run_id": selector,
+                "candidate_count": result.get("candidate_count", 0),
+                "imported_artifacts": list(result.get("imported_artifacts", [])),
+                "evidence_paths": list(result.get("evidence_paths", [])),
+            }
+        )
+        return summary
+
     def continue_once(self, now: str) -> dict[str, object]:
         """Input: timestamp. Output: status summary. Advance exactly one legal workflow stage."""
         with _workflow_mutation_lock(self.paths.run_root):
@@ -377,12 +470,16 @@ class WorkflowOrchestrator:
                 )
                 return self._summary(state)
             next_stage = POST_SCHEDULE_STAGES[POST_SCHEDULE_STAGES.index(stage_name) + 1] if stage_name != "repair" else "candidate_gate"
+            evidence_paths = list(state.stages[stage_name].evidence_paths)
+            for item in result["evidence_paths"]:
+                if str(item) not in evidence_paths:
+                    evidence_paths.append(str(item))
             state = self._set_stage(
                 state,
                 stage_name,
                 "completed",
                 now,
-                evidence_paths=[str(item) for item in result["evidence_paths"]],
+                evidence_paths=evidence_paths,
                 current_stage=next_stage,
                 last_completed_stage=stage_name,
             )
@@ -1226,6 +1323,7 @@ class WorkflowOrchestrator:
             "status": state.status,
             "current_stage": state.current_stage,
             "next_action": state.next_action,
+            "pause_reason": state.pause_reason,
             "waiting_for_user": state.waiting_for_user,
             "diagnostics": issues,
             "consistent": not issues,

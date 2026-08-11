@@ -1157,6 +1157,54 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             [event.event_type for event in events].count("stage_completed"), 6
         )
 
+    def test_import_scout_seed_artifacts_unblocks_paused_active_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            orchestrator.continue_once("2026-07-12T00:01:00Z")
+            orchestrator.continue_once("2026-07-12T00:02:00Z")
+            paused = orchestrator.continue_once("2026-07-12T00:03:00Z")
+            source_run = root / "runs" / "source-stage1"
+            source_run.mkdir(parents=True)
+            self.persist_hard_pass_artifacts(source_run)
+
+            imported = orchestrator.import_scout_seed_artifacts(
+                "source-stage1",
+                "2026-07-12T00:04:00Z",
+            )
+            resumed = orchestrator.resume("2026-07-12T00:05:00Z")
+            continued = orchestrator.continue_once("2026-07-12T00:06:00Z")
+            state = load_run_state(Path(str(started["run_dir"])) / "run_state.json")
+            events = read_workflow_events(Path(str(started["run_dir"])))
+
+        self.assertEqual(paused["status"], "paused")
+        self.assertEqual(imported["status"], "paused")
+        self.assertIn("artifacts imported", imported["pause_reason"])
+        self.assertEqual(imported["imported_artifacts"], ["candidates.csv", "all_alphas.jsonl"])
+        self.assertEqual(resumed["status"], "running")
+        self.assertEqual(continued["current_stage"], "batch_generation")
+        self.assertEqual(state.stages["scout_seed"].status, "completed")
+        self.assertTrue(
+            any(path.endswith("scout_seed_import.json") for path in state.stages["scout_seed"].evidence_paths)
+        )
+        self.assertIn("scout_seed_artifacts_imported", [event.event_type for event in events])
+
+    def test_import_scout_seed_artifacts_rejects_source_run_path_segments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            orchestrator.continue_once("2026-07-12T00:01:00Z")
+            orchestrator.continue_once("2026-07-12T00:02:00Z")
+            orchestrator.continue_once("2026-07-12T00:03:00Z")
+
+            with self.assertRaisesRegex(ValueError, "source_run_id must be a run identifier"):
+                orchestrator.import_scout_seed_artifacts(
+                    "nested/source-stage1",
+                    "2026-07-12T00:04:00Z",
+                )
+
     def test_continue_once_pauses_candidate_gate_with_durable_approval_handoff(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

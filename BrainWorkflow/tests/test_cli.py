@@ -3978,6 +3978,31 @@ class WorkflowOrchestratorCliTests(unittest.TestCase):
         orchestrator_cls.return_value.continue_once.assert_called_once_with("2026-07-12T00:01:00Z")
         self.assertEqual(json.loads(output.getvalue())["current_stage"], "schedule")
 
+    def test_workflow_import_scout_seed_artifacts_dispatches_orchestrator(self):
+        from wqb.cli import main
+
+        output = io.StringIO()
+        argv = [
+            "wqb",
+            "workflow-import-scout-seed-artifacts",
+            "--source-run-id",
+            "source-stage1",
+            "--now",
+            "2026-07-12T00:04:00Z",
+        ]
+        with patch("sys.argv", argv), patch("wqb.cli.WorkflowOrchestrator") as orchestrator_cls, redirect_stdout(output):
+            orchestrator_cls.return_value.import_scout_seed_artifacts.return_value = {
+                "status": "paused",
+                "imported_artifacts": ["candidates.csv"],
+            }
+            main()
+
+        orchestrator_cls.return_value.import_scout_seed_artifacts.assert_called_once_with(
+            "source-stage1",
+            "2026-07-12T00:04:00Z",
+        )
+        self.assertEqual(json.loads(output.getvalue())["imported_artifacts"], ["candidates.csv"])
+
     def test_workflow_request_candidate_approval_loads_json_and_dispatches(self):
         from wqb.cli import main
 

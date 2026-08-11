@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import csv
+import hashlib
 import json
+import shutil
 from datetime import date, datetime, timezone
 from pathlib import Path
 import re
@@ -35,6 +38,140 @@ POST_SCHEDULE_STAGES = (
     "triage",
     "repair",
 )
+
+SCOUT_SEED_REQUIRED_IMPORT_ARTIFACTS = ("candidates.csv",)
+SCOUT_SEED_OPTIONAL_IMPORT_ARTIFACTS = (
+    "all_alphas.jsonl",
+    "simulation_events.jsonl",
+    "run_errors.jsonl",
+    "run_summary.md",
+)
+
+
+def import_scout_seed_artifacts(
+    run_dir: str | Path,
+    source_run_dir: str | Path,
+    imported_at: str,
+) -> dict[str, object]:
+    """Input: active run dir, source run dir, timestamp. Output: import summary. Copy audited Scout/Seed artifacts into the active run."""
+    target_root = Path(run_dir)
+    source_root = Path(source_run_dir)
+    if not target_root.exists() or not target_root.is_dir():
+        raise ValueError("active workflow run directory does not exist")
+    if not source_root.exists() or not source_root.is_dir():
+        raise ValueError("source scout/seed run directory does not exist")
+    if target_root.is_symlink():
+        raise ValueError("active workflow run directory must not be a symlink")
+    if source_root.is_symlink():
+        raise ValueError("source scout/seed run directory must not be a symlink")
+    if target_root.resolve() == source_root.resolve():
+        raise ValueError("source scout/seed run must differ from the active workflow run")
+
+    missing = [
+        name
+        for name in SCOUT_SEED_REQUIRED_IMPORT_ARTIFACTS
+        if not (source_root / name).exists()
+    ]
+    if missing:
+        raise ValueError(f"missing required scout/seed artifact: {', '.join(missing)}")
+
+    available_names = [
+        name
+        for name in (
+            *SCOUT_SEED_REQUIRED_IMPORT_ARTIFACTS,
+            *SCOUT_SEED_OPTIONAL_IMPORT_ARTIFACTS,
+        )
+        if (source_root / name).exists()
+    ]
+    import_namespace = (
+        *SCOUT_SEED_REQUIRED_IMPORT_ARTIFACTS,
+        *SCOUT_SEED_OPTIONAL_IMPORT_ARTIFACTS,
+    )
+    existing_targets = [name for name in import_namespace if (target_root / name).exists()]
+    if existing_targets:
+        raise ValueError(
+            "target scout/seed artifact already exists: " + ", ".join(existing_targets)
+        )
+    for name in available_names:
+        artifact_path = source_root / name
+        if artifact_path.is_symlink() or not artifact_path.is_file():
+            raise ValueError(f"source scout/seed artifact must be a regular file: {name}")
+
+    candidate_count = _count_candidate_rows(source_root / "candidates.csv")
+    imported_artifacts: list[dict[str, object]] = []
+    copied_paths: list[str] = []
+    for name in available_names:
+        source_path = source_root / name
+        target_path = target_root / name
+        shutil.copy2(source_path, target_path)
+        copied_paths.append(str(target_path))
+        imported_artifacts.append(
+            {
+                "name": name,
+                "source_path": str(source_path),
+                "target_path": str(target_path),
+                "bytes": target_path.stat().st_size,
+                "sha256": _sha256_file(target_path),
+            }
+        )
+
+    stage_dir = target_root / "stages" / "scout_seed"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    provenance_path = stage_dir / "scout_seed_import.json"
+    provenance = {
+        "stage": "scout_seed",
+        "mode": "artifact_import",
+        "source_run_id": source_root.name,
+        "source_run_dir": str(source_root),
+        "target_run_id": target_root.name,
+        "target_run_dir": str(target_root),
+        "imported_at": imported_at,
+        "candidate_count": candidate_count,
+        "imported_artifacts": imported_artifacts,
+    }
+    provenance_path.write_text(
+        json.dumps(provenance, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return {
+        "stage": "scout_seed",
+        "status": "imported",
+        "source_run_id": source_root.name,
+        "candidate_count": candidate_count,
+        "imported_artifacts": [item["name"] for item in imported_artifacts],
+        "evidence_paths": [str(provenance_path), *copied_paths],
+    }
+
+
+def _count_candidate_rows(path: Path) -> int:
+    """Input: candidates.csv path. Output: row count. Validate the minimal candidate identity columns."""
+    with path.open("r", encoding="utf-8", newline="") as file:
+        reader = csv.DictReader(file)
+        fieldnames = set(reader.fieldnames or [])
+        required = {"alpha_id", "expression_hash"}
+        if not required.issubset(fieldnames):
+            raise ValueError("candidates.csv must include alpha_id and expression_hash columns")
+        row_count = 0
+        for row_number, row in enumerate(reader, start=1):
+            row_count += 1
+            alpha_id = str(row.get("alpha_id", "") or "").strip()
+            expression_hash = str(row.get("expression_hash", "") or "").strip()
+            if not alpha_id or not expression_hash:
+                raise ValueError(
+                    f"candidate row {row_number} must include alpha_id and expression_hash"
+                )
+        if row_count < 1:
+            raise ValueError("candidates.csv must contain at least one candidate row")
+        return row_count
+
+
+def _sha256_file(path: Path) -> str:
+    """Input: file path. Output: SHA-256 hex digest. Fingerprint imported artifacts."""
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def advance_post_schedule_stage(run_dir: str | Path, stage_name: str) -> dict[str, object]:

@@ -5,7 +5,12 @@ from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from wqb.workflow_stage_adapters import create_start_snapshot, schedule_research_stage, summarize_stage_artifacts
+from wqb.workflow_stage_adapters import (
+    create_start_snapshot,
+    import_scout_seed_artifacts,
+    schedule_research_stage,
+    summarize_stage_artifacts,
+)
 
 
 def valid_option(**overrides):
@@ -335,3 +340,116 @@ class WorkflowStageAdaptersTests(unittest.TestCase):
 
         self.assertEqual(summary["alpha_result_count"], 1)
         self.assertEqual(summary["candidate_file_exists"], True)
+
+    def test_import_scout_seed_artifacts_copies_candidates_and_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            active_run = root / "runs" / "active"
+            source_run = root / "runs" / "source-stage1"
+            active_run.mkdir(parents=True)
+            source_run.mkdir(parents=True)
+            (source_run / "candidates.csv").write_text(
+                "alpha_id,expression_hash,sharpe,fitness,turnover,returns,warnings\n"
+                "a1,h1,1.4,1.1,0.2,0.08,\n",
+                encoding="utf-8",
+            )
+            (source_run / "all_alphas.jsonl").write_text(
+                json.dumps({"alpha_id": "a1", "expression_hash": "h1"}) + "\n",
+                encoding="utf-8",
+            )
+
+            result = import_scout_seed_artifacts(
+                active_run,
+                source_run,
+                imported_at="2026-08-11T12:00:00Z",
+            )
+
+            self.assertEqual(result["stage"], "scout_seed")
+            self.assertEqual(result["status"], "imported")
+            self.assertTrue((active_run / "candidates.csv").exists())
+            self.assertTrue((active_run / "all_alphas.jsonl").exists())
+            provenance_path = active_run / "stages" / "scout_seed" / "scout_seed_import.json"
+            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+            self.assertEqual(provenance["mode"], "artifact_import")
+            self.assertEqual(provenance["source_run_id"], "source-stage1")
+            self.assertEqual(provenance["candidate_count"], 1)
+            self.assertEqual(
+                [item["name"] for item in provenance["imported_artifacts"]],
+                ["candidates.csv", "all_alphas.jsonl"],
+            )
+
+    def test_import_scout_seed_artifacts_rejects_missing_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            active_run = root / "runs" / "active"
+            source_run = root / "runs" / "source-stage1"
+            active_run.mkdir(parents=True)
+            source_run.mkdir(parents=True)
+
+            with self.assertRaisesRegex(ValueError, "missing required scout/seed artifact: candidates.csv"):
+                import_scout_seed_artifacts(active_run, source_run, imported_at="2026-08-11T12:00:00Z")
+
+    def test_import_scout_seed_artifacts_rejects_existing_target_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            active_run = root / "runs" / "active"
+            source_run = root / "runs" / "source-stage1"
+            active_run.mkdir(parents=True)
+            source_run.mkdir(parents=True)
+            (active_run / "candidates.csv").write_text("alpha_id,expression_hash\nold,h0\n", encoding="utf-8")
+            (source_run / "candidates.csv").write_text("alpha_id,expression_hash\na1,h1\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "target scout/seed artifact already exists: candidates.csv"):
+                import_scout_seed_artifacts(active_run, source_run, imported_at="2026-08-11T12:00:00Z")
+
+    def test_import_scout_seed_artifacts_rejects_existing_target_optional_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            active_run = root / "runs" / "active"
+            source_run = root / "runs" / "source-stage1"
+            active_run.mkdir(parents=True)
+            source_run.mkdir(parents=True)
+            (active_run / "all_alphas.jsonl").write_text('{"alpha_id":"old"}\n', encoding="utf-8")
+            (source_run / "candidates.csv").write_text("alpha_id,expression_hash\na1,h1\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "target scout/seed artifact already exists: all_alphas.jsonl"):
+                import_scout_seed_artifacts(active_run, source_run, imported_at="2026-08-11T12:00:00Z")
+
+    def test_import_scout_seed_artifacts_rejects_header_only_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            active_run = root / "runs" / "active"
+            source_run = root / "runs" / "source-stage1"
+            active_run.mkdir(parents=True)
+            source_run.mkdir(parents=True)
+            (source_run / "candidates.csv").write_text("alpha_id,expression_hash\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "candidates.csv must contain at least one candidate row"):
+                import_scout_seed_artifacts(active_run, source_run, imported_at="2026-08-11T12:00:00Z")
+
+    def test_import_scout_seed_artifacts_rejects_blank_candidate_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            active_run = root / "runs" / "active"
+            source_run = root / "runs" / "source-stage1"
+            active_run.mkdir(parents=True)
+            source_run.mkdir(parents=True)
+            (source_run / "candidates.csv").write_text(
+                "alpha_id,expression_hash\n,h1\na2,\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "candidate row 1 must include alpha_id and expression_hash"):
+                import_scout_seed_artifacts(active_run, source_run, imported_at="2026-08-11T12:00:00Z")
+
+    def test_import_scout_seed_artifacts_rejects_non_file_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            active_run = root / "runs" / "active"
+            source_run = root / "runs" / "source-stage1"
+            active_run.mkdir(parents=True)
+            source_run.mkdir(parents=True)
+            (source_run / "candidates.csv").mkdir()
+
+            with self.assertRaisesRegex(ValueError, "source scout/seed artifact must be a regular file: candidates.csv"):
+                import_scout_seed_artifacts(active_run, source_run, imported_at="2026-08-11T12:00:00Z")
