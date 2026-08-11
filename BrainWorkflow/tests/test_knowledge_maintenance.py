@@ -79,12 +79,12 @@ class KnowledgeMaintenanceTests(unittest.TestCase):
     def test_non_dry_cleanup_refuses_when_pre_cleanup_health_has_unrelated_blocker(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            obsolete = root / "wiki" / "20_semantics" / "old.md"
+            obsolete = root / "wiki" / "20_semantics" / "old.jsonl"
             obsolete.parent.mkdir(parents=True)
-            obsolete.write_text("# obsolete\n", encoding="utf-8")
-            source = root / "raw" / "community" / "source.md"
-            source.parent.mkdir(parents=True)
-            source.write_text("# missing metadata\n", encoding="utf-8")
+            obsolete.write_text('{"legacy":true}\n', encoding="utf-8")
+            extra_layer = root / "scratch" / "notes.md"
+            extra_layer.parent.mkdir(parents=True)
+            extra_layer.write_text("# unclassified active layer\n", encoding="utf-8")
 
             report = run_knowledge_maintenance(root, "2026-07-30T00:00:00+00:00", apply_cleanup=True)
 
@@ -92,6 +92,7 @@ class KnowledgeMaintenanceTests(unittest.TestCase):
             self.assertEqual(report["status"], "blocked")
             self.assertTrue(report["cleanup"]["blocked"])
             self.assertTrue(obsolete.exists())
+            self.assertTrue(extra_layer.exists())
             self.assertEqual(evidence["status"], "blocked")
             self.assertGreater(evidence["pre_cleanup_health"]["blocking_issue_count"], 0)
 

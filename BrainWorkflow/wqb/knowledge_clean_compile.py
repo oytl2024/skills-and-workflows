@@ -26,6 +26,8 @@ SENSITIVE_NAME_FRAGMENTS = (
 )
 OBSOLETE_ACTIVE_PREFIXES = (
     Path("raw") / "learn",
+    Path("raw") / "research" / "stage1",
+    Path("wiki") / "00_principles",
     Path("wiki") / "10_foundations",
     Path("wiki") / "20_semantics",
     Path("wiki") / "30_templates",
@@ -34,6 +36,7 @@ OBSOLETE_ACTIVE_PREFIXES = (
     Path("wiki") / "60_workflows",
     Path("wiki") / "70_decisions",
     Path("wiki") / "80_maintenance",
+    Path("wiki") / "90_index",
 )
 WIKI_MACHINE_EXTENSIONS = {".json", ".jsonl", ".csv"}
 
@@ -194,7 +197,9 @@ def migrate_legacy_decision_artifacts(knowledge_root: str | Path) -> dict[str, A
             target = canonical / relative
             source_hash = _sha256(source)
             target_hash = _sha256(target) if target.is_file() else ""
-            if target.is_file() and target_hash != source_hash:
+            if _is_sensitive(source, root):
+                status = "refused_sensitive"
+            elif target.is_file() and target_hash != source_hash:
                 status = "conflict"
             elif target.is_file():
                 status = "verified_existing"

@@ -54,7 +54,8 @@ def advance_post_schedule_stage(run_dir: str | Path, stage_name: str) -> dict[st
     stage_dir.mkdir(parents=True, exist_ok=True)
     missing = [str(path) for path in required_paths if not path.exists()]
     if missing:
-        blocker = "local artifacts required before plan-only stage completion"
+        missing_names = ", ".join(Path(path).name for path in missing)
+        blocker = f"local artifacts required before plan-only stage completion: {missing_names}"
         handoff_path = stage_dir / f"{stage_name}_handoff.json"
         handoff_path.write_text(
             json.dumps(

@@ -82,6 +82,16 @@ Normal maintenance command:
 python -m wqb.cli compile-knowledge --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --apply-cleanup
 ```
 
+This command automatically runs `migrate-knowledge-vault` first. The migration
+step preserves useful old Markdown as canonical raw material, materializes
+machine ledgers under `knowledge/machine`, repairs raw metadata/source indexes,
+and only then allows verified cleanup of old active directories. To inspect
+migration evidence without cleanup:
+
+```powershell
+python -m wqb.cli migrate-knowledge-vault --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
+```
+
 After a platform data refresh, run `compile-knowledge` before research scheduling.
 
 The research workflow consumes compiled knowledge. It should not recapture all platform documents at every startup.
@@ -107,12 +117,20 @@ python -m wqb.cli bootstrap-knowledge --knowledge-root 'C:\Users\oytl\Desktop\py
 Routine maintenance loop:
 
 ```powershell
+python -m wqb.cli migrate-knowledge-vault --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
 python -m wqb.cli compile-knowledge --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --apply-cleanup
 python -m wqb.cli knowledge-health-check --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
 python -m wqb.cli readiness-check --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge' --readiness-mode maintenance
 ```
 
-Use the routine loop after a research session or on a scheduled maintenance day. If the only new input is completed research runs, `compile-research-records` may be run before `compile-knowledge`; it writes the machine research ledger and selected case reports, not a mixed legacy experiment bundle. After platform data-field capture, run `compile-data-ledger` before `compile-knowledge` and the health/readiness checks below.
+Use the routine loop after a research session or on a scheduled maintenance day.
+The first command is optional for daily operation because `compile-knowledge`
+calls it, but it is useful when you want a separate migration report. If the
+only new input is completed research runs, `compile-research-records` may be run
+before `compile-knowledge`; it writes the machine research ledger and selected
+case reports, not a mixed legacy experiment bundle. After platform data-field
+capture, run `compile-data-ledger` before `compile-knowledge` and the
+health/readiness checks below.
 
 ## Stratified Platform Data Capture
 

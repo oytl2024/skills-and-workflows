@@ -260,6 +260,7 @@ class DeliveryGateTests(unittest.TestCase):
         waiting_for_user: bool = False,
         evidence_stage: str = "",
         with_stage_evidence: bool = True,
+        evidence_payload: dict | None = None,
     ) -> Path:
         """Input: workflow state fields. Output: run directory. Write one durable real-schema workflow state."""
         run_dir = runs / run_id
@@ -270,7 +271,14 @@ class DeliveryGateTests(unittest.TestCase):
             stage_name = evidence_stage or current_stage
             evidence_path = run_dir / "stages" / stage_name / "handoff.json"
             evidence_path.parent.mkdir(parents=True, exist_ok=True)
-            evidence_path.write_text(json.dumps({"stage": stage_name}), encoding="utf-8")
+            if evidence_payload is None and status == "paused" and stage_name == "scout_seed" and "candidates.csv" in pause_reason:
+                evidence_payload = {
+                    "stage": "scout_seed",
+                    "mode": "plan_only",
+                    "blocker": "local artifacts required before plan-only stage completion: candidates.csv",
+                    "missing_artifacts": [str(run_dir / "candidates.csv")],
+                }
+            evidence_path.write_text(json.dumps(evidence_payload or {"stage": stage_name}), encoding="utf-8")
             stages[stage_name] = replace(
                 stages[stage_name],
                 status="paused" if status == "paused" else "completed",
@@ -320,6 +328,160 @@ class DeliveryGateTests(unittest.TestCase):
 
             self.assertEqual(report["status"], "passed")
             self.assertIn("expected_pause", {check["code"] for check in report["checks"]})
+
+    def test_delivery_gate_accepts_structured_missing_candidates_pause(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            run_id = "20260730T000000-structured-pause"
+            self._write_minimal_clean_knowledge(knowledge)
+            self._write_verification_report(knowledge)
+            self._write_run_state(
+                runs,
+                run_id,
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="local artifacts required before plan-only stage completion",
+                evidence_payload={
+                    "stage": "scout_seed",
+                    "mode": "plan_only",
+                    "blocker": "local artifacts required before plan-only stage completion",
+                    "missing_artifacts": [str(runs / run_id / "candidates.csv")],
+                },
+            )
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+            self.assertEqual(report["status"], "passed")
+            self.assertEqual(
+                "passed",
+                next(check["status"] for check in report["checks"] if check["code"] == "expected_pause"),
+            )
+
+    def test_delivery_gate_rejects_structured_missing_candidates_with_wrong_stage_and_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            run_id = "20260730T000000-wrong-structured-pause"
+            self._write_minimal_clean_knowledge(knowledge)
+            self._write_verification_report(knowledge)
+            self._write_run_state(
+                runs,
+                run_id,
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="local artifacts required before plan-only stage completion",
+                evidence_payload={
+                    "stage": "repair",
+                    "mode": "research",
+                    "blocker": "local artifacts required before plan-only stage completion",
+                    "missing_artifacts": [str(runs / run_id / "candidates.csv")],
+                },
+            )
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+            boundary_check = next(check for check in report["checks"] if check["code"] == "expected_pause")
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(boundary_check["status"], "failed")
+
+    def test_delivery_gate_rejects_pause_reason_candidates_when_structured_evidence_is_invalid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            run_id = "20260730T000000-pause-reason-bypass"
+            self._write_minimal_clean_knowledge(knowledge)
+            self._write_verification_report(knowledge)
+            self._write_run_state(
+                runs,
+                run_id,
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="missing candidates.csv",
+                evidence_payload={
+                    "stage": "repair",
+                    "mode": "research",
+                    "blocker": "missing candidates.csv",
+                    "missing_artifacts": [str(runs / run_id / "candidates.csv")],
+                },
+            )
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+            boundary_check = next(check for check in report["checks"] if check["code"] == "expected_pause")
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(boundary_check["status"], "failed")
+
+    def test_delivery_gate_rejects_structured_missing_candidates_when_artifact_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            run_id = "20260730T000000-existing-candidates"
+            candidates = runs / run_id / "candidates.csv"
+            self._write_minimal_clean_knowledge(knowledge)
+            self._write_verification_report(knowledge)
+            self._write_run_state(
+                runs,
+                run_id,
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="local artifacts required before plan-only stage completion",
+                evidence_payload={
+                    "stage": "scout_seed",
+                    "mode": "plan_only",
+                    "blocker": "local artifacts required before plan-only stage completion",
+                    "missing_artifacts": [str(candidates)],
+                },
+            )
+            candidates.write_text("alpha_id\nabc123\n", encoding="utf-8")
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+            boundary_check = next(check for check in report["checks"] if check["code"] == "expected_pause")
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(boundary_check["status"], "failed")
+
+    def test_delivery_gate_rejects_structured_missing_candidates_from_another_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge = base / "knowledge"
+            runs = base / "runs"
+            run_id = "20260730T000000-wrong-candidates-path"
+            self._write_minimal_clean_knowledge(knowledge)
+            self._write_verification_report(knowledge)
+            self._write_run_state(
+                runs,
+                run_id,
+                "paused",
+                "scout_seed",
+                "2026-07-30T00:00:00+00:00",
+                pause_reason="local artifacts required before plan-only stage completion",
+                evidence_payload={
+                    "stage": "scout_seed",
+                    "mode": "plan_only",
+                    "blocker": "local artifacts required before plan-only stage completion",
+                    "missing_artifacts": [str(runs / "another-run" / "candidates.csv")],
+                },
+            )
+
+            with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
+                report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
+
+            boundary_check = next(check for check in report["checks"] if check["code"] == "expected_pause")
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(boundary_check["status"], "failed")
 
     def test_delivery_gate_rejects_pause_without_boundary_stage_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

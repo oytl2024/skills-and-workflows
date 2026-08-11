@@ -15,6 +15,7 @@ from wqb.knowledge_clean_compile import (
 from wqb.knowledge_experience_compile import compile_human_experience_wiki
 from wqb.knowledge_freshness import evaluate_knowledge_contract_health
 from wqb.knowledge_paths import ensure_knowledge_dirs
+from wqb.knowledge_vault_migration import run_knowledge_vault_migration
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class KnowledgeMaintenanceReport:
     report_type: str
     generated_at: str
     status: str
+    migration: dict[str, Any]
     decision_migration: dict[str, Any]
     wiki: dict[str, Any]
     interaction_lessons: dict[str, Any]
@@ -133,6 +135,7 @@ def run_knowledge_maintenance(
     """Input: knowledge root and compile settings. Output: maintenance report. Run compile, cleanup, and health verification."""
     generated = generated_at or _now()
     ensure_knowledge_dirs(knowledge_root)
+    migration = run_knowledge_vault_migration(knowledge_root, generated)
     decision_migration = migrate_legacy_decision_artifacts(knowledge_root)
     wiki = compile_human_experience_wiki(knowledge_root, generated, max_case_reports=max_case_reports)
     interaction = compile_interaction_lessons(knowledge_root, generated)
@@ -159,6 +162,7 @@ def run_knowledge_maintenance(
     status = (
         "completed"
         if health.get("issue_count", 0) == 0
+        and migration.get("status") == "completed"
         and decision_migration.get("status") == "completed"
         and cleanup.get("status") == "completed"
         else "blocked"
@@ -168,6 +172,7 @@ def run_knowledge_maintenance(
             "knowledge_maintenance",
             generated,
             status,
+            migration,
             decision_migration,
             wiki,
             interaction,

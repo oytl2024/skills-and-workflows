@@ -75,6 +75,12 @@ The active Obsidian vault has three canonical top-level layers:
 - `knowledge/machine/`: JSON/JSONL resources consumed by code, including data ledgers, template libraries, benchmark rules, freshness manifests, research option cards, and maintenance reports.
 - `knowledge/wiki/`: compact human lessons and selected case reports. Wiki pages must carry metadata and backlinks to concrete raw sources.
 
+`.obsidian/` is allowed as local Obsidian configuration and must not be treated
+as an active knowledge layer. Older specs that mention `wiki/10_foundations`,
+`wiki/20_semantics`, `wiki/30_templates`, or similar directories are historical
+background only; the active contract is the compact wiki from the simplified
+knowledge structure spec.
+
 Research commands should read compiled machine resources and selected wiki lessons. Full source refresh and wiki compilation should be a separate maintenance loop.
 
 ## Data Field Coverage Contract
@@ -92,9 +98,23 @@ python -m wqb.cli compile-data-ledger --knowledge-root 'C:\Users\oytl\Desktop\py
 
 Knowledge maintenance has three official entry points:
 
+- Vault migration: `python -m wqb.cli migrate-knowledge-vault --knowledge-root <knowledge>` materializes old machine resources under `machine/`, preserves old Markdown as canonical raw material, repairs source metadata, and writes `raw/maintenance/migration_reports/`. `compile-knowledge` runs this automatically before cleanup.
 - Research-record compile: raw research records accumulated from completed runs are synced into `machine/research_records.jsonl`; selected human case reports are written under `wiki/60_research_cases/` by `python -m wqb.cli compile-research-records`.
 - Platform-material maintenance: after platform data-field raw materials are refreshed, run `compile-data-ledger`, then `compile-knowledge --apply-cleanup`, `knowledge-health-check`, and readiness maintenance before starting a research workflow. Do not run `bootstrap-knowledge` after a data-field refresh because it can replace missing compiled ledgers with schema-seeded partial rows. Use `bootstrap-knowledge` only for initial knowledge-structure recovery.
 - Authority and semantic maintenance: research readiness verifies compiled ledger rows against certified canonical raw captures. `knowledge-health-check` includes contract integrity, and `compile-operator-semantics` preserves reviewed rows while merging canonical operators and missing defaults into `machine/operator_ledger.jsonl` plus `machine/previews/operator_semantics.md`.
+
+Vault migration must also normalize provenance inside machine resources. After
+cleanup, `knowledge/machine/*.json*` must not point at retired active wiki paths
+such as `wiki/20_semantics/`, `wiki/30_templates/`, or `wiki/40_experiments/`.
+Legacy research compile reports from `wiki/40_experiments/research_record_compile.json`
+must be converted into canonical research history before that old directory is
+removed. Old Stage 1 raw references under `raw/research/stage1/` must be
+rewritten to the migrated `raw/research/runs/` files.
+
+Do not hand off this project as ready after changing only code or docs. A real
+local vault run must be executed and cited: `compile-knowledge --apply-cleanup`,
+`knowledge-contract-check`, `delivery-verify`, and `delivery-gate` against
+`C:\Users\oytl\Desktop\pyproject\brain\knowledge`.
 
 ## Current Known Minor Follow-Ups
 

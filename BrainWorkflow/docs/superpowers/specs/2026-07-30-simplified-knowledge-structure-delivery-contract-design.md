@@ -47,7 +47,9 @@ knowledge/
   wiki/
 ```
 
-Operational recovery files such as root `todo.md`, root `milestone.md`, and `runs/` remain outside this knowledge contract.
+`.obsidian/` may also exist as Obsidian UI configuration; it is ignored by the
+active knowledge contract. Operational recovery files such as root `todo.md`,
+root `milestone.md`, and `runs/` remain outside this knowledge contract.
 
 ### `raw/`
 
@@ -89,6 +91,7 @@ Rules:
 - Machine resources are optimized for stable parsing, queryability, and incremental updates.
 - They are allowed to be large.
 - They should not live inside the human wiki.
+- They must not keep provenance pointers to retired active wiki paths such as `wiki/20_semantics/` or `wiki/30_templates/` after migration. Those references must be rewritten to migrated raw sources or canonical `machine/` resources.
 - A compact Markdown entry point may exist in `wiki/`, but it must not duplicate the full machine ledger.
 
 ### `wiki/`
@@ -281,12 +284,26 @@ Every knowledge compile must end with a clean active structure.
 
 The compile workflow must:
 
-1. ingest raw material;
-2. update machine resources;
-3. update human wiki lessons where useful;
-4. remove obsolete active mixed paths after verification;
-5. write a cleanup log with removed paths, hashes, and compiled targets;
-6. run a knowledge health check.
+1. run vault migration to preserve useful old Markdown as canonical raw sources;
+2. materialize required machine resources under `machine/`;
+3. ingest raw material;
+4. update human wiki lessons where useful;
+5. remove obsolete active mixed paths after verification;
+6. write a cleanup log with removed paths, hashes, and compiled targets;
+7. run a knowledge health check.
+
+`compile-knowledge --apply-cleanup` invokes the migration step automatically.
+`migrate-knowledge-vault` is available as a standalone local command when the
+operator wants to inspect migration evidence before cleanup.
+
+Migration also normalizes machine-resource provenance. If a JSON/JSONL row
+points at a retired wiki location, the reference is rewritten to the migrated
+raw note or canonical machine resource before cleanup can remove the old path.
+Legacy `wiki/40_experiments/research_record_compile.json` must be preserved as
+canonical research evidence and converted into `machine/research_records.jsonl`
+before the obsolete wiki experiment directory is eligible for deletion.
+Legacy Stage 1 paths under `raw/research/stage1/` are also retired; machine
+records must reference the migrated `raw/research/runs/` location instead.
 
 The health check fails if:
 
@@ -403,6 +420,20 @@ The simplified knowledge structure delivery contract was implemented in commits
 `24a1d54` through `9d816c8`. The implementation keeps `knowledge/raw`,
 `knowledge/machine`, and `knowledge/wiki` as the active knowledge layers,
 compiles maintenance evidence locally, and writes durable delivery-gate reports.
+
+The real-vault migration hardening adds `wqb/knowledge_vault_migration.py`.
+It fixes the delivery gap where new structure existed beside old directories
+instead of consuming them. The migration layer:
+
+- allows `.obsidian/` as local Obsidian configuration;
+- migrates root README and old wiki Markdown into canonical raw source folders
+  before cleanup;
+- materializes `data_ledger`, `scope_matrix`, `operator_ledger`,
+  `template_library`, `benchmark_rules`, `research_records`, `source_index`,
+  and `freshness_manifest` under `machine/`;
+- writes immutable migration evidence under `raw/maintenance/migration_reports/`;
+- lets cleanup remove old active directories only after pre-cleanup health
+  verification.
 
 Final non-live verification commands:
 

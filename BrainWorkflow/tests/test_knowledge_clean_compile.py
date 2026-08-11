@@ -6,6 +6,7 @@ from pathlib import Path
 from wqb.knowledge_clean_compile import (
     apply_obsolete_active_cleanup,
     evaluate_clean_knowledge_structure,
+    migrate_legacy_decision_artifacts,
     plan_obsolete_active_cleanup,
 )
 
@@ -33,6 +34,17 @@ class KnowledgeCleanCompileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for name in ("raw", "machine", "wiki"):
+                (root / name).mkdir()
+
+            report = evaluate_clean_knowledge_structure(root)
+
+            self.assertEqual(report["issue_count"], 0)
+            self.assertTrue(report["clean"])
+
+    def test_clean_structure_allows_obsidian_config_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("raw", "machine", "wiki", ".obsidian"):
                 (root / name).mkdir()
 
             report = evaluate_clean_knowledge_structure(root)
@@ -74,6 +86,27 @@ class KnowledgeCleanCompileTests(unittest.TestCase):
         }
         self.assertIn("wiki/10_foundations", legacy_paths)
         self.assertIn("wiki/60_workflows", legacy_paths)
+        self.assertFalse(report["clean"])
+
+    def test_clean_structure_reports_retired_principles_and_index_wiki_dirs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            principles = root / "wiki" / "00_principles" / "old.md"
+            index = root / "wiki" / "90_index" / "old.md"
+            principles.parent.mkdir(parents=True)
+            index.parent.mkdir(parents=True)
+            principles.write_text("# old principles\n", encoding="utf-8")
+            index.write_text("# old index\n", encoding="utf-8")
+
+            report = evaluate_clean_knowledge_structure(root)
+
+        legacy_paths = {
+            Path(issue["path"]).relative_to(root).as_posix()
+            for issue in report["issues"]
+            if issue["code"] == "legacy_active_path"
+        }
+        self.assertIn("wiki/00_principles", legacy_paths)
+        self.assertIn("wiki/90_index", legacy_paths)
         self.assertFalse(report["clean"])
 
     def test_clean_structure_reports_missing_required_layers(self):
@@ -169,6 +202,33 @@ class KnowledgeCleanCompileTests(unittest.TestCase):
             self.assertEqual(candidate.action, "remove")
             self.assertFalse(legacy.exists())
             self.assertTrue(canonical.exists())
+
+    def test_decision_artifact_migration_refuses_sensitive_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            private_note = root / "wiki" / "70_decisions" / "private_notes.md"
+            secret_json = root / "wiki" / "70_decisions" / "secret_token.json"
+            ordinary = root / "wiki" / "70_decisions" / "research_option_cards.jsonl"
+            private_note.parent.mkdir(parents=True)
+            private_note.write_text("# Private Decision Notes\n", encoding="utf-8")
+            secret_json.write_text('{"token":"do-not-copy"}', encoding="utf-8")
+            ordinary.write_text('{"option_id":"option-1"}\n', encoding="utf-8")
+
+            report = migrate_legacy_decision_artifacts(root)
+
+            statuses = {
+                Path(row["source_path"]).name: row["status"]
+                for row in report["artifacts"]
+            }
+            self.assertEqual(report["status"], "completed")
+            self.assertEqual(statuses["private_notes.md"], "refused_sensitive")
+            self.assertEqual(statuses["secret_token.json"], "refused_sensitive")
+            self.assertEqual(statuses["research_option_cards.jsonl"], "migrated")
+            self.assertEqual("# Private Decision Notes\n", private_note.read_text(encoding="utf-8"))
+            self.assertEqual('{"token":"do-not-copy"}', secret_json.read_text(encoding="utf-8"))
+            self.assertFalse((root / "machine" / "decisions" / "private_notes.md").exists())
+            self.assertFalse((root / "machine" / "decisions" / "secret_token.json").exists())
+            self.assertTrue((root / "machine" / "decisions" / "research_option_cards.jsonl").exists())
 
     def test_cleanup_refuses_sensitive_files_and_removes_ordinary_legacy_files(self):
         with tempfile.TemporaryDirectory() as tmp:

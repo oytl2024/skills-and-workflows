@@ -493,6 +493,48 @@ def _stage_has_existing_evidence(state: WorkflowRunState, stage_name: str) -> bo
     return False
 
 
+def _stage_evidence_lists_missing_artifact(
+    state: WorkflowRunState,
+    stage_name: str,
+    artifact_filename: str,
+) -> bool:
+    """Input: workflow state, stage, artifact filename. Output: bool. Read structured handoff blockers."""
+    stage = state.stages.get(stage_name)
+    if stage is None or stage.status not in {"paused", "completed"}:
+        return False
+    run_dir = Path(state.run_dir)
+    expected_artifact = (run_dir / artifact_filename).resolve()
+    for evidence_path in stage.evidence_paths:
+        path = Path(evidence_path)
+        if not path.is_absolute():
+            path = run_dir / path
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("stage", "")) != stage_name:
+            continue
+        if str(payload.get("mode", "")) != "plan_only":
+            continue
+        blocker = str(payload.get("blocker", "")).lower()
+        if "local artifacts required" not in blocker:
+            continue
+        missing = payload.get("missing_artifacts")
+        if not isinstance(missing, list):
+            continue
+        for item in missing:
+            candidate = Path(str(item))
+            if not candidate.is_absolute():
+                candidate = run_dir / candidate
+            if candidate.resolve() == expected_artifact and not candidate.exists():
+                return True
+    return False
+
+
 def _console_checks(console_base_url: str) -> list[DeliveryGateCheck]:
     """Input: Console base URL. Output: endpoint checks. Probe documented read-only Console endpoints."""
     checks: list[DeliveryGateCheck] = []
@@ -671,7 +713,7 @@ def run_delivery_gate(
         state is not None
         and state.status == "paused"
         and state.current_stage == "scout_seed"
-        and "candidates.csv" in state.pause_reason
+        and _stage_evidence_lists_missing_artifact(state, "scout_seed", "candidates.csv")
         and _stage_has_existing_evidence(state, "scout_seed")
     )
     expected_approval = (

@@ -25,6 +25,7 @@ LEGACY_MACHINE_RESOURCE_PATHS: dict[str, tuple[Path, ...]] = {
 }
 
 ACTIVE_TOP_LEVELS = {"raw", "machine", "wiki"}
+IGNORED_TOP_LEVELS = {".obsidian"}
 RAW_INTERACTION_ROOT = Path("raw") / "community" / "user_messages"
 ENGINEERING_LESSONS_WIKI_PATH = Path("wiki") / "50_engineering_lessons.md"
 DECISION_ARTIFACTS_ROOT = Path("machine") / "decisions"
@@ -130,4 +131,4 @@ def active_top_level_names(knowledge_root: str | Path) -> set[str]:
     root = Path(knowledge_root)
     if not root.exists():
         return set()
-    return {path.name for path in root.iterdir() if path.is_dir()}
+    return {path.name for path in root.iterdir() if path.is_dir() and path.name not in IGNORED_TOP_LEVELS}

@@ -1,7 +1,14 @@
 # BrainWorkflow Knowledge And Workflow Operating System Design
 
 Date: 2026-07-21
-Status: user-approved design direction, pending implementation plan
+Status: superseded as active vault layout by `2026-07-30-simplified-knowledge-structure-delivery-contract-design.md`
+
+> Current authority note: this document is preserved for background concepts such
+> as raw sources, semantic ledgers, template matrices, and proposal-driven
+> workflow evolution. Its older multi-directory `wiki/10_foundations`,
+> `wiki/20_semantics`, etc. layout is not the active vault contract. The active
+> Obsidian vault must compile into `raw/`, `machine/`, and compact `wiki/`
+> only, with `.obsidian` allowed as UI configuration.
 
 ## Purpose
 

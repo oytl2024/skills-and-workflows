@@ -45,6 +45,7 @@ from wqb.delivery_verification import run_delivery_verification
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest, write_freshness_report
 from wqb.knowledge_maintenance import run_knowledge_maintenance
 from wqb.knowledge_paths import decision_artifacts_root, machine_resource_path
+from wqb.knowledge_vault_migration import run_knowledge_vault_migration
 from wqb.interaction_memory import append_interaction_note
 from wqb.novelty import score_expression_novelty
 from wqb.optimizer import actions_for_check_summary
@@ -3441,6 +3442,7 @@ def parse_args() -> argparse.Namespace:
             "capture-platform-data-fields",
             "compile-data-ledger",
             "compile-operator-semantics",
+            "migrate-knowledge-vault",
             "knowledge-contract-check",
             "knowledge-health-check",
             "readiness-check",
@@ -3893,6 +3895,9 @@ def main() -> None:
 
         generated = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         result = compile_operator_semantics(args.knowledge_root, generated)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "migrate-knowledge-vault":
+        result = run_knowledge_vault_migration(args.knowledge_root)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "knowledge-contract-check":
         from wqb.knowledge_freshness import evaluate_knowledge_contract_health

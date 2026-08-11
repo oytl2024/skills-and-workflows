@@ -1056,6 +1056,16 @@ class CliTests(unittest.TestCase):
             self.assertIn("vec_avg", markdown_path.read_text(encoding="utf-8"))
             self.assertFalse((root / "wiki" / "20_operator_semantics.md").exists())
 
+    def test_migrate_knowledge_vault_dispatches_without_live_api(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "migrate-knowledge-vault", "--knowledge-root", "knowledge"]):
+            with patch("wqb.cli.run_knowledge_vault_migration", return_value={"status": "completed"}) as command:
+                with redirect_stdout(output):
+                    main()
+
+        command.assert_called_once_with("knowledge")
+        self.assertEqual(json.loads(output.getvalue())["status"], "completed")
+
     def test_launch_console_parse_and_dispatch(self):
         output = io.StringIO()
         with patch("sys.argv", ["wqb", "launch-console", "--console-host", "127.0.0.1", "--console-port", "0", "--no-open-browser"]), patch(
