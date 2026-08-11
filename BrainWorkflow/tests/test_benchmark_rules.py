@@ -11,6 +11,7 @@ from wqb.benchmark_rules import (
     default_benchmark_rules,
     load_active_benchmark_rules,
     load_benchmark_rules,
+    load_run_benchmark_rules,
     rules_for_issue_type,
     write_benchmark_rules_jsonl,
     write_benchmark_rules_markdown,
@@ -328,6 +329,91 @@ class BenchmarkRulesTests(unittest.TestCase):
 
         self.assertEqual(result.label, "weak_discard")
         self.assertNotIn(f"benchmark_rule:{injected_rule.rule_id}", result.reasons)
+
+    def test_historical_v2_snapshot_accepts_legacy_embedded_rulebook_path(self):
+        rule = BenchmarkRule(
+            rule_id="historical_bound_rule",
+            issue_types=["pnl_signal"],
+            description="Use the immutable historical snapshot rule.",
+            promotion_condition="Stable PnL is observed.",
+            action="Send the alpha to repair.",
+            evidence_paths=["knowledge/wiki/50_benchmarks/legacy_rule.md"],
+            consumed_by=["candidate_gate"],
+            risk="May promote a fragile signal.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run1"
+            run_dir.mkdir()
+            (run_dir / "run_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "run1",
+                        "start_snapshot": {
+                            "artifact_binding_version": 2,
+                            "benchmark_rulebook": {
+                                "path": "wiki/50_benchmarks/benchmark_rules.jsonl",
+                                "sha256": benchmark_rulebook_digest([rule]),
+                                "rules": [benchmark_rule_to_dict(rule)],
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            loaded = load_run_benchmark_rules(run_dir)
+
+        self.assertEqual([item.rule_id for item in loaded or []], ["historical_bound_rule"])
+
+    def test_official_run_rejects_unknown_noncanonical_rulebook_path(self):
+        rule = default_benchmark_rules()[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run1"
+            run_dir.mkdir()
+            (run_dir / "run_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "run1",
+                        "start_snapshot": {
+                            "artifact_binding_version": 2,
+                            "benchmark_rulebook": {
+                                "path": "wiki/random/benchmark_rules.jsonl",
+                                "sha256": benchmark_rulebook_digest([rule]),
+                                "rules": [benchmark_rule_to_dict(rule)],
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "benchmark rule authority.*path is not canonical"):
+                load_run_benchmark_rules(run_dir)
+
+    def test_official_run_rejects_backslash_legacy_rulebook_path_alias(self):
+        rule = default_benchmark_rules()[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run1"
+            run_dir.mkdir()
+            (run_dir / "run_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "run1",
+                        "start_snapshot": {
+                            "artifact_binding_version": 2,
+                            "benchmark_rulebook": {
+                                "path": "wiki\\50_benchmarks\\benchmark_rules.jsonl",
+                                "sha256": benchmark_rulebook_digest([rule]),
+                                "rules": [benchmark_rule_to_dict(rule)],
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "benchmark rule authority.*path is not canonical"):
+                load_run_benchmark_rules(run_dir)
 
     def test_official_run_rejects_non_v2_start_snapshot_authority(self):
         record = {

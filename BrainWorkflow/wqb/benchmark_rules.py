@@ -21,6 +21,9 @@ BENCHMARK_RULE_REQUIRED_FIELDS = {
 }
 OFFICIAL_WORKFLOW_MARKER_FILES = ("run_state.json", "workflow_events.jsonl")
 START_SNAPSHOT_VERSION = 2
+LEGACY_START_SNAPSHOT_BENCHMARK_RULES_PATHS = (
+    Path("wiki") / "50_benchmarks" / "benchmark_rules.jsonl",
+)
 
 
 @dataclass(frozen=True)
@@ -150,6 +153,17 @@ def benchmark_rules_path_for_knowledge(knowledge_root: str | Path) -> Path:
     return existing_machine_resource_path(knowledge_root, "benchmark_rules")
 
 
+def _is_accepted_start_snapshot_rulebook_path(path_value: Any) -> bool:
+    """Input: snapshot path value. Output: bool. Accept current path plus immutable legacy snapshot aliases."""
+    if not isinstance(path_value, str):
+        return False
+    accepted = {
+        BENCHMARK_RULES_PATH.as_posix(),
+        *(path.as_posix() for path in LEGACY_START_SNAPSHOT_BENCHMARK_RULES_PATHS),
+    }
+    return path_value in accepted
+
+
 def benchmark_rules_from_start_snapshot(snapshot: Any) -> list[BenchmarkRule]:
     """Input: start snapshot value. Output: bound rules. Validate immutable benchmark rule authority."""
     if not isinstance(snapshot, dict):
@@ -162,7 +176,7 @@ def benchmark_rules_from_start_snapshot(snapshot: Any) -> list[BenchmarkRule]:
     authority = snapshot.get("benchmark_rulebook")
     if not isinstance(authority, dict):
         raise ValueError("start snapshot benchmark rulebook is missing")
-    if str(authority.get("path", "")) != BENCHMARK_RULES_PATH.as_posix():
+    if not _is_accepted_start_snapshot_rulebook_path(authority.get("path", "")):
         raise ValueError("start snapshot benchmark rulebook path is not canonical")
     rows = authority.get("rules")
     if not isinstance(rows, list) or not rows:
