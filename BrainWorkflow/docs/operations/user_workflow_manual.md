@@ -148,6 +148,19 @@ Click/operation path:
 
 If `Import Scout/Seed artifacts` rejects the source run, the source artifacts are invalid or unsafe. The import path rejects empty candidate files, blank identities, existing active-run artifacts, source path escape, symlink directories, and non-regular files.
 
+### Source Run Polling And Rate Limits
+
+Live source runs submit simulations to the platform, then poll the returned progress URL. Platform `Retry-After` responses are normal during queueing and rate limiting, but they must leave durable evidence.
+
+Expected behavior:
+
+- Repeated `Retry-After` polling has a bounded wait.
+- If the bound is exceeded, the source run records a recoverable `SIMULATION_POLL_TIMEOUT` error in `run_errors.jsonl`.
+- The submitted simulation remains visible as in-flight through `simulation_events.jsonl`.
+- The operator can retry later with `complete-in-flight`, run a smaller/different source batch, or switch fields without losing the active Orchestrator run.
+
+If the browser spinner runs but **Recent Jobs** and `run_errors.jsonl` do not change, treat it as a maintenance bug. The correct fix is a tested workflow/observability repair, not repeated clicking.
+
 ## Candidate Approval And Submission
 
 Candidate approval is a human decision point.
@@ -189,6 +202,7 @@ If the Console is only running deterministic jobs, the Codex page may not change
 | Browser spinner but no state change | Observability issue | Check `Recent Jobs`; if no job appears, report Console UX bug. |
 | `paused` with `workflow-resume`, but no resume button | Code/UI bug | Maintenance window must add a tested Console action. |
 | Repeated `Continue workflow` gives same missing artifact | Workflow contract gap unless the missing artifact is expected | Generate/import the artifact if documented; otherwise maintenance window fixes code/tests. |
+| Source run polls a simulation for a long time after 429/`Retry-After` | Platform pacing or bounded poll recovery | Watch `Recent Jobs`; if `run_errors.jsonl` shows `SIMULATION_POLL_TIMEOUT`, retry later or run a smaller/different batch. |
 | `failed` status | Code/data/platform failure | Stop clicking; inspect diagnostics and hand to maintenance window. |
 | Login/API/network error | External state | Fix credentials, platform login, proxy, or retry after platform recovery. |
 | Need candidate approval or submit confirmation | Human decision | User must choose; do not automate submission. |

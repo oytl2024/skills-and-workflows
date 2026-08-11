@@ -68,6 +68,22 @@ python -m wqb.cli workflow-status --knowledge-root 'C:\Users\oytl\Desktop\pyproj
 python -m wqb.cli workflow-resume --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
 ```
 
+If a live source Scout/Seed run was interrupted or hit a bounded simulation
+poll timeout, keep the active Orchestrator run unchanged and recover the source
+run explicitly:
+
+```powershell
+python -m wqb.cli complete-in-flight --run-dir 'C:\Users\oytl\Desktop\pyproject\brain\runs\<source-run-id>' --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
+```
+
+Then import only after the source run has a valid `candidates.csv`:
+
+```powershell
+python -m wqb.cli workflow-import-scout-seed-artifacts --source-run-id '<source-run-id>' --run-dir 'C:\Users\oytl\Desktop\pyproject\brain\runs' --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
+python -m wqb.cli workflow-resume --run-dir 'C:\Users\oytl\Desktop\pyproject\brain\runs' --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
+python -m wqb.cli workflow-continue --run-dir 'C:\Users\oytl\Desktop\pyproject\brain\runs' --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
+```
+
 ## Knowledge Maintenance
 
 The active vault has three layers:

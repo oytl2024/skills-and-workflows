@@ -60,7 +60,7 @@ class WQBClient:
         response.raise_for_status()
         self.authenticated = True
 
-    def request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
+    def request(self, method: str, path: str, *, respect_retry_after: bool = True, **kwargs: Any) -> requests.Response:
         """Input: HTTP method/path. Output: response. Retry transient failures and respect platform pacing."""
         if not self.authenticated:
             self.authenticate()
@@ -77,14 +77,14 @@ class WQBClient:
                     continue
                 raise
             retry_after = response.headers.get("Retry-After")
-            if retry_after and attempt < self.max_retries:
+            if respect_retry_after and retry_after and attempt < self.max_retries:
                 time.sleep(float(retry_after))
                 continue
             if response.status_code == 401 and attempt < self.max_retries:
                 self.authenticated = False
                 self.authenticate()
                 continue
-            if response.status_code == 429 and attempt < self.max_retries:
+            if respect_retry_after and response.status_code == 429 and attempt < self.max_retries:
                 time.sleep(self.base_backoff_seconds * (attempt + 1))
                 continue
             if 500 <= response.status_code < 600 and attempt < self.max_retries:

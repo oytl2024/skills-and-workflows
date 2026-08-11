@@ -53,6 +53,7 @@ from wqb.cli import (
 )
 from wqb.config import load_config
 from wqb.recorder import RunRecorder
+from wqb.simulator import SimulationPollTimeout
 
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -1869,6 +1870,58 @@ class CliTests(unittest.TestCase):
         finally:
             cleanup_run_dir(run_dir)
 
+    def test_refresh_existing_alpha_batch_records_recoverable_child_poll_error(self):
+        class FakeResponse:
+            def __init__(self, headers=None, payload=None):
+                self.headers = headers or {}
+                self.payload = payload or {}
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        class FakeClient:
+            def get_json(self, path):
+                if path == "/alphas/old1":
+                    return {
+                        "settings": {"region": "USA", "decay": 10},
+                        "regular": {"code": "rank(close)"},
+                    }
+                raise AssertionError(f"unexpected path: {path}")
+
+            def post_json(self, path, payload):
+                return FakeResponse(headers={"Location": "/simulations/parent"})
+
+            def request(self, method, path):
+                if path == "/simulations/parent":
+                    return FakeResponse(payload={"children": ["child1"]})
+                if path == "/simulations/child1":
+                    raise SimulationPollTimeout("simulation poll exceeded Retry-After limit for /simulations/child1")
+                raise AssertionError(f"unexpected request: {method} {path}")
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+
+            summaries = refresh_existing_alpha_batch(
+                FakeClient(),
+                recorder,
+                "old1",
+                setting_variants=[{"decay": 15}],
+            )
+
+            self.assertEqual(summaries, [])
+            errors = recorder.read_jsonl("run_errors.jsonl")
+            self.assertEqual(errors[0]["stage"], "refresh_alpha_batch_child_poll")
+            self.assertEqual(errors[0]["status_code"], "SIMULATION_POLL_TIMEOUT")
+            self.assertEqual(errors[0]["progress_url"], "/simulations/parent")
+            self.assertIn("/simulations/child1", errors[0]["message"])
+            self.assertEqual(summarize_run_dir(run_dir)["in_flight_count"], 1)
+        finally:
+            cleanup_run_dir(run_dir)
+
     def test_complete_in_flight_simulations_records_checked_alpha(self):
         class FakeResponse:
             def __init__(self, payload=None):
@@ -2615,6 +2668,54 @@ class CliTests(unittest.TestCase):
         finally:
             cleanup_run_dir(run_dir)
 
+    def test_submit_candidate_payloads_records_recoverable_multi_child_poll_error(self):
+        class FakeResponse:
+            def __init__(self, headers=None, payload=None):
+                self.headers = headers or {}
+                self.payload = payload or {}
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        class FakeClient:
+            def post_json(self, path, payload):
+                return FakeResponse(headers={"Location": "/simulations/parent"})
+
+            def request(self, method, path):
+                if path == "/simulations/parent":
+                    return FakeResponse(payload={"children": ["child1"]})
+                if path == "/simulations/child1":
+                    raise SimulationPollTimeout("simulation poll exceeded Retry-After limit for /simulations/child1")
+                raise AssertionError(f"unexpected request: {method} {path}")
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+            payloads = [{"type": "REGULAR", "regular": "rank(field_0)", "settings": {}}]
+            metadata = [{"expression_hash": "h0", "expression": "rank(field_0)"}]
+
+            summaries = submit_candidate_payloads(
+                FakeClient(),
+                recorder,
+                payloads,
+                metadata,
+                submit_mode="multi",
+                stage_prefix="unit",
+            )
+
+            self.assertEqual(summaries, [])
+            errors = recorder.read_jsonl("run_errors.jsonl")
+            self.assertEqual(errors[0]["stage"], "unit_multi_child_poll")
+            self.assertEqual(errors[0]["status_code"], "SIMULATION_POLL_TIMEOUT")
+            self.assertEqual(errors[0]["progress_url"], "/simulations/parent")
+            self.assertIn("/simulations/child1", errors[0]["message"])
+            self.assertEqual(summarize_run_dir(run_dir)["in_flight_count"], 1)
+        finally:
+            cleanup_run_dir(run_dir)
+
     def test_run_field_batch_uses_field_search_and_records_check(self):
         class FakeResponse:
             def __init__(self, headers=None, payload=None):
@@ -3300,6 +3401,113 @@ class CliTests(unittest.TestCase):
         finally:
             cleanup_run_dir(run_dir)
 
+    def test_run_field_batch_records_recoverable_poll_timeout(self):
+        class FakeResponse:
+            def __init__(self, headers=None, payload=None):
+                self.headers = headers or {}
+                self.payload = payload or {}
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        class FakeClient:
+            def get_json(self, path):
+                if path.startswith("/data-fields"):
+                    return {"results": [{"id": "field_0", "coverage": 1.0, "alphaCount": 0}]}
+                raise AssertionError(f"unexpected path: {path}")
+
+            def post_json(self, path, payload):
+                return FakeResponse(headers={"Location": "/simulations/stuck"})
+
+            def request(self, method, path):
+                raise SimulationPollTimeout("simulation poll exceeded Retry-After limit for /simulations/stuck")
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+            config = load_config(
+                "configs/stage1_usa_d1.yaml",
+                overrides={"max_alphas_per_round": 1, "run_root": str(TESTS_DIR)},
+            )
+
+            summaries = run_field_batch(
+                FakeClient(),
+                recorder,
+                config,
+                field_search="field",
+                workflow_stage="seed",
+                submit_mode="serial",
+            )
+
+            self.assertEqual(summaries, [])
+            errors = recorder.read_jsonl("run_errors.jsonl")
+            self.assertEqual(errors[0]["stage"], "run_field_batch_poll")
+            self.assertEqual(errors[0]["status"], "RECOVERABLE")
+            self.assertEqual(errors[0]["status_code"], "SIMULATION_POLL_TIMEOUT")
+            self.assertEqual(errors[0]["progress_url"], "/simulations/stuck")
+            self.assertEqual(summarize_run_dir(run_dir)["in_flight_count"], 1)
+        finally:
+            cleanup_run_dir(run_dir)
+
+    def test_run_field_batch_records_recoverable_multi_child_poll_timeout(self):
+        class FakeResponse:
+            def __init__(self, headers=None, payload=None):
+                self.headers = headers or {}
+                self.payload = payload or {}
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        class FakeClient:
+            def get_json(self, path):
+                if path.startswith("/data-fields"):
+                    return {"results": [{"id": "field_0", "coverage": 1.0, "alphaCount": 0}]}
+                raise AssertionError(f"unexpected path: {path}")
+
+            def post_json(self, path, payload):
+                return FakeResponse(headers={"Location": "/simulations/parent"})
+
+            def request(self, method, path):
+                if path == "/simulations/parent":
+                    return FakeResponse(payload={"children": ["child1"]})
+                if path == "/simulations/child1":
+                    raise SimulationPollTimeout("simulation poll exceeded Retry-After limit for /simulations/child1")
+                raise AssertionError(f"unexpected request: {method} {path}")
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+            config = load_config(
+                "configs/stage1_usa_d1.yaml",
+                overrides={"max_alphas_per_round": 1, "run_root": str(TESTS_DIR)},
+            )
+
+            summaries = run_field_batch(
+                FakeClient(),
+                recorder,
+                config,
+                field_search="field",
+                workflow_stage="seed",
+                submit_mode="multi",
+            )
+
+            self.assertEqual(summaries, [])
+            errors = recorder.read_jsonl("run_errors.jsonl")
+            self.assertEqual(errors[0]["stage"], "run_field_batch_multi_child_poll")
+            self.assertEqual(errors[0]["status"], "RECOVERABLE")
+            self.assertEqual(errors[0]["status_code"], "SIMULATION_POLL_TIMEOUT")
+            self.assertEqual(errors[0]["progress_url"], "/simulations/parent")
+            self.assertIn("/simulations/child1", errors[0]["message"])
+            self.assertEqual(summarize_run_dir(run_dir)["in_flight_count"], 1)
+        finally:
+            cleanup_run_dir(run_dir)
+
     def test_run_field_batch_multisimulation_sleeps_between_chunks(self):
         class FakeResponse:
             def __init__(self, headers=None, payload=None):
@@ -3820,6 +4028,53 @@ class CliTests(unittest.TestCase):
             errors = recorder.read_jsonl("run_errors.jsonl")
             self.assertEqual(errors[0]["stage"], "complete_in_flight")
             self.assertEqual(errors[0]["status_code"], "NETWORK_ERROR")
+            self.assertEqual(summarize_run_dir(run_dir)["in_flight_count"], 1)
+        finally:
+            cleanup_run_dir(run_dir)
+
+    def test_complete_in_flight_simulations_records_recoverable_child_poll_error(self):
+        class FakeResponse:
+            def __init__(self, payload=None):
+                self.headers = {}
+                self.payload = payload or {}
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        class FakeClient:
+            def request(self, method, path):
+                if path == "/simulations/parent1":
+                    return FakeResponse(payload={"children": ["child1"]})
+                if path == "/simulations/child1":
+                    raise SimulationPollTimeout("simulation poll exceeded Retry-After limit for /simulations/child1")
+                raise AssertionError(f"unexpected path: {path}")
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+            recorder.append_jsonl(
+                "simulation_events.jsonl",
+                {
+                    "event": "SUBMITTED",
+                    "parent_alpha_id": "old1",
+                    "expression_hash": "abc",
+                    "progress_url": "/simulations/parent1",
+                    "operator_replacements": {},
+                },
+            )
+
+            completed = complete_in_flight_simulations(FakeClient(), recorder)
+
+            self.assertEqual(completed, [])
+            errors = recorder.read_jsonl("run_errors.jsonl")
+            self.assertEqual(errors[0]["stage"], "complete_in_flight_child_poll")
+            self.assertEqual(errors[0]["status"], "RECOVERABLE")
+            self.assertEqual(errors[0]["status_code"], "SIMULATION_POLL_TIMEOUT")
+            self.assertEqual(errors[0]["progress_url"], "/simulations/parent1")
+            self.assertIn("/simulations/child1", errors[0]["message"])
             self.assertEqual(summarize_run_dir(run_dir)["in_flight_count"], 1)
         finally:
             cleanup_run_dir(run_dir)

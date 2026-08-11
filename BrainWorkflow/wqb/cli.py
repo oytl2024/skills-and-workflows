@@ -601,6 +601,16 @@ def record_recoverable_network_error(
     response = getattr(err, "response", None)
     status_code = getattr(response, "status_code", None) or "NETWORK_ERROR"
     headers = getattr(response, "headers", {}) or {}
+    simulation_poll_fields = {}
+    if getattr(err, "simulation_poll_timeout", False):
+        status_code = "SIMULATION_POLL_TIMEOUT"
+        simulation_poll_fields = {
+            "poll_progress_url": getattr(err, "progress_url", ""),
+            "retry_after_polls": getattr(err, "retry_after_polls", None),
+            "retry_after_wait_seconds": getattr(err, "wait_seconds", None),
+            "max_retry_after_polls": getattr(err, "max_polls", None),
+            "max_retry_after_wait_seconds": getattr(err, "max_wait_seconds", None),
+        }
     rate_limit_fields = {
         "retry_after": headers.get("Retry-After"),
         "x_ratelimit_limit": headers.get("X-Ratelimit-Limit"),
@@ -616,6 +626,7 @@ def record_recoverable_network_error(
             "recoverable": True,
             "message": str(err),
             **{key: value for key, value in rate_limit_fields.items() if value is not None},
+            **{key: value for key, value in simulation_poll_fields.items() if value is not None and value != ""},
             **dict(metadata or {}),
         },
     )
@@ -1647,7 +1658,17 @@ def refresh_existing_alpha_batch(
             )
         return []
 
-    alpha_ids = resolve_multisimulation_alpha_ids(client, progress)
+    try:
+        alpha_ids = resolve_multisimulation_alpha_ids(client, progress)
+    except requests.exceptions.RequestException as err:
+        for item in metadata:
+            record_recoverable_network_error(
+                recorder,
+                "refresh_alpha_batch_child_poll",
+                err,
+                {"progress_url": progress_url, **item},
+            )
+        return []
     summaries = []
     candidate_rows: list[dict[str, Any]] = []
     for item, refreshed_alpha_id in zip(metadata, alpha_ids):
@@ -2245,7 +2266,17 @@ def run_field_batch(
                         },
                     )
                 continue
-            alpha_ids = resolve_multisimulation_alpha_ids(client, progress)
+            try:
+                alpha_ids = resolve_multisimulation_alpha_ids(client, progress)
+            except requests.exceptions.RequestException as err:
+                for item in chunk_metadata:
+                    record_recoverable_network_error(
+                        recorder,
+                        "run_field_batch_multi_child_poll",
+                        err,
+                        {"progress_url": progress_url, **item},
+                    )
+                continue
             for item, alpha_id in zip(chunk_metadata, alpha_ids):
                 try:
                     summary = fetch_check_summary(client, alpha_id)
@@ -2529,7 +2560,17 @@ def submit_candidate_payloads(
                         {"event": "ERROR", "message": message, "progress_url": progress_url, **item},
                     )
                 continue
-            alpha_ids = resolve_multisimulation_alpha_ids(client, progress)
+            try:
+                alpha_ids = resolve_multisimulation_alpha_ids(client, progress)
+            except requests.exceptions.RequestException as err:
+                for item in chunk_metadata:
+                    record_recoverable_network_error(
+                        recorder,
+                        f"{stage_prefix}_multi_child_poll",
+                        err,
+                        {"progress_url": progress_url, **item},
+                    )
+                continue
             for item, alpha_id in zip(chunk_metadata, alpha_ids):
                 try:
                     summary = fetch_check_summary(client, alpha_id)
@@ -2703,10 +2744,27 @@ def complete_in_flight_simulations(client, recorder: RunRecorder) -> list[str]:
                 terminal_hashes.add(str(expression_hash))
             continue
 
-        if len(pending_events) == 1 and progress.get("alpha"):
-            alpha_ids = [extract_alpha_id(progress)]
-        else:
-            alpha_ids = resolve_multisimulation_alpha_ids(client, progress)
+        try:
+            if len(pending_events) == 1 and progress.get("alpha"):
+                alpha_ids = [extract_alpha_id(progress)]
+            else:
+                alpha_ids = resolve_multisimulation_alpha_ids(client, progress)
+        except requests.exceptions.RequestException as err:
+            for event in pending_events:
+                record_recoverable_network_error(
+                    recorder,
+                    "complete_in_flight_child_poll",
+                    err,
+                    {
+                        "parent_alpha_id": event.get("parent_alpha_id"),
+                        "expression_hash": event.get("expression_hash"),
+                        "progress_url": progress_url,
+                        "operator_replacements": event.get("operator_replacements", {}),
+                        "setting_overrides": event.get("setting_overrides", {}),
+                        "setting_variant": event.get("setting_variant", {}),
+                    },
+                )
+            continue
         for event, alpha_id in zip(pending_events, alpha_ids):
             expression_hash = event.get("expression_hash")
             try:
