@@ -321,6 +321,7 @@ def render_dashboard(state: dict[str, Any]) -> str:
 """
     workflow_progress = f"""
 <p>Active run: <code>{escape(str(active.get('run_id', 'none')))}</code></p>
+<form method="post" action="/actions/run"><input type="hidden" name="action" value="workflow-resume"><button>Resume workflow</button></form>
 <form method="post" action="/actions/run"><input type="hidden" name="action" value="workflow-continue"><button>Continue workflow</button></form>
 <form method="post" action="/actions/run">
 <input type="hidden" name="action" value="workflow-import-scout-seed-artifacts">

@@ -421,6 +421,8 @@ def build_cli_command(action: str, paths: ConsolePaths, form: dict[str, Any] | N
         return command
     if action == "workflow-continue":
         return [*base, "workflow-continue", "--knowledge-root", knowledge_root, "--run-dir", str(paths.runs_root)]
+    if action == "workflow-resume":
+        return [*base, "workflow-resume", "--knowledge-root", knowledge_root, "--run-dir", str(paths.runs_root)]
     if action == "workflow-import-scout-seed-artifacts":
         source_run_id = str(data.get("source_run_id", "")).strip()
         if not source_run_id:

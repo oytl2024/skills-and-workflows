@@ -2,6 +2,11 @@
 
 This guide is the operator-facing entry point for using BrainWorkflow without relying on a long Codex chat context.
 
+For click-by-click Console operation, stuck-state diagnosis, and where Codex/AI
+intervenes, read `docs/operations/user_workflow_manual.md` first. This file
+remains the command and contract reference; the user manual is the normal
+day-to-day operating surface.
+
 ## Current Status
 
 - The durable Orchestrator workflow is implemented.
@@ -231,7 +236,9 @@ Implemented:
 - readiness, freshness, option cards, schedule preview;
 - workflow events and approved queue diagnostics;
 - local web server and browser dashboard;
-- action buttons for readiness, option refresh, workflow start/continue, platform compile, research-record compile, and knowledge health checks;
+- action buttons for readiness, option refresh, workflow start/resume/continue,
+  Scout/Seed artifact import, platform compile, research-record compile, and
+  knowledge health checks;
 - durable job records under `runs/console_jobs/`;
 - workflow-change proposal form UI.
 
@@ -350,3 +357,11 @@ work. The local server must not call model APIs directly. Model work is recorded
 durably in `ai_checkpoints.jsonl` for a later Codex agent or automation runner to
 consume and write back with evidence. Alpha submission still requires user
 approval.
+
+## Console Stuck-State Rule
+
+If the Console shows a `next_action` but no matching control, or if a button
+only repeats the same state without explaining the missing prerequisite, treat
+that as a workflow contract bug. Do not solve it with hand-copied files or a
+long chat explanation. Reproduce the stuck state, add a failing test, repair the
+Console/Orchestrator contract, and update `docs/operations/user_workflow_manual.md`.

@@ -7,13 +7,31 @@ This document is for future Codex sessions and human maintainers. It replaces de
 Read these before changing behavior:
 
 1. `README.md`
-2. `docs/operations/operating_guide.md`
-3. `docs/superpowers/specs/2026-07-12-brainworkflow-orchestrator-state-design.md`
-4. `docs/superpowers/plans/2026-07-12-brainworkflow-orchestrator-state-implementation.md`
-5. Local root recovery anchor: `C:\Users\oytl\Desktop\pyproject\brain\milestone.md`
-6. Local task log: `C:\Users\oytl\Desktop\pyproject\brain\todo.md`
+2. `docs/operations/user_workflow_manual.md`
+3. `docs/operations/operating_guide.md`
+4. `docs/superpowers/specs/2026-07-12-brainworkflow-orchestrator-state-design.md`
+5. `docs/superpowers/plans/2026-07-12-brainworkflow-orchestrator-state-implementation.md`
+6. Local root recovery anchor: `C:\Users\oytl\Desktop\pyproject\brain\milestone.md`
+7. Local task log: `C:\Users\oytl\Desktop\pyproject\brain\todo.md`
 
 If the root recovery files are unavailable, use this document plus the committed tests as the source of truth.
+
+## Operation And Maintenance Separation
+
+Keep the actual workflow run and project maintenance in separate loops.
+
+- The **operations loop** uses the Console/CLI, reads durable run state, and performs routine workflow actions: option selection, start, resume, continue, Scout/Seed artifact import, candidate approval, and status checks.
+- The **maintenance loop** changes code, tests, docs, workflow rules, knowledge contracts, or UI behavior when the operations loop exposes a missing control, repeated no-op, unclear state, or broken artifact contract.
+
+Do not rely on a long Codex chat as the operating state. The user should be
+able to recover routine progress from the Console, `run_state.json`,
+`workflow_events.jsonl`, `runs/console_jobs/`, `todo.md`, and `milestone.md`.
+
+When the operations loop finds that the Console has no matching control for
+`next_action`, or clicking a control only repeats the same state without a
+documented prerequisite, treat it as a workflow contract bug. Add a RED test,
+fix the Console/Orchestrator contract, update `docs/operations/user_workflow_manual.md`,
+and then hand the fix back to the operations task.
 
 ## Spec B Knowledge Contract
 
