@@ -28,58 +28,94 @@ def _lock_path(run_dir: str | Path) -> Path:
 
 
 def _acquisition_guard_path(run_dir: str | Path) -> Path:
-    """Input: run dir. Output: guard path. Locate the atomic acquisition guard."""
+    """Input: run dir. Output: guard directory. Locate the atomic acquisition guard."""
     return Path(run_dir) / "source_run_lock.acquire"
 
 
+def _guard_entry_path(guard_path: Path, owner_id: str) -> Path:
+    """Input: guard directory and owner token. Output: owner entry path. Locate one owner's guard entry."""
+    return guard_path / owner_id
+
+
+def _read_guard_entry(guard_path: Path) -> tuple[Path, dict[str, Any]] | None:
+    """Input: guard directory. Output: owner entry and metadata or none. Read the active guard owner safely."""
+    try:
+        entries = [entry for entry in guard_path.iterdir() if entry.is_file()]
+    except OSError:
+        return None
+    if len(entries) != 1:
+        return None
+    entry = entries[0]
+    try:
+        metadata = json.loads(entry.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return (entry, metadata) if isinstance(metadata, dict) else None
+
+
+def _remove_guard_entry(guard_path: Path, entry_path: Path) -> bool:
+    """Input: guard directory and owner entry. Output: removal result. Remove only the observed owner entry."""
+    try:
+        entry_path.unlink()
+    except FileNotFoundError:
+        return False
+    try:
+        guard_path.rmdir()
+    except OSError:
+        pass
+    return True
+
+
 def _acquire_guard(path: Path, process_alive: Callable[[int], bool] | None = None) -> tuple[int, str] | None:
-    """Input: guard path and process probe. Output: descriptor/token or None. Acquire or safely recover a guard."""
+    """Input: guard directory and process probe. Output: descriptor/token or none. Acquire or safely recover a guard."""
     deadline = time.monotonic() + DEFAULT_GUARD_WAIT_SECONDS
     while True:
         try:
-            descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            owner_id = uuid.uuid4().hex
-            os.write(descriptor, json.dumps({"pid": os.getpid(), "owner_id": owner_id, "created_at": time.time()}).encode("utf-8"))
-            return descriptor, owner_id
+            path.mkdir()
         except FileExistsError:
             try:
                 stale = time.time() - path.stat().st_mtime >= DEFAULT_GUARD_STALE_SECONDS
             except FileNotFoundError:
-                stale = False
+                continue
             if stale:
-                try:
-                    guard = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    guard = {}
-                owner_pid = guard.get("pid") if isinstance(guard, dict) else None
-                probe = process_alive or default_process_is_alive
-                try:
-                    owner_dead = isinstance(owner_pid, int) and probe(owner_pid) is False
-                except Exception:
-                    owner_dead = False
-                if owner_dead:
+                guard_entry = _read_guard_entry(path)
+                if guard_entry is not None:
+                    entry_path, guard = guard_entry
+                    owner_pid = guard.get("pid")
+                    probe = process_alive or default_process_is_alive
                     try:
-                        path.unlink()
-                    except FileNotFoundError:
-                        pass
-                    continue
+                        owner_dead = isinstance(owner_pid, int) and probe(owner_pid) is False
+                    except Exception:
+                        owner_dead = False
+                    if owner_dead:
+                        _remove_guard_entry(path, entry_path)
+                        continue
             if time.monotonic() >= deadline:
                 return None
             time.sleep(0.001)
+        else:
+            owner_id = uuid.uuid4().hex
+            entry_path = _guard_entry_path(path, owner_id)
+            descriptor: int | None = None
+            try:
+                descriptor = os.open(entry_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                metadata = {"pid": os.getpid(), "owner_id": owner_id, "created_at": time.time()}
+                os.write(descriptor, json.dumps(metadata).encode("utf-8"))
+                return descriptor, owner_id
+            except Exception:
+                if descriptor is not None:
+                    os.close(descriptor)
+                _remove_guard_entry(path, entry_path)
+                raise
 
 
 def _release_guard(path: Path, descriptor: int, owner_id: str) -> None:
-    """Input: guard path, descriptor, owner token. Output: none. Release only this guard's file."""
-    os.close(descriptor)
+    """Input: guard directory, descriptor, owner token. Output: none. Release only this owner's guard entry."""
     try:
-        guard = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return
-    if isinstance(guard, dict) and guard.get("owner_id") == owner_id:
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
+        os.close(descriptor)
+    except OSError:
+        pass
+    _remove_guard_entry(path, _guard_entry_path(path, owner_id))
 
 
 def read_source_run_lock(run_dir: str | Path) -> dict[str, Any]:

@@ -114,12 +114,13 @@ class SourceRunLockTests(unittest.TestCase):
         self.assertEqual(loaded["status"], "running")
         self.assertEqual(loaded["owner_id"], acquired["owner_id"])
 
-    def test_stale_guard_file_can_be_recovered(self):
+    def test_stale_dead_owner_guard_can_be_recovered(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             guard = root / "source_run_lock.acquire"
             root.mkdir(parents=True, exist_ok=True)
-            guard.write_text('{"pid": 999}', encoding="utf-8")
+            guard.mkdir()
+            (guard / "dead-owner").write_text('{"pid": 999, "owner_id": "dead-owner"}', encoding="utf-8")
             old = time.time() - 3600
             os.utime(guard, (old, old))
             acquired = acquire_source_run_lock(root, "retry-planned", "2026-08-12T00:00:00+00:00", pid=123)
@@ -131,7 +132,8 @@ class SourceRunLockTests(unittest.TestCase):
             root = Path(tmp)
             root.mkdir(parents=True, exist_ok=True)
             guard = root / "source_run_lock.acquire"
-            guard.write_text('{"pid": 999}', encoding="utf-8")
+            guard.mkdir()
+            (guard / "active-owner").write_text('{"pid": 999, "owner_id": "active-owner"}', encoding="utf-8")
             started = time.monotonic()
             result = acquire_source_run_lock(root, "retry-planned", "2026-08-12T00:00:00+00:00", pid=123)
             elapsed = time.monotonic() - started
@@ -143,7 +145,8 @@ class SourceRunLockTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             guard = root / "source_run_lock.acquire"
-            guard.write_text(json.dumps({"pid": 999, "owner_id": "live-owner"}), encoding="utf-8")
+            guard.mkdir()
+            (guard / "live-owner").write_text(json.dumps({"pid": 999, "owner_id": "live-owner"}), encoding="utf-8")
             old = time.time() - 3600
             os.utime(guard, (old, old))
             result = acquire_source_run_lock(root, "retry-planned", "2026-08-12T00:00:00+00:00", pid=123, process_alive=lambda pid: True)
@@ -155,23 +158,40 @@ class SourceRunLockTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             guard = root / "source_run_lock.acquire"
-            guard.write_text(json.dumps({"pid": 999, "owner_id": "dead-owner"}), encoding="utf-8")
+            guard.mkdir()
+            (guard / "dead-owner").write_text(json.dumps({"pid": 999, "owner_id": "dead-owner"}), encoding="utf-8")
             old = time.time() - 3600
             os.utime(guard, (old, old))
             result = acquire_source_run_lock(root, "retry-planned", "2026-08-12T00:00:00+00:00", pid=123, process_alive=lambda pid: False)
 
         self.assertEqual(result["status"], "acquired")
 
-    def test_release_does_not_remove_another_guard_owner(self):
+    def test_late_guard_release_keeps_replacement_owner_entry(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             guard_path = root / "source_run_lock.acquire"
             first_descriptor, first_owner = _acquire_guard(guard_path)
-            guard_path.write_text(json.dumps({"pid": 124, "owner_id": "new-owner"}), encoding="utf-8")
-            _release_guard(guard_path, first_descriptor, first_owner)
-            current = json.loads(guard_path.read_text(encoding="utf-8"))
+            first_released = False
+            second_guard = None
+            try:
+                self.assertTrue(guard_path.is_dir())
+                os.close(first_descriptor)
+                (guard_path / first_owner).unlink()
+                guard_path.rmdir()
+                second_guard = _acquire_guard(guard_path)
+                second_descriptor, second_owner = second_guard
+                _release_guard(guard_path, first_descriptor, first_owner)
+                first_released = True
+                replacement = guard_path / second_owner
+                self.assertTrue(replacement.is_file())
+                _release_guard(guard_path, second_descriptor, second_owner)
+                second_guard = None
+            finally:
+                if not first_released:
+                    _release_guard(guard_path, first_descriptor, first_owner)
+                if second_guard is not None:
+                    _release_guard(guard_path, *second_guard)
 
-        self.assertEqual(current["owner_id"], "new-owner")
 
 
 if __name__ == "__main__":
