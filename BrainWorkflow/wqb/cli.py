@@ -2075,9 +2075,10 @@ def run_field_batch(
         allow_live_fallback=True,
         max_fields=FIELD_BATCH_API_MAX_RECORDS,
     )
-    source_provenance = selection.provenance
     operator_source = selection.operator_source
     template_source = selection.template_source
+    knowledge_fields = filter_fields_by_suffix(selection.fields, field_suffix)
+    knowledge_field_ids = {str(field.get("id", "")) for field in knowledge_fields}
     if field_cache_path:
         field_cache = json.loads(Path(field_cache_path).read_text(encoding="utf-8"))
         fields = cached_fields(
@@ -2087,9 +2088,13 @@ def run_field_batch(
             field_suffix=field_suffix,
         )
         field_source = "cache"
-    elif selection.fields:
+        source_provenance: list[dict[str, Any]] = []
+    elif knowledge_fields:
         fields = selection.fields
         field_source = selection.field_source
+        source_provenance = [
+            row for row in selection.provenance if str(row.get("field_id", "")) in knowledge_field_ids
+        ]
     else:
         fields = fetch_data_fields(
             client,
@@ -2102,6 +2107,7 @@ def run_field_batch(
             max_records=FIELD_BATCH_API_MAX_RECORDS,
         )
         field_source = "live_api"
+        source_provenance = []
     all_field_ids = {str(field.get("id")) for field in fields if field.get("id")}
     if not field_cache_path:
         fields = filter_fields_by_suffix(fields, field_suffix)

@@ -15,6 +15,7 @@ import requests
 
 from wqb.expression import expression_hash
 from wqb.knowledge_contracts import SourceIndexRow, update_source_index
+from wqb.knowledge_source_resolver import SourceSelection
 from wqb.principle_model import OptionCard, ScoreBreakdown, SourceEvidence
 from wqb.cli import (
     authenticate_for_run,
@@ -3142,8 +3143,8 @@ class CliTests(unittest.TestCase):
 
                 meta = recorder.read_jsonl("run_meta.jsonl")[0]
                 self.assertEqual(meta["field_source"], "knowledge")
-                self.assertEqual(meta["operator_source"], "knowledge")
-                self.assertEqual(meta["template_source"], "template_library")
+                self.assertEqual(meta["operator_source"], "code_generator")
+                self.assertEqual(meta["template_source"], "code_templates")
                 self.assertEqual(meta["source_provenance"][0]["field_id"], "buzz_intensity_score_15")
             finally:
                 cleanup_run_dir(run_dir)
@@ -3166,6 +3167,78 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(meta["source_provenance"], [])
             finally:
                 cleanup_run_dir(run_dir)
+
+    def test_run_field_batch_falls_back_when_suffix_removes_knowledge_fields(self):
+        run_dir = make_run_dir()
+        with tempfile.TemporaryDirectory() as tmp:
+            knowledge_root = Path(tmp)
+            machine_root = knowledge_root / "machine"
+            machine_root.mkdir()
+            (machine_root / "data_ledger.jsonl").write_text(
+                json.dumps(
+                    {
+                        "field_id": "buzz_unsuffixed",
+                        "field_type": "VECTOR",
+                        "dataset_id": "analyst_buzz",
+                        "coverage": 0.93,
+                        "instrument_type": "EQUITY",
+                        "region": "USA",
+                        "delay": 1,
+                        "universe": "TOP3000",
+                        "source_quality": "platform_raw_capture",
+                        "source_paths": ["raw/platform/data_fields/2026-08-12/data_fields.md"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            try:
+                recorder = RunRecorder(run_dir)
+                config = load_config(
+                    "configs/stage1_usa_d1.yaml",
+                    overrides={"max_alphas_per_round": 0, "knowledge_root": str(knowledge_root), "run_root": str(TESTS_DIR)},
+                )
+
+                with patch("wqb.cli.fetch_data_fields", return_value=[{"id": "buzz_fast_d1", "type": "VECTOR", "coverage": 0.8}]) as fetch:
+                    run_field_batch(object(), recorder, config, field_search="buzz", field_suffix="_fast_d1")
+
+                meta = recorder.read_jsonl("run_meta.jsonl")[0]
+                self.assertEqual(meta["field_source"], "live_api")
+                self.assertEqual(meta["source_provenance"], [])
+                fetch.assert_called_once()
+            finally:
+                cleanup_run_dir(run_dir)
+
+    def test_run_field_batch_cache_clears_unused_knowledge_provenance(self):
+        run_dir = make_run_dir()
+        cache_path = run_dir / "field_cache.json"
+        cache_path.write_text(
+            json.dumps({"field_queries": [{"fields": [{"id": "cached_buzz", "type": "VECTOR", "coverage": 1.0}]}]}),
+            encoding="utf-8",
+        )
+        selection = SourceSelection(
+            [{"id": "knowledge_buzz", "type": "VECTOR", "coverage": 1.0}],
+            "knowledge",
+            "code_generator",
+            "code_templates",
+            [{"field_id": "knowledge_buzz", "source_quality": "platform_raw_capture"}],
+            [],
+        )
+        try:
+            recorder = RunRecorder(run_dir)
+            config = load_config(
+                "configs/stage1_usa_d1.yaml",
+                overrides={"max_alphas_per_round": 0, "run_root": str(TESTS_DIR)},
+            )
+
+            with patch("wqb.cli.resolve_source_inputs", return_value=selection):
+                run_field_batch(object(), recorder, config, field_cache_path=str(cache_path))
+
+            meta = recorder.read_jsonl("run_meta.jsonl")[0]
+            self.assertEqual(meta["field_source"], "cache")
+            self.assertEqual(meta["source_provenance"], [])
+        finally:
+            cleanup_run_dir(run_dir)
 
     def test_run_field_batch_can_use_cached_fields_without_field_api(self):
         class FakeResponse:

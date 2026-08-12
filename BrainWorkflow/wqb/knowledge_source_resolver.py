@@ -70,8 +70,6 @@ def resolve_source_inputs(
     """Input: vault root, config, filters, fallback flag. Output: source selection. Prefer knowledge ledgers over live API."""
     root = Path(knowledge_root)
     rows = _read_jsonl(existing_machine_resource_path(root, "data_ledger"))
-    operators = _read_jsonl(existing_machine_resource_path(root, "operator_ledger"))
-    templates = _read_jsonl(existing_machine_resource_path(root, "template_library"))
     search = str(field_search).lower().strip()
     exact = str(exact_field_id).strip()
     dataset = str(dataset_id).strip()
@@ -96,8 +94,8 @@ def resolve_source_inputs(
         return SourceSelection(
             [],
             source,
-            "knowledge" if operators else "missing",
-            "template_library" if templates else "missing",
+            "code_generator",
+            "code_templates",
             [],
             ["knowledge_field_coverage_missing"],
         )
@@ -116,8 +114,8 @@ def resolve_source_inputs(
     return SourceSelection(
         [_field_from_ledger(row) for row in selected],
         "knowledge",
-        "knowledge" if operators else "missing",
-        "template_library" if templates else "missing",
+        "code_generator",
+        "code_templates",
         provenance,
         [],
     )

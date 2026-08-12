@@ -46,8 +46,8 @@ class KnowledgeSourceResolverTests(unittest.TestCase):
             )
 
         self.assertEqual(selection.field_source, "knowledge")
-        self.assertEqual(selection.operator_source, "knowledge")
-        self.assertEqual(selection.template_source, "template_library")
+        self.assertEqual(selection.operator_source, "code_generator")
+        self.assertEqual(selection.template_source, "code_templates")
         self.assertEqual(selection.fields[0]["id"], "buzz_intensity_score_15")
         self.assertEqual(selection.provenance[0]["source_quality"], "platform_raw_capture")
         self.assertEqual(selection.blockers, [])
