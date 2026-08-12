@@ -207,29 +207,7 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertNotIn('<input name="objective"', html)
         self.assertNotIn('type="text" name="selected_option_id"', html)
 
-    def test_render_dashboard_exposes_scout_seed_artifact_import_control(self):
-        state = {
-            "readiness": {"exists": True, "passed": True, "blocked": False},
-            "freshness": {"exists": True, "valid": True, "record_count": 6, "stale_count": 0, "missing_count": 0},
-            "data_coverage": {"exists": True, "field_count": 120, "scope_count": 4, "data_set_count": 8, "error_count": 0, "status": "completed"},
-            "startable_scopes": [],
-            "option_cards": [],
-            "schedule": {"preview": "# Schedule"},
-            "jobs": [],
-            "proposal_counts": {},
-            "active_workflow": {"exists": True, "run_id": "active", "current_stage": "scout_seed", "status": "paused"},
-            "approved_queue": [],
-            "queue_diagnostics": [],
-            "workflow_events": [],
-        }
-
-        html = render_dashboard(state)
-
-        self.assertIn('value="workflow-import-scout-seed-artifacts"', html)
-        self.assertIn('name="source_run_id"', html)
-        self.assertIn("Import Scout/Seed artifacts", html)
-
-    def test_render_dashboard_exposes_resume_workflow_control(self):
+    def test_render_dashboard_uses_single_primary_continue_and_stop(self):
         state = {
             "readiness": {"exists": True, "passed": True, "blocked": False},
             "freshness": {"exists": True, "valid": True, "record_count": 6, "stale_count": 0, "missing_count": 0},
@@ -243,12 +221,39 @@ class ConsoleServerTests(unittest.TestCase):
             "approved_queue": [],
             "queue_diagnostics": [],
             "workflow_events": [],
+            "source_bridge": {"action": "rate_limit_wait", "reason": "platform cooldown active"},
         }
 
         html = render_dashboard(state)
 
-        self.assertIn('value="workflow-resume"', html)
-        self.assertIn("Resume workflow", html)
+        self.assertIn('value="workflow-auto-continue"', html)
+        self.assertIn("Continue workflow", html)
+        self.assertIn('value="workflow-stop"', html)
+        self.assertIn("Stop workflow", html)
+        self.assertNotIn('name="source_run_id"', html)
+        self.assertNotIn('value="workflow-resume"', html)
+
+    def test_option_cards_are_directly_selectable(self):
+        state = {
+            "readiness": {"exists": True, "passed": True, "blocked": False},
+            "freshness": {},
+            "data_coverage": {},
+            "startable_scopes": [{"region": "USA", "delay": 1, "universe": "TOP3000"}],
+            "option_cards": [valid_option(option_id="power-pool")],
+            "schedule": {},
+            "jobs": [],
+            "proposal_counts": {},
+            "active_workflow": {"exists": False},
+            "approved_queue": [],
+            "queue_diagnostics": [],
+            "workflow_events": [],
+        }
+
+        html = render_dashboard(state)
+
+        self.assertIn('type="radio"', html)
+        self.assertIn('value="power-pool"', html)
+        self.assertIn("Start workflow", html)
 
     def test_workflow_import_scout_seed_artifacts_action_builds_command(self):
         with tempfile.TemporaryDirectory() as tmp:

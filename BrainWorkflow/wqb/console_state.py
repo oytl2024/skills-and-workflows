@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from itertools import product
 import json
 from pathlib import Path
@@ -466,6 +466,15 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
     proposals = load_workflow_proposals(proposal_dir)
     proposal_counts = Counter(str(row.get("status", "unclassified")) for row in proposals)
     active_workflow, active_run_dir = _active_workflow_summary(paths.runs_root)
+    source_bridge = {"exists": False}
+    if active_run_dir is not None and active_workflow.get("current_stage") == "scout_seed":
+        from wqb.source_bridge import inspect_scout_seed_source_bridge
+
+        source_bridge = inspect_scout_seed_source_bridge(
+            paths.runs_root,
+            active_run_dir,
+            datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        ).to_dict()
     workflow_events = [] if active_run_dir is None else [event.__dict__ for event in read_workflow_events(active_run_dir)]
     approved_queue, queue_diagnostics = _approved_queue_with_diagnostics(paths.runs_root)
     ai_checkpoints = load_ai_checkpoints(checkpoint_dir)
@@ -492,6 +501,7 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
         "ai_checkpoints": ai_checkpoints,
         "milestone": _milestone_summary(paths.milestone_path),
         "active_workflow": active_workflow,
+        "source_bridge": source_bridge,
         "workflow_events": workflow_events,
         "approved_queue": approved_queue,
         "queue_diagnostics": queue_diagnostics,

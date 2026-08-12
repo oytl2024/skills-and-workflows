@@ -316,18 +316,23 @@ def render_dashboard(state: dict[str, Any]) -> str:
 <input type="hidden" name="action" value="workflow-start-from-option">
 {_render_option_controls(cards)}
 {_render_scope_controls(scopes)}
-<button>Start selected workflow</button>
+<button>Start workflow</button>
 </form>
 """
     workflow_progress = f"""
 <p>Active run: <code>{escape(str(active.get('run_id', 'none')))}</code></p>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="workflow-resume"><button>Resume workflow</button></form>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="workflow-continue"><button>Continue workflow</button></form>
 <form method="post" action="/actions/run">
-<input type="hidden" name="action" value="workflow-import-scout-seed-artifacts">
-<label>Source run ID <input name="source_run_id" required placeholder="source-stage1-run"></label>
-<button>Import Scout/Seed artifacts</button>
+<input type="hidden" name="action" value="workflow-auto-continue">
+<button>Continue workflow</button>
 </form>
+<form method="post" action="/actions/run">
+<input type="hidden" name="action" value="workflow-stop">
+<button>Stop workflow</button>
+</form>
+<details>
+<summary>Maintenance diagnostics</summary>
+<p>Manual resume/import commands are maintenance-only. Use them only when a recorded blocker says the automatic bridge is broken.</p>
+</details>
 """
     knowledge_forms = """
 <form method="post" action="/actions/run"><input type="hidden" name="action" value="readiness-check"><button>Run readiness check</button></form>

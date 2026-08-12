@@ -157,6 +157,27 @@ def select_current_work(state: dict[str, Any], timeline: list[dict[str, Any]]) -
                 "details": [f"Job ID: {job.get('job_id', '')}"],
                 "evidence_paths": [str(job.get("summary_path", ""))],
             }
+    source_bridge = state.get("source_bridge", {})
+    if isinstance(source_bridge, dict):
+        action = str(source_bridge.get("action", ""))
+        source_run_id = str(source_bridge.get("source_run_id", ""))
+        details = [str(source_bridge.get("reason", "")), f"Source run: {source_run_id}"]
+        evidence_paths = list(source_bridge.get("evidence_paths", []))
+        source_work = {
+            "rate_limit_wait": ("Rate limited", "waiting", "Continue workflow after retry time"),
+            "import_existing": ("Import existing source", "paused", "Continue workflow to import source artifacts"),
+            "complete_in_flight": ("Complete in-flight source", "waiting", "Continue workflow to recover source results"),
+            "retry_planned": ("Retry planned source", "waiting", "Continue workflow to retry planned source work"),
+        }
+        if action in source_work:
+            title, status, next_action = source_work[action]
+            return {
+                "title": title,
+                "status": status,
+                "next_action": next_action,
+                "details": details,
+                "evidence_paths": evidence_paths,
+            }
     workflow = state.get("active_workflow", {})
     if isinstance(workflow, dict) and workflow.get("exists"):
         stage = str(workflow.get("current_stage", "workflow_start"))

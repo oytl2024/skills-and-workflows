@@ -190,3 +190,40 @@ class ConsoleTimelineTests(unittest.TestCase):
 
         self.assertEqual(paused_row["status"], "paused")
         self.assertEqual(complete_row["status"], "completed")
+
+    def test_current_work_explains_source_bridge_recovery_states(self):
+        base_state = {
+            "jobs": [],
+            "active_workflow": {"exists": True, "run_id": "run1", "current_stage": "scout_seed", "status": "paused"},
+            "workflow_events": [],
+            "ai_checkpoints": [],
+            "freshness": {"stale_count": 0, "missing_count": 0},
+            "data_coverage": {"exists": True, "field_count": 120},
+            "option_cards": [],
+        }
+        expected = {
+            "rate_limit_wait": ("Rate limited", "waiting"),
+            "import_existing": ("Import existing source", "paused"),
+            "complete_in_flight": ("Complete in-flight source", "waiting"),
+            "retry_planned": ("Retry planned source", "waiting"),
+        }
+
+        for action, (title, status) in expected.items():
+            with self.subTest(action=action):
+                state = {
+                    **base_state,
+                    "source_bridge": {
+                        "action": action,
+                        "reason": f"{action} reason",
+                        "source_run_id": "source-1",
+                        "evidence_paths": ["runs/source-1"],
+                    },
+                }
+
+                current = select_current_work(state, build_timeline_rows(state))
+
+                self.assertEqual(current["title"], title)
+                self.assertEqual(current["status"], status)
+                self.assertIn(f"{action} reason", current["details"])
+                self.assertIn("Source run: source-1", current["details"])
+                self.assertEqual(current["evidence_paths"], ["runs/source-1"])
