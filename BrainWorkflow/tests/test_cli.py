@@ -3255,7 +3255,7 @@ class CliTests(unittest.TestCase):
         run_dir = make_run_dir()
         try:
             recorder = RunRecorder(run_dir)
-            config = load_config("configs/stage1_usa_d1.yaml", overrides={"max_alphas_per_round": 20})
+            config = load_config("configs/stage1_usa_d1.yaml", overrides={"max_alphas_per_round": 2})
             client = FakeClient()
 
             run_field_batch(
@@ -3271,8 +3271,9 @@ class CliTests(unittest.TestCase):
             meta = recorder.read_jsonl("run_meta.jsonl")[0]
             self.assertEqual(meta["workflow_stage"], "scout")
             self.assertEqual(meta["human_idea"], "Test simple data-field signal.")
-            self.assertEqual(meta["requested_max_alphas"], 20)
+            self.assertEqual(meta["requested_max_alphas"], 2)
             self.assertEqual(meta["effective_max_alphas"], 30)
+            self.assertEqual(meta["candidate_generation_limit"], 90)
         finally:
             cleanup_run_dir(run_dir)
 

@@ -86,6 +86,11 @@ def cap_simulation_count(stage: str, requested_count: int) -> int:
     return max(0, min(int(requested_count), stage_cap))
 
 
+def stage_budget_summary() -> dict[str, int]:
+    """Input: none. Output: stage cap mapping. Expose immutable simulation caps for UI and docs."""
+    return dict(STAGE_MAX_SIMULATIONS)
+
+
 def max_parenthesis_depth(expression: str) -> int:
     """Input: expression string. Output: int depth. Measure expression nesting by parentheses."""
     depth = 0

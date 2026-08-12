@@ -13,6 +13,18 @@ from wqb.research_workflow import (
 
 
 class ResearchWorkflowTests(unittest.TestCase):
+    def test_stage_budget_summary_keeps_scout_and_seed_distinct(self):
+        from wqb.research_workflow import stage_budget_summary
+
+        summary = stage_budget_summary()
+
+        self.assertEqual(summary["scout"], 30)
+        self.assertEqual(summary["seed"], 8)
+        self.assertEqual(summary["discovery"], 50)
+        self.assertEqual(summary["repair"], 8)
+        self.assertEqual(summary["submit"], 0)
+        self.assertIsNot(summary, __import__("wqb.research_workflow", fromlist=["STAGE_MAX_SIMULATIONS"]).STAGE_MAX_SIMULATIONS)
+
     def test_scout_and_repair_cap_small_batches(self):
         self.assertEqual(cap_simulation_count("scout", 2), 30)
         self.assertEqual(cap_simulation_count("scout", 50), 30)
