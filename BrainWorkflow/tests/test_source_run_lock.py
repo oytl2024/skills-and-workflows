@@ -1,7 +1,11 @@
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import wqb.source_run_lock as source_run_lock
 from wqb.source_run_lock import acquire_source_run_lock, read_source_run_lock, release_source_run_lock
 
 
@@ -40,6 +44,57 @@ class SourceRunLockTests(unittest.TestCase):
             released = release_source_run_lock(root, "retry-planned", "2026-08-12T00:05:00+00:00")
 
         self.assertEqual(released["status"], "released")
+
+    def test_concurrent_acquisition_admits_only_one_owner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            original_read = source_run_lock.read_source_run_lock
+
+            def slow_read(run_dir):
+                row = original_read(run_dir)
+                time.sleep(0.02)
+                return row
+
+            results = []
+
+            def acquire(pid):
+                results.append(
+                    acquire_source_run_lock(
+                        root,
+                        "retry-planned",
+                        "2026-08-12T00:00:00+00:00",
+                        pid=pid,
+                        process_alive=lambda process_id: True,
+                    )
+                )
+
+            with patch.object(source_run_lock, "read_source_run_lock", side_effect=slow_read):
+                threads = [threading.Thread(target=acquire, args=(pid,)) for pid in range(123, 127)]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(timeout=5)
+
+        self.assertEqual(len(results), 4)
+        self.assertEqual(sum(result["status"] == "acquired" for result in results), 1)
+        self.assertEqual(sum(result["status"] == "locked" for result in results), 3)
+
+    def test_mismatched_release_does_not_release_active_owner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            acquired = acquire_source_run_lock(
+                root,
+                "retry-planned",
+                "2026-08-12T00:00:00+00:00",
+                pid=123,
+                process_alive=lambda pid: True,
+            )
+            rejected = release_source_run_lock(root, "retry-planned", "2026-08-12T00:05:00+00:00", pid=124, owner_id="wrong-owner")
+            loaded = read_source_run_lock(root)
+
+        self.assertEqual(rejected["status"], "ownership_mismatch")
+        self.assertEqual(loaded["status"], "running")
+        self.assertEqual(loaded["owner_id"], acquired["owner_id"])
 
 
 if __name__ == "__main__":
