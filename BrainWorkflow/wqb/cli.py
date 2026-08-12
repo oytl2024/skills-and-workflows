@@ -2560,7 +2560,7 @@ def submit_candidate_payloads(
                         },
                         datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
                     )
-                    break
+                    return summaries
                 continue
             for item in chunk_metadata:
                 recorder.append_jsonl("simulation_events.jsonl", {"event": "SUBMITTED", "progress_url": progress_url, **item})

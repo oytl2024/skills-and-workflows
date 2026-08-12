@@ -2668,6 +2668,60 @@ class CliTests(unittest.TestCase):
         finally:
             cleanup_run_dir(run_dir)
 
+    def test_submit_candidate_payloads_does_not_fallback_after_multi_rate_limit(self):
+        class FakeResponse:
+            def __init__(self, headers=None):
+                self.headers = headers or {}
+
+            def raise_for_status(self):
+                return None
+
+        class FakeClient:
+            def __init__(self):
+                self.paths = []
+                self.multi_attempts = 0
+
+            def post_json(self, path, payload):
+                self.paths.append(path)
+                if path == "/simulations" and isinstance(payload, list):
+                    self.multi_attempts += 1
+                    response = requests.Response()
+                    response.status_code = 400 if self.multi_attempts == 1 else 429
+                    response.headers["Retry-After"] = "60"
+                    raise requests.exceptions.HTTPError("submit failed", response=response)
+                return FakeResponse(headers={"Location": "/simulations/serial"})
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+            payloads = [
+                {"type": "REGULAR", "regular": "rank(field_0)", "settings": {}},
+                {"type": "REGULAR", "regular": "rank(field_1)", "settings": {}},
+            ]
+            metadata = [
+                {"expression_hash": "h0", "expression": "rank(field_0)"},
+                {"expression_hash": "h1", "expression": "rank(field_1)"},
+            ]
+            client = FakeClient()
+
+            with patch("wqb.cli.FIELD_BATCH_MULTI_CHUNK_SIZE", 1):
+                summaries = submit_candidate_payloads(
+                    client,
+                    recorder,
+                    payloads,
+                    metadata,
+                    submit_mode="multi",
+                    stage_prefix="unit",
+                    defer_poll=True,
+                )
+
+            self.assertEqual(summaries, [])
+            self.assertEqual(recorder.read_jsonl("simulation_events.jsonl"), [])
+            self.assertEqual(client.paths, ["/simulations", "/simulations"])
+            self.assertEqual((run_dir / "rate_limit_state.json").exists(), True)
+        finally:
+            cleanup_run_dir(run_dir)
+
     def test_submit_candidate_payloads_records_recoverable_multi_child_poll_error(self):
         class FakeResponse:
             def __init__(self, headers=None, payload=None):
