@@ -66,7 +66,7 @@ def _simulation_event_keys(record: dict[str, Any]) -> list[str]:
     """Input: simulation event row. Output: identity keys. Match terminal events to their submitted simulation."""
     return [
         f"{name}:{str(record[name]).strip()}"
-        for name in ("expression_hash", "simulation_id", "progress_url")
+        for name in ("progress_url", "simulation_id", "expression_hash")
         if str(record.get(name, "") or "").strip()
     ]
 
@@ -94,10 +94,9 @@ def _has_in_flight_simulation(events_path: Path) -> bool:
                     for key in keys:
                         submission_for_key[key] = submission_key
                 elif event in {"CHECKED", "ERROR"}:
-                    for key in keys:
-                        submission_key = submission_for_key.get(key)
-                        if submission_key:
-                            pending.pop(submission_key, None)
+                    submission_key = submission_for_key.get(keys[0])
+                    if submission_key:
+                        pending.pop(submission_key, None)
         return bool(pending)
     except OSError:
         return False

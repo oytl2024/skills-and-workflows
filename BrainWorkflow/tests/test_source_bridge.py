@@ -85,11 +85,54 @@ class SourceBridgeTests(unittest.TestCase):
                             "expression_hash": "checked-hash",
                             "progress_url": "https://progress/checked",
                         },
-                        {"event": "CHECKED", "expression_hash": "checked-hash"},
+                        {
+                            "event": "CHECKED",
+                            "expression_hash": "checked-hash",
+                            "progress_url": "https://progress/checked",
+                        },
                         {
                             "event": "SUBMITTED",
                             "expression_hash": "pending-hash",
                             "progress_url": "https://progress/pending",
+                        },
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            decision = inspect_scout_seed_source_bridge(
+                runs, active, "2026-08-12T00:00:00+00:00"
+            )
+
+        self.assertEqual(decision.action, "complete_in_flight")
+        self.assertEqual(decision.source_run_id, "source1")
+
+    def test_bridge_keeps_later_same_expression_submission_pending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            active = runs / "active"
+            source = runs / "source1"
+            active.mkdir()
+            source.mkdir()
+            (source / "simulation_events.jsonl").write_text(
+                "\n".join(
+                    json.dumps(row)
+                    for row in (
+                        {
+                            "event": "SUBMITTED",
+                            "expression_hash": "same-hash",
+                            "progress_url": "https://progress/p1",
+                        },
+                        {
+                            "event": "SUBMITTED",
+                            "expression_hash": "same-hash",
+                            "progress_url": "https://progress/p2",
+                        },
+                        {
+                            "event": "CHECKED",
+                            "expression_hash": "same-hash",
+                            "progress_url": "https://progress/p1",
                         },
                     )
                 )
