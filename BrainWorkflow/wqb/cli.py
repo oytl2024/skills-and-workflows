@@ -45,6 +45,7 @@ from wqb.delivery_verification import run_delivery_verification
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest, write_freshness_report
 from wqb.knowledge_maintenance import run_knowledge_maintenance
 from wqb.knowledge_paths import decision_artifacts_root, machine_resource_path
+from wqb.knowledge_source_resolver import resolve_source_inputs
 from wqb.knowledge_vault_migration import run_knowledge_vault_migration
 from wqb.interaction_memory import append_interaction_note
 from wqb.novelty import score_expression_novelty
@@ -2065,7 +2066,18 @@ def run_field_batch(
     multi_chunk_sleep_seconds: float = DEFAULT_MULTI_CHUNK_SLEEP_SECONDS,
 ) -> list[Any]:
     """Input: WQB client, recorder, config, field filters, mode. Output: check summaries. Run seed fields."""
-    field_source = "api"
+    selection = resolve_source_inputs(
+        config.get("knowledge_root", default_knowledge_root()),
+        config,
+        field_search=field_search,
+        dataset_id=dataset_id,
+        exact_field_id=exact_field_id,
+        allow_live_fallback=True,
+        max_fields=FIELD_BATCH_API_MAX_RECORDS,
+    )
+    source_provenance = selection.provenance
+    operator_source = selection.operator_source
+    template_source = selection.template_source
     if field_cache_path:
         field_cache = json.loads(Path(field_cache_path).read_text(encoding="utf-8"))
         fields = cached_fields(
@@ -2075,6 +2087,9 @@ def run_field_batch(
             field_suffix=field_suffix,
         )
         field_source = "cache"
+    elif selection.fields:
+        fields = selection.fields
+        field_source = selection.field_source
     else:
         fields = fetch_data_fields(
             client,
@@ -2086,6 +2101,7 @@ def run_field_batch(
             search=field_search,
             max_records=FIELD_BATCH_API_MAX_RECORDS,
         )
+        field_source = "live_api"
     all_field_ids = {str(field.get("id")) for field in fields if field.get("id")}
     if not field_cache_path:
         fields = filter_fields_by_suffix(fields, field_suffix)
@@ -2121,6 +2137,9 @@ def run_field_batch(
             "exact_field_id": exact_field_id,
             "submit_mode": submit_mode,
             "field_source": field_source,
+            "operator_source": operator_source,
+            "template_source": template_source,
+            "source_provenance": source_provenance,
             "field_cache_path": field_cache_path,
             "defer_poll": defer_poll,
             "multi_chunk_sleep_seconds": multi_chunk_sleep_seconds,

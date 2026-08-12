@@ -2933,7 +2933,11 @@ class CliTests(unittest.TestCase):
             recorder = RunRecorder(run_dir)
             config = load_config(
                 "configs/stage1_usa_d1.yaml",
-                overrides={"max_alphas_per_round": 1, "run_root": str(TESTS_DIR)},
+                overrides={
+                    "max_alphas_per_round": 1,
+                    "knowledge_root": str(run_dir / "knowledge"),
+                    "run_root": str(TESTS_DIR),
+                },
             )
             client = FakeClient()
 
@@ -3075,7 +3079,11 @@ class CliTests(unittest.TestCase):
             recorder = RunRecorder(run_dir)
             config = load_config(
                 "configs/stage1_usa_d1.yaml",
-                overrides={"max_alphas_per_round": 1, "run_root": str(TESTS_DIR)},
+                overrides={
+                    "max_alphas_per_round": 1,
+                    "knowledge_root": str(run_dir / "knowledge"),
+                    "run_root": str(TESTS_DIR),
+                },
             )
             client = FakeClient()
 
@@ -3095,6 +3103,69 @@ class CliTests(unittest.TestCase):
             self.assertEqual(recorder.read_jsonl("run_meta.jsonl")[0]["template_mode"], "relational")
         finally:
             cleanup_run_dir(run_dir)
+
+    def test_run_field_batch_records_knowledge_source_provenance(self):
+        run_dir = make_run_dir()
+        with tempfile.TemporaryDirectory() as tmp:
+            knowledge_root = Path(tmp)
+            machine_root = knowledge_root / "machine"
+            machine_root.mkdir()
+            (machine_root / "data_ledger.jsonl").write_text(
+                json.dumps(
+                    {
+                        "field_id": "buzz_intensity_score_15",
+                        "field_type": "VECTOR",
+                        "dataset_id": "analyst_buzz",
+                        "coverage": 0.93,
+                        "instrument_type": "EQUITY",
+                        "region": "USA",
+                        "delay": 1,
+                        "universe": "TOP3000",
+                        "source_quality": "platform_raw_capture",
+                        "source_updated_at": "2026-08-12",
+                        "source_paths": ["raw/platform/data_fields/2026-08-12/data_fields.md"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (machine_root / "operator_ledger.jsonl").write_text(json.dumps({"operator": "vec_count"}) + "\n", encoding="utf-8")
+            (machine_root / "template_library.jsonl").write_text(json.dumps({"template_id": "vector_event_count_surprise"}) + "\n", encoding="utf-8")
+            try:
+                recorder = RunRecorder(run_dir)
+                config = load_config(
+                    "configs/stage1_usa_d1.yaml",
+                    overrides={"max_alphas_per_round": 0, "knowledge_root": str(knowledge_root), "run_root": str(TESTS_DIR)},
+                )
+
+                run_field_batch(object(), recorder, config, field_search="buzz")
+
+                meta = recorder.read_jsonl("run_meta.jsonl")[0]
+                self.assertEqual(meta["field_source"], "knowledge")
+                self.assertEqual(meta["operator_source"], "knowledge")
+                self.assertEqual(meta["template_source"], "template_library")
+                self.assertEqual(meta["source_provenance"][0]["field_id"], "buzz_intensity_score_15")
+            finally:
+                cleanup_run_dir(run_dir)
+
+    def test_run_field_batch_labels_missing_knowledge_as_live_api_fallback(self):
+        run_dir = make_run_dir()
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                recorder = RunRecorder(run_dir)
+                config = load_config(
+                    "configs/stage1_usa_d1.yaml",
+                    overrides={"max_alphas_per_round": 0, "knowledge_root": tmp, "run_root": str(TESTS_DIR)},
+                )
+
+                with patch("wqb.cli.fetch_data_fields", return_value=[{"id": "fallback_buzz", "type": "VECTOR", "coverage": 0.8}]):
+                    run_field_batch(object(), recorder, config, field_search="buzz")
+
+                meta = recorder.read_jsonl("run_meta.jsonl")[0]
+                self.assertEqual(meta["field_source"], "live_api")
+                self.assertEqual(meta["source_provenance"], [])
+            finally:
+                cleanup_run_dir(run_dir)
 
     def test_run_field_batch_can_use_cached_fields_without_field_api(self):
         class FakeResponse:
@@ -3379,7 +3450,11 @@ class CliTests(unittest.TestCase):
             recorder = RunRecorder(run_dir)
             config = load_config(
                 "configs/stage1_usa_d1.yaml",
-                overrides={"max_alphas_per_round": 2, "run_root": str(TESTS_DIR)},
+                overrides={
+                    "max_alphas_per_round": 2,
+                    "knowledge_root": str(run_dir / "knowledge"),
+                    "run_root": str(TESTS_DIR),
+                },
             )
             client = FakeClient()
 
