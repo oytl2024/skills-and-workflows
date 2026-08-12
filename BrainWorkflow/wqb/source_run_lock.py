@@ -12,6 +12,8 @@ from wqb.console_progress import process_is_alive as default_process_is_alive
 
 
 DEFAULT_LOCK_TTL_SECONDS = 3600
+DEFAULT_GUARD_STALE_SECONDS = 300
+DEFAULT_GUARD_WAIT_SECONDS = 0.1
 
 
 def _parse_time(value: str) -> datetime:
@@ -30,12 +32,27 @@ def _acquisition_guard_path(run_dir: str | Path) -> Path:
     return Path(run_dir) / "source_run_lock.acquire"
 
 
-def _acquire_guard(path: Path) -> int:
-    """Input: guard path. Output: open guard descriptor. Serialize lock mutations atomically."""
+def _acquire_guard(path: Path) -> int | None:
+    """Input: guard path. Output: descriptor or None. Acquire, recover, or bound a guard attempt."""
+    deadline = time.monotonic() + DEFAULT_GUARD_WAIT_SECONDS
     while True:
         try:
-            return os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(descriptor, json.dumps({"pid": os.getpid(), "created_at": time.time()}).encode("utf-8"))
+            return descriptor
         except FileExistsError:
+            try:
+                stale = time.time() - path.stat().st_mtime >= DEFAULT_GUARD_STALE_SECONDS
+            except FileNotFoundError:
+                stale = False
+            if stale:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+                continue
+            if time.monotonic() >= deadline:
+                return None
             time.sleep(0.001)
 
 
@@ -79,6 +96,8 @@ def acquire_source_run_lock(
     path = _lock_path(root)
     guard_path = _acquisition_guard_path(root)
     guard = _acquire_guard(guard_path)
+    if guard is None:
+        return {"status": "busy", "reason": "active_guard", "path": str(path)}
     try:
         return _acquire_source_run_lock_locked(
             root,
@@ -148,12 +167,16 @@ def release_source_run_lock(
     path = _lock_path(root)
     guard_path = _acquisition_guard_path(root)
     guard = _acquire_guard(guard_path)
+    if guard is None:
+        return {"status": "busy", "reason": "active_guard", "path": str(path)}
     try:
         current = read_source_run_lock(root)
         if current.get("status") == "running":
+            if not owner_id:
+                return {**current, "status": "ownership_required", "path": str(path)}
             action_matches = current.get("action") == str(action)
             pid_matches = pid is None or current.get("pid") == int(pid)
-            owner_matches = owner_id is None or current.get("owner_id") == str(owner_id)
+            owner_matches = current.get("owner_id") == str(owner_id)
             if not (action_matches and pid_matches and owner_matches):
                 return {**current, "status": "ownership_mismatch", "path": str(path)}
         released = {**current, "status": "released", "released_at": now, "released_by": str(action)}

@@ -2,6 +2,7 @@ import tempfile
 import threading
 import time
 import unittest
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -42,6 +43,22 @@ class SourceRunLockTests(unittest.TestCase):
             root = Path(tmp)
             acquire_source_run_lock(root, "retry-planned", "2026-08-12T00:00:00+00:00", pid=123)
             released = release_source_run_lock(root, "retry-planned", "2026-08-12T00:05:00+00:00")
+            loaded = read_source_run_lock(root)
+
+        self.assertEqual(released["status"], "ownership_required")
+        self.assertEqual(loaded["status"], "running")
+
+    def test_correct_owner_identity_releases_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            acquired = acquire_source_run_lock(root, "retry-planned", "2026-08-12T00:00:00+00:00", pid=123)
+            released = release_source_run_lock(
+                root,
+                "retry-planned",
+                "2026-08-12T00:05:00+00:00",
+                pid=acquired["pid"],
+                owner_id=acquired["owner_id"],
+            )
 
         self.assertEqual(released["status"], "released")
 
@@ -95,6 +112,31 @@ class SourceRunLockTests(unittest.TestCase):
         self.assertEqual(rejected["status"], "ownership_mismatch")
         self.assertEqual(loaded["status"], "running")
         self.assertEqual(loaded["owner_id"], acquired["owner_id"])
+
+    def test_stale_guard_file_can_be_recovered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            guard = root / "source_run_lock.acquire"
+            root.mkdir(parents=True, exist_ok=True)
+            guard.write_text('{"pid": 999}', encoding="utf-8")
+            old = time.time() - 3600
+            os.utime(guard, (old, old))
+            acquired = acquire_source_run_lock(root, "retry-planned", "2026-08-12T00:00:00+00:00", pid=123)
+
+        self.assertEqual(acquired["status"], "acquired")
+
+    def test_active_guard_returns_bounded_busy_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            root.mkdir(parents=True, exist_ok=True)
+            guard = root / "source_run_lock.acquire"
+            guard.write_text('{"pid": 999}', encoding="utf-8")
+            started = time.monotonic()
+            result = acquire_source_run_lock(root, "retry-planned", "2026-08-12T00:00:00+00:00", pid=123)
+            elapsed = time.monotonic() - started
+
+        self.assertEqual(result["status"], "busy")
+        self.assertLess(elapsed, 1.0)
 
 
 if __name__ == "__main__":
