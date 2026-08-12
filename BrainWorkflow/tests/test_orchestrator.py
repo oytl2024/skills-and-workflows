@@ -1190,6 +1190,30 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         )
         self.assertIn("scout_seed_artifacts_imported", [event.event_type for event in events])
 
+    def test_import_scout_seed_bridge_decision_imports_existing_source_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orchestrator = WorkflowOrchestrator(self.paths(root))
+            started = orchestrator.start("Power Pool", "option-1", "2026-07-12T00:00:00Z")
+            orchestrator.continue_once("2026-07-12T00:01:00Z")
+            orchestrator.continue_once("2026-07-12T00:02:00Z")
+            orchestrator.continue_once("2026-07-12T00:03:00Z")
+            source_run = root / "runs" / "source-stage1"
+            source_run.mkdir(parents=True)
+            self.persist_hard_pass_artifacts(source_run)
+
+            imported = orchestrator.import_scout_seed_bridge_decision(
+                {"action": "import_existing", "source_run_id": "source-stage1"},
+                "2026-07-12T00:04:00Z",
+            )
+            with self.assertRaisesRegex(ValueError, "not an import decision"):
+                orchestrator.import_scout_seed_bridge_decision(
+                    {"action": "start_source_batch", "source_run_id": "source-stage1"},
+                    "2026-07-12T00:05:00Z",
+                )
+
+        self.assertEqual(imported["imported_artifacts"], ["candidates.csv", "all_alphas.jsonl"])
+
     def test_import_scout_seed_artifacts_rejects_source_run_path_segments(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

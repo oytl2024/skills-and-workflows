@@ -282,6 +282,18 @@ class WorkflowOrchestrator:
         with _workflow_mutation_lock(self.paths.run_root):
             return self._import_scout_seed_artifacts_unlocked(source_run_id, imported_at)
 
+    def import_scout_seed_bridge_decision(
+        self,
+        decision: dict[str, object],
+        imported_at: str,
+    ) -> dict[str, object]:
+        """Input: source bridge decision and timestamp. Output: workflow summary. Import source artifacts selected by the bridge."""
+        action = str(decision.get("action", ""))
+        source_run_id = str(decision.get("source_run_id", ""))
+        if action != "import_existing":
+            raise ValueError("source bridge decision is not an import decision")
+        return self.import_scout_seed_artifacts(source_run_id, imported_at)
+
     def _import_scout_seed_artifacts_unlocked(
         self,
         source_run_id: str,
