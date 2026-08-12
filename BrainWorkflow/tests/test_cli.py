@@ -424,6 +424,13 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.readiness_mode, "research")
         self.assertTrue(args.enable_live_api)
 
+    def test_parse_args_accepts_workflow_auto_continue(self):
+        with patch("sys.argv", ["wqb", "workflow-auto-continue", "--enable-live-api"]):
+            args = parse_args()
+
+        self.assertEqual(args.command, "workflow-auto-continue")
+        self.assertTrue(args.enable_live_api)
+
     def test_compile_knowledge_dispatches_maintenance_pipeline(self):
         output = io.StringIO()
         with patch("sys.argv", ["wqb", "compile-knowledge", "--knowledge-root", "knowledge", "--apply-cleanup", "--max-case-reports", "7"]), patch(

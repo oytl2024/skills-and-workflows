@@ -430,22 +430,18 @@ def _live_gate_kwargs(config: dict[str, Any], run_dir: Path) -> dict[str, Any]:
     }
 
 
-def _print_readiness_blocked(run_dir: Path, error: ReadinessGateError, extra: dict[str, Any] | None = None) -> None:
-    """Input: run dir, readiness error, extra fields. Output: terminal JSON. Report a blocked live command."""
-    print(
-        json.dumps(
-            {
-                "run_dir": str(run_dir),
-                "status": "readiness_blocked",
-                "error": str(error),
-                "readiness_json_path": str(error.json_path),
-                "readiness_markdown_path": str(error.markdown_path),
-                **dict(extra or {}),
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
+def _print_readiness_blocked(run_dir: Path, error: ReadinessGateError, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Input: run dir, readiness error, extra fields. Output: printed blocked payload. Report a blocked live command."""
+    payload = {
+        "run_dir": str(run_dir),
+        "status": "readiness_blocked",
+        "error": str(error),
+        "readiness_json_path": str(error.json_path),
+        "readiness_markdown_path": str(error.markdown_path),
+        **dict(extra or {}),
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return payload
 
 
 def schedule_research_from_option(
@@ -3258,14 +3254,14 @@ def field_batch(
     field_cache_path: str = "",
     defer_poll: bool = False,
     multi_chunk_sleep_seconds: float = DEFAULT_MULTI_CHUNK_SLEEP_SECONDS,
-) -> None:
-    """Input: run config and field filters. Output: run artifacts. Run seed batch from selected fields."""
+) -> dict[str, Any]:
+    """Input: run config and field filters. Output: batch summary. Run seed batch from selected fields."""
     run_dir = make_run_dir(config)
     recorder = RunRecorder(run_dir)
     try:
         require_readiness_gate(**_live_gate_kwargs(config, run_dir))
     except ReadinessGateError as err:
-        _print_readiness_blocked(
+        return _print_readiness_blocked(
             run_dir,
             err,
             {
@@ -3276,29 +3272,23 @@ def field_batch(
                 "workflow_stage": workflow_stage,
             },
         )
-        return
     client = build_client(config)
     if not authenticate_for_run(client, recorder, "field_batch_auth"):
-        print(
-            json.dumps(
-                {
-                    "run_dir": str(run_dir),
-                    "status": "auth_recoverable_error",
-                    "field_search": field_search,
-                    "dataset_id": dataset_id,
-                    "field_suffix": field_suffix,
-                    "template_mode": template_mode,
-                    "workflow_stage": workflow_stage,
-                    "exact_field_id": exact_field_id,
-                    "field_cache_path": field_cache_path,
-                    "defer_poll": defer_poll,
-                    "multi_chunk_sleep_seconds": multi_chunk_sleep_seconds,
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
-        return
+        payload = {
+            "run_dir": str(run_dir),
+            "status": "auth_recoverable_error",
+            "field_search": field_search,
+            "dataset_id": dataset_id,
+            "field_suffix": field_suffix,
+            "template_mode": template_mode,
+            "workflow_stage": workflow_stage,
+            "exact_field_id": exact_field_id,
+            "field_cache_path": field_cache_path,
+            "defer_poll": defer_poll,
+            "multi_chunk_sleep_seconds": multi_chunk_sleep_seconds,
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return payload
     summaries = run_field_batch(
         client,
         recorder,
@@ -3317,30 +3307,26 @@ def field_batch(
     )
     run_status = summarize_run_dir(run_dir, config.get("knowledge_root", default_knowledge_root()))
     status_label = field_batch_status_label(run_status, summaries)
-    print(
-        json.dumps(
-            {
-                "run_dir": str(run_dir),
-                "status": status_label,
-                "field_search": field_search,
-                "dataset_id": dataset_id,
-                "field_suffix": field_suffix,
-                "template_mode": template_mode,
-                "workflow_stage": workflow_stage,
-                "human_idea": human_idea,
-                "exact_field_id": exact_field_id,
-                "field_cache_path": field_cache_path,
-                "defer_poll": defer_poll,
-                "multi_chunk_sleep_seconds": multi_chunk_sleep_seconds,
-                "checked_count": len(summaries),
-                "hard_pass_alpha_ids": [summary.alpha_id for summary in summaries if summary.hard_pass],
-                "failed": {summary.alpha_id: [check.name for check in summary.failed] for summary in summaries},
-                "pending": {summary.alpha_id: [check.name for check in summary.pending] for summary in summaries},
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
+    payload = {
+        "run_dir": str(run_dir),
+        "status": status_label,
+        "field_search": field_search,
+        "dataset_id": dataset_id,
+        "field_suffix": field_suffix,
+        "template_mode": template_mode,
+        "workflow_stage": workflow_stage,
+        "human_idea": human_idea,
+        "exact_field_id": exact_field_id,
+        "field_cache_path": field_cache_path,
+        "defer_poll": defer_poll,
+        "multi_chunk_sleep_seconds": multi_chunk_sleep_seconds,
+        "checked_count": len(summaries),
+        "hard_pass_alpha_ids": [summary.alpha_id for summary in summaries if summary.hard_pass],
+        "failed": {summary.alpha_id: [check.name for check in summary.failed] for summary in summaries},
+        "pending": {summary.alpha_id: [check.name for check in summary.pending] for summary in summaries},
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return payload
 
 
 def smoke(config: dict[str, Any]) -> None:
@@ -3572,6 +3558,7 @@ def parse_args() -> argparse.Namespace:
             "schedule-research",
             "workflow-start",
             "workflow-continue",
+            "workflow-auto-continue",
             "workflow-status",
             "workflow-resume",
             "workflow-abort",
@@ -3782,6 +3769,40 @@ def main() -> None:
             result = orchestrator.start(args.objective, args.selected_option_id, now, selected_scope=selected_scope)
         elif args.command == "workflow-continue":
             result = orchestrator.continue_once(now)
+        elif args.command == "workflow-auto-continue":
+            from wqb.workflow_auto_continue import auto_continue_workflow
+
+            def source_batch_runner(run_config: dict[str, Any], metadata: dict[str, Any]) -> dict[str, object]:
+                """Input: source config and bridge metadata. Output: source batch summary. Run the approved bounded Scout batch."""
+                return field_batch(
+                    run_config,
+                    field_search=str(metadata.get("field_search", "")),
+                    dataset_id=str(metadata.get("dataset_id", "")),
+                    template_mode=str(metadata.get("template_mode", "economic")),
+                    workflow_stage=str(metadata.get("workflow_stage", "scout")),
+                    exact_field_id=str(metadata.get("exact_field_id", "")),
+                    submit_mode=str(metadata.get("submit_mode", "multi")),
+                )
+
+            def complete_runner(source_run_dir: str) -> dict[str, object]:
+                """Input: source run path. Output: source run summary. Complete only existing submitted simulations."""
+                complete_in_flight(config, source_run_dir)
+                return summarize_run_dir(source_run_dir, config.get("knowledge_root", default_knowledge_root()))
+
+            def retry_runner(source_run_dir: str) -> dict[str, object]:
+                """Input: source run path. Output: source run summary. Retry only source-planned candidates."""
+                retry_planned(config, source_run_dir, submit_mode=args.submit_mode, defer_poll=args.defer_poll)
+                return summarize_run_dir(source_run_dir, config.get("knowledge_root", default_knowledge_root()))
+
+            result = auto_continue_workflow(
+                default_orchestrator_paths(config),
+                config,
+                now,
+                enable_live_api=args.enable_live_api,
+                source_batch_runner=source_batch_runner,
+                complete_in_flight_runner=complete_runner,
+                retry_planned_runner=retry_runner,
+            )
         elif args.command == "workflow-status":
             result = orchestrator.status()
         elif args.command == "workflow-resume":

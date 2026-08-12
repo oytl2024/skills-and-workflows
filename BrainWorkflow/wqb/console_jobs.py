@@ -421,6 +421,13 @@ def build_cli_command(action: str, paths: ConsolePaths, form: dict[str, Any] | N
         return command
     if action == "workflow-continue":
         return [*base, "workflow-continue", "--knowledge-root", knowledge_root, "--run-dir", str(paths.runs_root)]
+    if action == "workflow-auto-continue":
+        command = [*base, "workflow-auto-continue", "--knowledge-root", knowledge_root, "--run-dir", str(paths.runs_root)]
+        if data.get("enable_live_api"):
+            command.append("--enable-live-api")
+        return command
+    if action == "workflow-stop":
+        return [*base, "workflow-abort", "--knowledge-root", knowledge_root, "--run-dir", str(paths.runs_root), "--reason", "user stopped from console"]
     if action == "workflow-resume":
         return [*base, "workflow-resume", "--knowledge-root", knowledge_root, "--run-dir", str(paths.runs_root)]
     if action == "workflow-import-scout-seed-artifacts":

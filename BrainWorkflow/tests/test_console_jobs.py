@@ -141,6 +141,18 @@ class ConsoleJobsTests(unittest.TestCase):
         self.assertIn("--run-dir", command)
         self.assertIn(str(paths.runs_root), command)
 
+    def test_build_cli_command_maps_auto_continue_and_stop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+
+            auto_continue = build_cli_command("workflow-auto-continue", paths, {"enable_live_api": True})
+            stop = build_cli_command("workflow-stop", paths, {})
+
+        self.assertIn("workflow-auto-continue", auto_continue)
+        self.assertIn("--enable-live-api", auto_continue)
+        self.assertIn("workflow-abort", stop)
+        self.assertIn("user stopped from console", stop)
+
     def test_workflow_start_command_carries_structured_selected_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = make_paths(Path(tmp))
