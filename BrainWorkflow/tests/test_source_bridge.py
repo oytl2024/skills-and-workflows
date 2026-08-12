@@ -69,6 +69,105 @@ class SourceBridgeTests(unittest.TestCase):
         self.assertEqual(decision.action, "rate_limit_wait")
         self.assertEqual(decision.source_run_id, "source1")
 
+    def test_bridge_detects_pending_submission_after_checked_submission(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            active = runs / "active"
+            source = runs / "source1"
+            active.mkdir()
+            source.mkdir()
+            (source / "simulation_events.jsonl").write_text(
+                "\n".join(
+                    json.dumps(row)
+                    for row in (
+                        {
+                            "event": "SUBMITTED",
+                            "expression_hash": "checked-hash",
+                            "progress_url": "https://progress/checked",
+                        },
+                        {"event": "CHECKED", "expression_hash": "checked-hash"},
+                        {
+                            "event": "SUBMITTED",
+                            "expression_hash": "pending-hash",
+                            "progress_url": "https://progress/pending",
+                        },
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            decision = inspect_scout_seed_source_bridge(
+                runs, active, "2026-08-12T00:00:00+00:00"
+            )
+
+        self.assertEqual(decision.action, "complete_in_flight")
+        self.assertEqual(decision.source_run_id, "source1")
+
+    def test_bridge_rejects_candidates_with_malformed_headers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            active = runs / "active"
+            source = runs / "source1"
+            active.mkdir()
+            source.mkdir()
+            (source / "candidates.csv").write_text(
+                "alpha_id,not_expression_hash\na1,h1\n", encoding="utf-8"
+            )
+
+            decision = inspect_scout_seed_source_bridge(
+                runs, active, "2026-08-12T00:00:00+00:00"
+            )
+
+        self.assertNotEqual(decision.action, "import_existing")
+        self.assertEqual(decision.action, "maintenance_blocker")
+
+    def test_bridge_rejects_candidates_with_empty_identities(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            active = runs / "active"
+            source = runs / "source1"
+            active.mkdir()
+            source.mkdir()
+            (source / "candidates.csv").write_text(
+                "alpha_id,expression_hash\n,\n", encoding="utf-8"
+            )
+
+            decision = inspect_scout_seed_source_bridge(
+                runs, active, "2026-08-12T00:00:00+00:00"
+            )
+
+        self.assertNotEqual(decision.action, "import_existing")
+        self.assertEqual(decision.action, "maintenance_blocker")
+
+    def test_bridge_retries_planned_source_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            active = runs / "active"
+            source = runs / "source1"
+            active.mkdir()
+            source.mkdir()
+            (source / "planned_candidates.jsonl").write_text("{}\n", encoding="utf-8")
+
+            decision = inspect_scout_seed_source_bridge(
+                runs, active, "2026-08-12T00:00:00+00:00"
+            )
+
+        self.assertEqual(decision.action, "retry_planned")
+        self.assertEqual(decision.source_run_id, "source1")
+
+    def test_bridge_reports_maintenance_blocker_without_schedule_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            active = runs / "active"
+            active.mkdir()
+
+            decision = inspect_scout_seed_source_bridge(
+                runs, active, "2026-08-12T00:00:00+00:00"
+            )
+
+        self.assertEqual(decision.action, "maintenance_blocker")
+
     def test_bridge_builds_source_batch_metadata_from_schedule(self):
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)

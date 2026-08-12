@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
@@ -41,7 +42,65 @@ def active_run_needs_scout_seed_candidates(summary: dict[str, Any]) -> bool:
 def _candidate_file_valid(source: Path) -> bool:
     """Input: source run dir. Output: bool. Check candidate file existence before audited import."""
     path = source / "candidates.csv"
-    return path.exists() and path.is_file() and path.stat().st_size > len("alpha_id,expression_hash\n")
+    if not path.exists() or not path.is_file():
+        return False
+    try:
+        with path.open("r", encoding="utf-8", newline="") as file:
+            reader = csv.DictReader(file)
+            required = {"alpha_id", "expression_hash"}
+            if not required.issubset(set(reader.fieldnames or [])):
+                return False
+            has_candidate = False
+            for row in reader:
+                alpha_id = str(row.get("alpha_id", "") or "").strip()
+                expression_hash = str(row.get("expression_hash", "") or "").strip()
+                if not alpha_id or not expression_hash:
+                    return False
+                has_candidate = True
+            return has_candidate
+    except (OSError, csv.Error):
+        return False
+
+
+def _simulation_event_keys(record: dict[str, Any]) -> list[str]:
+    """Input: simulation event row. Output: identity keys. Match terminal events to their submitted simulation."""
+    return [
+        f"{name}:{str(record[name]).strip()}"
+        for name in ("expression_hash", "simulation_id", "progress_url")
+        if str(record.get(name, "") or "").strip()
+    ]
+
+
+def _has_in_flight_simulation(events_path: Path) -> bool:
+    """Input: simulation JSONL path. Output: bool. Track submitted simulations until their own terminal event."""
+    pending: dict[str, dict[str, Any]] = {}
+    submission_for_key: dict[str, str] = {}
+    try:
+        with events_path.open("r", encoding="utf-8") as file:
+            for line in file:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                keys = _simulation_event_keys(record)
+                if not keys:
+                    continue
+                event = str(record.get("event", "")).upper()
+                if event == "SUBMITTED":
+                    submission_key = keys[0]
+                    pending[submission_key] = record
+                    for key in keys:
+                        submission_for_key[key] = submission_key
+                elif event in {"CHECKED", "ERROR"}:
+                    for key in keys:
+                        submission_key = submission_for_key.get(key)
+                        if submission_key:
+                            pending.pop(submission_key, None)
+        return bool(pending)
+    except OSError:
+        return False
 
 
 def _source_runs(runs_root: Path, active_run_dir: Path) -> list[Path]:
@@ -110,16 +169,14 @@ def inspect_scout_seed_source_bridge(
             )
     for source in _source_runs(root, active):
         events_path = source / "simulation_events.jsonl"
-        if events_path.exists():
-            text = events_path.read_text(encoding="utf-8")
-            if "SUBMITTED" in text and "CHECKED" not in text:
-                return SourceBridgeDecision(
-                    "complete_in_flight",
-                    "submitted simulation needs recovery",
-                    source.name,
-                    str(source),
-                    [str(events_path)],
-                )
+        if events_path.exists() and _has_in_flight_simulation(events_path):
+            return SourceBridgeDecision(
+                "complete_in_flight",
+                "submitted simulation needs recovery",
+                source.name,
+                str(source),
+                [str(events_path)],
+            )
     for source in _source_runs(root, active):
         planned_path = source / "planned_candidates.jsonl"
         if planned_path.exists():
