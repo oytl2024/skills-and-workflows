@@ -32,14 +32,15 @@ def _acquisition_guard_path(run_dir: str | Path) -> Path:
     return Path(run_dir) / "source_run_lock.acquire"
 
 
-def _acquire_guard(path: Path) -> int | None:
-    """Input: guard path. Output: descriptor or None. Acquire, recover, or bound a guard attempt."""
+def _acquire_guard(path: Path, process_alive: Callable[[int], bool] | None = None) -> tuple[int, str] | None:
+    """Input: guard path and process probe. Output: descriptor/token or None. Acquire or safely recover a guard."""
     deadline = time.monotonic() + DEFAULT_GUARD_WAIT_SECONDS
     while True:
         try:
             descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(descriptor, json.dumps({"pid": os.getpid(), "created_at": time.time()}).encode("utf-8"))
-            return descriptor
+            owner_id = uuid.uuid4().hex
+            os.write(descriptor, json.dumps({"pid": os.getpid(), "owner_id": owner_id, "created_at": time.time()}).encode("utf-8"))
+            return descriptor, owner_id
         except FileExistsError:
             try:
                 stale = time.time() - path.stat().st_mtime >= DEFAULT_GUARD_STALE_SECONDS
@@ -47,20 +48,34 @@ def _acquire_guard(path: Path) -> int | None:
                 stale = False
             if stale:
                 try:
-                    path.unlink()
-                except FileNotFoundError:
-                    pass
-                continue
+                    guard = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    guard = {}
+                owner_pid = guard.get("pid") if isinstance(guard, dict) else None
+                probe = process_alive or default_process_is_alive
+                try:
+                    owner_dead = isinstance(owner_pid, int) and probe(owner_pid) is False
+                except Exception:
+                    owner_dead = False
+                if owner_dead:
+                    try:
+                        path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    continue
             if time.monotonic() >= deadline:
                 return None
             time.sleep(0.001)
 
 
-def _release_guard(path: Path, descriptor: int) -> None:
-    """Input: guard path and descriptor. Output: none. Release the short-lived mutation guard."""
+def _release_guard(path: Path, descriptor: int, owner_id: str) -> None:
+    """Input: guard path, descriptor, owner token. Output: none. Release only this guard's file."""
+    os.close(descriptor)
     try:
-        os.close(descriptor)
-    finally:
+        guard = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if isinstance(guard, dict) and guard.get("owner_id") == owner_id:
         try:
             path.unlink()
         except FileNotFoundError:
@@ -95,9 +110,10 @@ def acquire_source_run_lock(
     root.mkdir(parents=True, exist_ok=True)
     path = _lock_path(root)
     guard_path = _acquisition_guard_path(root)
-    guard = _acquire_guard(guard_path)
-    if guard is None:
+    guard_state = _acquire_guard(guard_path, process_alive)
+    if guard_state is None:
         return {"status": "busy", "reason": "active_guard", "path": str(path)}
+    guard, guard_owner = guard_state
     try:
         return _acquire_source_run_lock_locked(
             root,
@@ -112,7 +128,7 @@ def acquire_source_run_lock(
             progress_url,
         )
     finally:
-        _release_guard(guard_path, guard)
+        _release_guard(guard_path, guard, guard_owner)
 
 
 def _acquire_source_run_lock_locked(
@@ -166,9 +182,10 @@ def release_source_run_lock(
     root.mkdir(parents=True, exist_ok=True)
     path = _lock_path(root)
     guard_path = _acquisition_guard_path(root)
-    guard = _acquire_guard(guard_path)
-    if guard is None:
+    guard_state = _acquire_guard(guard_path)
+    if guard_state is None:
         return {"status": "busy", "reason": "active_guard", "path": str(path)}
+    guard, guard_owner = guard_state
     try:
         current = read_source_run_lock(root)
         if current.get("status") == "running":
@@ -183,4 +200,4 @@ def release_source_run_lock(
         path.write_text(json.dumps(released, ensure_ascii=False, indent=2), encoding="utf-8")
         return released
     finally:
-        _release_guard(guard_path, guard)
+        _release_guard(guard_path, guard, guard_owner)

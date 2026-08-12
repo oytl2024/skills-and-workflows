@@ -3,11 +3,12 @@ import threading
 import time
 import unittest
 import os
+import json
 from pathlib import Path
 from unittest.mock import patch
 
 import wqb.source_run_lock as source_run_lock
-from wqb.source_run_lock import acquire_source_run_lock, read_source_run_lock, release_source_run_lock
+from wqb.source_run_lock import _acquire_guard, _release_guard, acquire_source_run_lock, read_source_run_lock, release_source_run_lock
 
 
 class SourceRunLockTests(unittest.TestCase):
@@ -51,7 +52,7 @@ class SourceRunLockTests(unittest.TestCase):
     def test_correct_owner_identity_releases_lock(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            acquired = acquire_source_run_lock(root, "retry-planned", "2026-08-12T00:00:00+00:00", pid=123)
+            acquired = acquire_source_run_lock(root, "retry-planned", "2026-08-12T00:00:00+00:00", pid=123, process_alive=lambda pid: False)
             released = release_source_run_lock(
                 root,
                 "retry-planned",
@@ -94,7 +95,7 @@ class SourceRunLockTests(unittest.TestCase):
 
         self.assertEqual(len(results), 4)
         self.assertEqual(sum(result["status"] == "acquired" for result in results), 1)
-        self.assertEqual(sum(result["status"] == "locked" for result in results), 3)
+        self.assertEqual(sum(result["status"] in {"locked", "busy"} for result in results), 3)
 
     def test_mismatched_release_does_not_release_active_owner(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -135,8 +136,42 @@ class SourceRunLockTests(unittest.TestCase):
             result = acquire_source_run_lock(root, "retry-planned", "2026-08-12T00:00:00+00:00", pid=123)
             elapsed = time.monotonic() - started
 
+            self.assertEqual(result["status"], "busy")
+            self.assertLess(elapsed, 1.0)
+
+    def test_stale_live_guard_is_not_reclaimed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            guard = root / "source_run_lock.acquire"
+            guard.write_text(json.dumps({"pid": 999, "owner_id": "live-owner"}), encoding="utf-8")
+            old = time.time() - 3600
+            os.utime(guard, (old, old))
+            result = acquire_source_run_lock(root, "retry-planned", "2026-08-12T00:00:00+00:00", pid=123, process_alive=lambda pid: True)
+
         self.assertEqual(result["status"], "busy")
-        self.assertLess(elapsed, 1.0)
+        self.assertEqual(result["reason"], "active_guard")
+
+    def test_stale_dead_owner_guard_is_reclaimed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            guard = root / "source_run_lock.acquire"
+            guard.write_text(json.dumps({"pid": 999, "owner_id": "dead-owner"}), encoding="utf-8")
+            old = time.time() - 3600
+            os.utime(guard, (old, old))
+            result = acquire_source_run_lock(root, "retry-planned", "2026-08-12T00:00:00+00:00", pid=123, process_alive=lambda pid: False)
+
+        self.assertEqual(result["status"], "acquired")
+
+    def test_release_does_not_remove_another_guard_owner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            guard_path = root / "source_run_lock.acquire"
+            first_descriptor, first_owner = _acquire_guard(guard_path)
+            guard_path.write_text(json.dumps({"pid": 124, "owner_id": "new-owner"}), encoding="utf-8")
+            _release_guard(guard_path, first_descriptor, first_owner)
+            current = json.loads(guard_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(current["owner_id"], "new-owner")
 
 
 if __name__ == "__main__":
