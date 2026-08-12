@@ -52,6 +52,7 @@ from wqb.optimizer import actions_for_check_summary
 from wqb.orchestrator import OrchestratorPaths, WorkflowOrchestrator
 from wqb.principle_model import OptionCard, ScoreBreakdown, SourceEvidence
 from wqb.recorder import RunRecorder
+from wqb.rate_limit_state import cooldown_is_active, read_rate_limit_state, record_rate_limit
 from wqb.research_planner import plan_research_options as build_research_option_rows
 from wqb.research_scheduler import build_research_schedule, research_schedule_to_dict, write_research_schedule
 from wqb.research_workflow import build_parallel_stage_plan, cap_simulation_count, precheck_expression
@@ -2514,6 +2515,19 @@ def submit_candidate_payloads(
     candidate_rows: list[dict[str, Any]] = []
     if submit_mode not in {"multi", "serial"}:
         raise ValueError("submit_mode must be 'multi' or 'serial'")
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    cooldown_state = read_rate_limit_state(recorder.run_dir / "rate_limit_state.json")
+    if cooldown_is_active(cooldown_state, now):
+        recorder.append_jsonl(
+            "run_errors.jsonl",
+            {
+                "stage": f"{stage_prefix}_cooldown",
+                "error_type": "RATE_LIMIT_COOLDOWN_ACTIVE",
+                "retry_at": cooldown_state.get("retry_at", ""),
+                "status": "rate_limit_wait",
+            },
+        )
+        return summaries
     if submit_mode == "multi":
         fallback_payloads: list[dict[str, Any]] = []
         fallback_metadata: list[dict[str, Any]] = []
@@ -2535,6 +2549,17 @@ def submit_candidate_payloads(
                     fallback_payloads.extend(chunk_payloads)
                     fallback_metadata.extend(chunk_metadata)
                 if is_http_status_error(err, 429):
+                    record_rate_limit(
+                        recorder.run_dir,
+                        f"{stage_prefix}_multi_submit",
+                        err,
+                        {
+                            **(chunk_metadata[0] if chunk_metadata else {}),
+                            "payload_count": len(chunk_payloads),
+                            "chunk_start": start,
+                        },
+                        datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                    )
                     break
                 continue
             for item in chunk_metadata:
@@ -2617,6 +2642,13 @@ def submit_candidate_payloads(
         except requests.exceptions.RequestException as err:
             record_recoverable_network_error(recorder, f"{stage_prefix}_submit", err, item)
             if is_http_status_error(err, 429):
+                record_rate_limit(
+                    recorder.run_dir,
+                    f"{stage_prefix}_submit",
+                    err,
+                    {**item, "payload_count": 1},
+                    datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                )
                 break
             continue
         recorder.append_jsonl("simulation_events.jsonl", {"event": "SUBMITTED", "progress_url": progress_url, **item})

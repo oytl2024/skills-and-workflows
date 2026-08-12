@@ -3955,6 +3955,30 @@ class CliTests(unittest.TestCase):
             self.assertEqual(len(recorder.read_jsonl("simulation_events.jsonl")), 0)
             errors = recorder.read_jsonl("run_errors.jsonl")
             self.assertEqual(errors[0]["status_code"], 429)
+            self.assertTrue((run_dir / "rate_limit_state.json").exists())
+        finally:
+            cleanup_run_dir(run_dir)
+
+    def test_retry_planned_candidates_respects_active_cooldown(self):
+        class FakeClient:
+            def post_json(self, path, payload):
+                raise AssertionError("active cooldown must stop submission")
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+            recorder.append_jsonl("planned_candidates.jsonl", {"expression_hash": "h1", "expression": "rank(field_a)"})
+            (run_dir / "rate_limit_state.json").write_text(
+                json.dumps({"status": "cooldown", "retry_at": "2099-01-01T00:00:00+00:00"}),
+                encoding="utf-8",
+            )
+            config = load_config("configs/stage1_usa_d1.yaml", overrides={"run_root": str(TESTS_DIR)})
+
+            summaries = retry_planned_candidates(FakeClient(), recorder, config, submit_mode="serial")
+
+            self.assertEqual(summaries, [])
+            errors = recorder.read_jsonl("run_errors.jsonl")
+            self.assertEqual(errors[0]["status"], "rate_limit_wait")
         finally:
             cleanup_run_dir(run_dir)
 
