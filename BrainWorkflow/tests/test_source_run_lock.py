@@ -141,6 +141,30 @@ class SourceRunLockTests(unittest.TestCase):
             self.assertEqual(result["status"], "busy")
             self.assertLess(elapsed, 1.0)
 
+    def test_fresh_empty_guard_returns_bounded_busy_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            guard = root / "source_run_lock.acquire"
+            guard.mkdir()
+            started = time.monotonic()
+            result = acquire_source_run_lock(root, "retry-planned", "2026-08-12T00:00:00+00:00", pid=123)
+            elapsed = time.monotonic() - started
+
+        self.assertEqual(result["status"], "busy")
+        self.assertEqual(result["reason"], "active_guard")
+        self.assertLess(elapsed, 1.0)
+
+    def test_stale_empty_guard_is_reclaimed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            guard = root / "source_run_lock.acquire"
+            guard.mkdir()
+            old = time.time() - 3600
+            os.utime(guard, (old, old))
+            result = acquire_source_run_lock(root, "retry-planned", "2026-08-12T00:00:00+00:00", pid=123)
+
+        self.assertEqual(result["status"], "acquired")
+
     def test_stale_live_guard_is_not_reclaimed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

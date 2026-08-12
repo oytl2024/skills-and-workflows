@@ -79,7 +79,16 @@ def _acquire_guard(path: Path, process_alive: Callable[[int], bool] | None = Non
                 continue
             if stale:
                 guard_entry = _read_guard_entry(path)
-                if guard_entry is not None:
+                if guard_entry is None:
+                    try:
+                        path.rmdir()
+                    except FileNotFoundError:
+                        continue
+                    except OSError:
+                        pass
+                    else:
+                        continue
+                else:
                     entry_path, guard = guard_entry
                     owner_pid = guard.get("pid")
                     probe = process_alive or default_process_is_alive
