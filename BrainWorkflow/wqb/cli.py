@@ -13,6 +13,7 @@ from uuid import uuid4
 import requests
 
 from wqb.benchmark import benchmark_alpha_record
+from wqb.candidate_queue import STATUS_UPDATE_STATUSES
 from wqb.checker import fetch_check_summary
 from wqb.client import WQBClient
 from wqb.config import load_config
@@ -24,26 +25,52 @@ from wqb.data_catalog import (
     filter_fields_by_suffix,
     select_seed_fields,
 )
-from wqb.data_ledger import load_data_ledger
+from wqb.data_capture_plan import (
+    build_stratified_capture_plan,
+    discover_scope_matrix,
+    load_capture_plan,
+    write_capture_plan,
+)
+from wqb.data_field_capture import capture_platform_data_fields
+from wqb.data_ledger import load_data_ledger, load_data_ledger_from_knowledge
+from wqb.data_ledger_compile import compile_data_ledger_from_raw
 from wqb.decision_log import write_option_cards
 from wqb.expression import expression_hash, is_power_pool_complexity_ok, replace_operator_names
 from wqb.generator import build_settings, generate_seed_candidates, simulation_payload
 from wqb.knowledge import fetch_knowledge_snapshot
 from wqb.knowledge_bootstrap import bootstrap_knowledge, bootstrap_summary_to_dict
+from wqb.knowledge_compile import compile_research_records
+from wqb.delivery_gate import run_delivery_gate
+from wqb.delivery_verification import run_delivery_verification
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest, write_freshness_report
+from wqb.knowledge_maintenance import run_knowledge_maintenance
+from wqb.knowledge_paths import decision_artifacts_root, machine_resource_path
+from wqb.knowledge_source_resolver import resolve_source_inputs
+from wqb.knowledge_vault_migration import run_knowledge_vault_migration
+from wqb.interaction_memory import append_interaction_note
 from wqb.novelty import score_expression_novelty
 from wqb.optimizer import actions_for_check_summary
+from wqb.operator_semantics import expression_operator_provenance
+from wqb.orchestrator import OrchestratorPaths, WorkflowOrchestrator
 from wqb.principle_model import OptionCard, ScoreBreakdown, SourceEvidence
 from wqb.recorder import RunRecorder
-from wqb.research_planner import generate_research_options
+from wqb.rate_limit_state import (
+    cooldown_is_active,
+    read_rate_limit_state,
+    record_rate_limit,
+    reset_rate_limit,
+)
+from wqb.research_planner import plan_research_options as build_research_option_rows
 from wqb.research_scheduler import build_research_schedule, research_schedule_to_dict, write_research_schedule
 from wqb.research_workflow import build_parallel_stage_plan, cap_simulation_count, precheck_expression
 from wqb.rule_refresh import refresh_incentive_snapshot
 from wqb.run_readiness import evaluate_run_readiness, write_readiness_reports
 from wqb.simulator import extract_alpha_id, poll_simulation, resolve_multisimulation_alpha_ids, submit_multisimulation, submit_simulation
 from wqb.subagent_handoff import build_handoff_packets, write_handoff_packets
-from wqb.template_library import load_template_library
+from wqb.template_library import load_template_library, load_template_library_from_knowledge
 from wqb.workflow_launcher import create_run_manifest, load_workflow_launch_config, write_run_manifest
+from wqb.workflow_paths import resolve_project_root, resolve_run_root
+from wqb.console_server import run_console
 
 
 FIELD_BATCH_MULTI_CHUNK_SIZE = 5
@@ -73,7 +100,21 @@ def default_knowledge_root() -> Path:
 
 def default_option_output_dir() -> str:
     """Input: none. Output: str path. Return the default research option card directory."""
-    return str(default_knowledge_root() / "wiki" / "70_decisions")
+    return str(decision_artifacts_root(default_knowledge_root()))
+
+
+def default_orchestrator_paths(config: dict[str, Any]) -> OrchestratorPaths:
+    """Input: run config. Output: OrchestratorPaths. Resolve local workflow state roots."""
+    workflow_root = Path(__file__).resolve().parents[1]
+    project_root = resolve_project_root(workflow_root)
+    knowledge_root = Path(config.get("knowledge_root", default_knowledge_root()))
+    run_root = resolve_run_root(workflow_root, config.get("run_root", "runs"))
+    return OrchestratorPaths(
+        project_root=project_root,
+        workflow_root=workflow_root,
+        knowledge_root=knowledge_root,
+        run_root=run_root,
+    )
 
 
 def make_run_dir(config: dict[str, Any]) -> Path:
@@ -96,15 +137,22 @@ def plan_research_options(config: dict[str, Any], max_options: int, output_dir: 
     generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     client = build_client(config)
     snapshot = refresh_incentive_snapshot(client, generated_at=generated_at)
-    cards = generate_research_options(snapshot, max_options=max_options)
-    jsonl_path, markdown_path = write_option_cards(Path(output_dir), cards, generated_at)
+    planner_result = build_research_option_rows(
+        knowledge_root=config.get("knowledge_root", default_knowledge_root()),
+        generated_at=generated_at,
+        max_options=max_options,
+        live_api_enabled=True,
+        snapshot=snapshot,
+    )
+    option_rows = planner_result["options"]
+    jsonl_path, markdown_path = write_option_cards(Path(output_dir), option_rows, generated_at)
     return {
         "generated_at": generated_at,
-        "option_count": len(cards),
+        "option_count": len(option_rows),
         "jsonl_path": str(jsonl_path),
         "markdown_path": str(markdown_path),
         "refresh_error_count": len(snapshot.refresh_errors),
-        "options": [card.title for card in cards],
+        "options": [str(row["title"]) for row in option_rows],
     }
 
 
@@ -125,7 +173,7 @@ def knowledge_health_check(
     output_path: str | Path,
     today_value: str | None = None,
 ) -> dict[str, Any]:
-    """Input: knowledge root, manifest path, output path, date string. Output: summary dict. Check compiled knowledge freshness."""
+    """Input: knowledge root, manifest path, output path, date string. Output: summary dict. Check freshness and contracts."""
     root = Path(knowledge_root)
     manifest = Path(manifest_path)
     if not manifest.is_absolute():
@@ -137,10 +185,26 @@ def knowledge_health_check(
     records = load_freshness_manifest(manifest, strict=True)
     statuses = evaluate_freshness(records, current, artifact_root=root)
     report = write_freshness_report(output, statuses, datetime.now(timezone.utc).replace(microsecond=0).isoformat())
+    from wqb.knowledge_freshness import evaluate_knowledge_contract_health
+
+    contract_health = evaluate_knowledge_contract_health(root)
+    contract_lines = ["", "## Knowledge Contract Health", "", f"Issue count: `{contract_health['issue_count']}`", ""]
+    if contract_health["issues"]:
+        contract_lines.extend(["| Code | Path | Message |", "| --- | --- | --- |"])
+        contract_lines.extend(
+            f"| {issue['code']} | `{issue['path']}` | {issue['message']} |"
+            for issue in contract_health["issues"]
+        )
+    else:
+        contract_lines.append("No contract issues found.")
+    with report.open("a", encoding="utf-8") as handle:
+        handle.write("\n".join(contract_lines) + "\n")
     return {
         "record_count": len(statuses),
         "stale_count": len([status for status in statuses if status.stale]),
         "missing_count": len([status for status in statuses if not status.artifact_exists]),
+        "contract_issue_count": contract_health["issue_count"],
+        "contract_health": contract_health,
         "report_path": str(report),
     }
 
@@ -149,6 +213,97 @@ def bootstrap_knowledge_command(knowledge_root: str | Path, seed_root: str | Pat
     """Input: knowledge root and seed root. Output: summary dict. Materialize formal knowledge artifacts."""
     summary = bootstrap_knowledge(knowledge_root, seed_root)
     return bootstrap_summary_to_dict(summary)
+
+
+def compile_research_records_command(knowledge_root: str | Path) -> dict[str, Any]:
+    """Input: knowledge root. Output: summary dict. Compile raw research records into wiki notes."""
+    return compile_research_records(knowledge_root)
+
+
+def capture_platform_data_fields_command(
+    config: dict[str, Any],
+    knowledge_root: str | Path,
+    instrument_types: list[str] | None = None,
+    regions: list[str] | None = None,
+    delays: list[int] | None = None,
+    universes: list[str] | None = None,
+    max_scopes: int = 0,
+    max_datasets_per_scope: int = 0,
+    max_fields_per_dataset: int = 0,
+    resume_capture: bool = False,
+    generated_at: str | None = None,
+    capture_plan_path: str | Path | None = None,
+    fields_per_scope: int = 0,
+) -> dict[str, Any]:
+    """Input: config, vault root, filters, limits. Output: capture summary. Fetch platform data fields into raw."""
+    client = build_client(config)
+    client.authenticate()
+    return capture_platform_data_fields(
+        client,
+        knowledge_root,
+        generated_at=generated_at,
+        instrument_types=instrument_types,
+        regions=regions,
+        delays=delays,
+        universes=universes,
+        max_scopes=max_scopes,
+        max_datasets_per_scope=max_datasets_per_scope,
+        max_fields_per_dataset=max_fields_per_dataset,
+        resume_capture=resume_capture,
+        capture_plan_path=capture_plan_path,
+        fields_per_scope=fields_per_scope,
+    )
+
+
+def discover_data_scope_matrix_command(
+    config: dict[str, Any],
+    knowledge_root: str | Path,
+    instrument_types: list[str] | None = None,
+    regions: list[str] | None = None,
+    delays: list[int] | None = None,
+    universes: list[str] | None = None,
+    max_scopes: int = 0,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Input: config, knowledge root, scope filters. Output: discovery summary. Probe platform scope availability."""
+    client = build_client(config)
+    client.authenticate()
+    return discover_scope_matrix(
+        client,
+        knowledge_root,
+        generated_at=generated_at,
+        instrument_types=instrument_types,
+        regions=regions,
+        delays=delays,
+        universes=universes,
+        max_scopes=max_scopes,
+    )
+
+
+def plan_stratified_data_capture_command(
+    knowledge_root: str | Path,
+    fields_per_scope: int = 100,
+    max_scopes: int = 0,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Input: knowledge root and sampling limits. Output: plan summary. Build a bounded plan from scope discovery."""
+    generated = generated_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    scope_matrix_path = machine_resource_path(knowledge_root, "scope_matrix")
+    rows = load_capture_plan(scope_matrix_path)
+    plan = build_stratified_capture_plan(rows, fields_per_scope=fields_per_scope, max_scopes=max_scopes)
+    path = write_capture_plan(knowledge_root, plan, generated)
+    return {
+        "generated_at": generated,
+        "scope_matrix_path": str(scope_matrix_path),
+        "capture_plan_path": str(path),
+        "scope_count": len(plan),
+        "fields_per_scope": int(fields_per_scope),
+    }
+
+
+def compile_data_ledger_command(knowledge_root: str | Path, capture_dir: str | Path | None = None) -> dict[str, Any]:
+    """Input: vault root and optional capture dir. Output: compile summary. Build the data ledger from raw fields."""
+    return compile_data_ledger_from_raw(knowledge_root, capture_dir=capture_dir)
 
 
 def readiness_check(
@@ -281,22 +436,18 @@ def _live_gate_kwargs(config: dict[str, Any], run_dir: Path) -> dict[str, Any]:
     }
 
 
-def _print_readiness_blocked(run_dir: Path, error: ReadinessGateError, extra: dict[str, Any] | None = None) -> None:
-    """Input: run dir, readiness error, extra fields. Output: terminal JSON. Report a blocked live command."""
-    print(
-        json.dumps(
-            {
-                "run_dir": str(run_dir),
-                "status": "readiness_blocked",
-                "error": str(error),
-                "readiness_json_path": str(error.json_path),
-                "readiness_markdown_path": str(error.markdown_path),
-                **dict(extra or {}),
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
+def _print_readiness_blocked(run_dir: Path, error: ReadinessGateError, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Input: run dir, readiness error, extra fields. Output: printed blocked payload. Report a blocked live command."""
+    payload = {
+        "run_dir": str(run_dir),
+        "status": "readiness_blocked",
+        "error": str(error),
+        "readiness_json_path": str(error.json_path),
+        "readiness_markdown_path": str(error.markdown_path),
+        **dict(extra or {}),
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return payload
 
 
 def schedule_research_from_option(
@@ -340,8 +491,8 @@ def schedule_research_from_option(
     if selected_index > len(rows):
         raise ValueError(f"option_index {selected_index} is outside the {len(rows)} available option records")
     option = _option_card_from_dict(rows[selected_index - 1])
-    ledger = load_data_ledger(root / "wiki" / "20_semantics" / "data_ledger.jsonl")
-    templates = load_template_library(root / "wiki" / "30_templates" / "template_library.jsonl")
+    ledger = load_data_ledger_from_knowledge(root)
+    templates = load_template_library_from_knowledge(root)
     schedule = build_research_schedule(option, ledger, templates, region=region, delay=delay, universe=universe)
     schedule_path = write_research_schedule(output, schedule, datetime.now(timezone.utc).replace(microsecond=0).isoformat())
     row = research_schedule_to_dict(schedule)
@@ -454,6 +605,16 @@ def record_recoverable_network_error(
     response = getattr(err, "response", None)
     status_code = getattr(response, "status_code", None) or "NETWORK_ERROR"
     headers = getattr(response, "headers", {}) or {}
+    simulation_poll_fields = {}
+    if getattr(err, "simulation_poll_timeout", False):
+        status_code = "SIMULATION_POLL_TIMEOUT"
+        simulation_poll_fields = {
+            "poll_progress_url": getattr(err, "progress_url", ""),
+            "retry_after_polls": getattr(err, "retry_after_polls", None),
+            "retry_after_wait_seconds": getattr(err, "wait_seconds", None),
+            "max_retry_after_polls": getattr(err, "max_polls", None),
+            "max_retry_after_wait_seconds": getattr(err, "max_wait_seconds", None),
+        }
     rate_limit_fields = {
         "retry_after": headers.get("Retry-After"),
         "x_ratelimit_limit": headers.get("X-Ratelimit-Limit"),
@@ -469,6 +630,7 @@ def record_recoverable_network_error(
             "recoverable": True,
             "message": str(err),
             **{key: value for key, value in rate_limit_fields.items() if value is not None},
+            **{key: value for key, value in simulation_poll_fields.items() if value is not None and value != ""},
             **dict(metadata or {}),
         },
     )
@@ -615,6 +777,23 @@ def list_fields(config: dict[str, Any], dataset_id: str, field_search: str, fiel
 def parse_csv_arg(value: str) -> list[str]:
     """Input: comma-separated string. Output: cleaned string list. Parse compact CLI lists."""
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def parse_optional_csv(value: str) -> list[str] | None:
+    """Input: comma-separated string. Output: list or None. Parse optional CLI filters."""
+    items = parse_csv_arg(value)
+    return items or None
+
+
+def parse_optional_int_csv(value: str) -> list[int] | None:
+    """Input: comma-separated integers. Output: int list or None. Parse optional numeric filters."""
+    items = parse_csv_arg(value)
+    if not items:
+        return None
+    try:
+        return [int(item) for item in items]
+    except ValueError as err:
+        raise SystemExit(f"integer list expected: {value}") from err
 
 
 def cache_metadata(
@@ -782,8 +961,8 @@ def latest_run_dir(run_root: str | Path) -> Path | None:
     return max(run_dirs, key=lambda path: path.stat().st_mtime)
 
 
-def summarize_run_dir(run_dir: str | Path) -> dict[str, Any]:
-    """Input: run directory path. Output: status summary dict. Summarize local run artifacts."""
+def summarize_run_dir(run_dir: str | Path, knowledge_root: str | Path | None = None) -> dict[str, Any]:
+    """Input: run path and optional vault root. Output: status summary dict. Summarize with active benchmark rules."""
     recorder = RunRecorder(run_dir)
     alpha_records = recorder.read_jsonl("all_alphas.jsonl")
     action_records = recorder.read_jsonl("optimization_trace.jsonl")
@@ -807,7 +986,12 @@ def summarize_run_dir(run_dir: str | Path) -> dict[str, Any]:
         failed_counts.update(str(item) for item in record.get("failed", []))
         pending_counts.update(str(item) for item in record.get("pending", []))
         warning_counts.update(str(item) for item in record.get("warnings", []))
-        benchmark = benchmark_alpha_record(record)
+        benchmark = benchmark_alpha_record(
+            record,
+            knowledge_root=knowledge_root,
+            run_dir=run_dir,
+            consumer="repair_loop",
+        )
         benchmark_counts[benchmark.label] += 1
         if benchmark.label == "repairable_signal":
             repair_queue.append(
@@ -839,7 +1023,12 @@ def summarize_run_dir(run_dir: str | Path) -> dict[str, Any]:
             terminal_hashes.add(str(expression_hash))
     for record in existing_scan_records:
         existing_scan_failed_counts.update(str(item) for item in record.get("failed", []))
-        existing_benchmark = benchmark_alpha_record(record)
+        existing_benchmark = benchmark_alpha_record(
+            record,
+            knowledge_root=knowledge_root,
+            run_dir=run_dir,
+            consumer="repair_loop",
+        )
         existing_scan_benchmark_counts[existing_benchmark.label] += 1
         if existing_benchmark.label == "repairable_signal":
             existing_repair_queue.append(
@@ -916,7 +1105,8 @@ def status(config: dict[str, Any], run_dir: str | None = None) -> None:
     if selected_run_dir is None:
         print(json.dumps({"run_dir": None, "message": "no run directories found"}, ensure_ascii=False, indent=2))
         return
-    print(json.dumps(summarize_run_dir(selected_run_dir), ensure_ascii=False, indent=2, sort_keys=True))
+    knowledge_root = config.get("knowledge_root", default_knowledge_root())
+    print(json.dumps(summarize_run_dir(selected_run_dir, knowledge_root), ensure_ascii=False, indent=2, sort_keys=True))
 
 
 def scan_existing_alpha_candidates(
@@ -924,8 +1114,9 @@ def scan_existing_alpha_candidates(
     recorder: RunRecorder,
     max_scan: int,
     page_limit: int = 50,
+    knowledge_root: str | Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Input: WQB client, recorder, limits. Output: hard-pass candidate rows from existing IS Alphas."""
+    """Input: client, recorder, limits, vault root. Output: hard-pass rows. Scan with active benchmark rules."""
     candidates: list[dict[str, Any]] = []
     scanned = 0
     offset = 0
@@ -960,7 +1151,14 @@ def scan_existing_alpha_candidates(
                 "pending": [item.name for item in summary.pending],
                 "warnings": [item.name for item in summary.warnings],
             }
-            scan_record.update(benchmark_fields_for_record(scan_record))
+            scan_record.update(
+                benchmark_fields_for_record(
+                    scan_record,
+                    knowledge_root=knowledge_root,
+                    run_dir=recorder.run_dir,
+                    consumer="triage",
+                )
+            )
             recorder.append_jsonl("existing_alpha_scan.jsonl", scan_record)
             if summary.hard_pass:
                 candidate = {
@@ -983,9 +1181,21 @@ def scan_existing_alpha_candidates(
     return candidates
 
 
-def benchmark_fields_for_record(alpha_record: dict[str, Any]) -> dict[str, Any]:
-    """Input: alpha record. Output: benchmark fields. Attach workflow classification to a record."""
-    benchmark = benchmark_alpha_record(alpha_record)
+def benchmark_fields_for_record(
+    alpha_record: dict[str, Any],
+    knowledge_root: str | Path | None = None,
+    benchmark_rules: list[Any] | None = None,
+    run_dir: str | Path | None = None,
+    consumer: str = "triage",
+) -> dict[str, Any]:
+    """Input: alpha, vault/run roots, rules, consumer. Output: fields. Apply bound classification."""
+    benchmark = benchmark_alpha_record(
+        alpha_record,
+        benchmark_rules=benchmark_rules,
+        knowledge_root=knowledge_root,
+        run_dir=run_dir,
+        consumer=consumer,
+    )
     return {
         "benchmark_label": benchmark.label,
         "signal_score": benchmark.score,
@@ -1000,8 +1210,9 @@ def inspect_existing_alpha(
     recorder: RunRecorder,
     alpha_id: str,
     signal_note: str = "",
+    knowledge_root: str | Path | None = None,
 ):
-    """Input: client, recorder, alpha id, note. Output: check summary. Inspect an existing Alpha without resim."""
+    """Input: client, recorder, alpha id, note, vault root. Output: summary. Inspect with active benchmark rules."""
     summary = fetch_check_summary(client, alpha_id)
     record = {
         "alpha_id": alpha_id,
@@ -1015,7 +1226,14 @@ def inspect_existing_alpha(
     }
     if signal_note:
         record["signal_note"] = signal_note
-    record.update(benchmark_fields_for_record(record))
+    record.update(
+        benchmark_fields_for_record(
+            record,
+            knowledge_root=knowledge_root,
+            run_dir=recorder.run_dir,
+            consumer="triage",
+        )
+    )
     recorder.append_jsonl("all_alphas.jsonl", record)
     if summary.hard_pass:
         recorder.write_candidates(
@@ -1043,7 +1261,13 @@ def inspect_alpha(config: dict[str, Any], alpha_id: str, run_dir: str | None = N
         print(json.dumps({"run_dir": str(selected_run_dir), "status": "auth_recoverable_error"}, ensure_ascii=False))
         return
     try:
-        summary = inspect_existing_alpha(client, recorder, alpha_id, signal_note=signal_note)
+        summary = inspect_existing_alpha(
+            client,
+            recorder,
+            alpha_id,
+            signal_note=signal_note,
+            knowledge_root=config.get("knowledge_root", default_knowledge_root()),
+        )
     except requests.exceptions.RequestException as err:
         record_recoverable_network_error(recorder, "inspect_alpha", err, {"alpha_id": alpha_id})
         print(json.dumps({"run_dir": str(selected_run_dir), "status": "recoverable_error"}, ensure_ascii=False))
@@ -1438,7 +1662,17 @@ def refresh_existing_alpha_batch(
             )
         return []
 
-    alpha_ids = resolve_multisimulation_alpha_ids(client, progress)
+    try:
+        alpha_ids = resolve_multisimulation_alpha_ids(client, progress)
+    except requests.exceptions.RequestException as err:
+        for item in metadata:
+            record_recoverable_network_error(
+                recorder,
+                "refresh_alpha_batch_child_poll",
+                err,
+                {"progress_url": progress_url, **item},
+            )
+        return []
     summaries = []
     candidate_rows: list[dict[str, Any]] = []
     for item, refreshed_alpha_id in zip(metadata, alpha_ids):
@@ -1690,8 +1924,9 @@ def run_expression_file_batch(
     multi_chunk_sleep_seconds: float = DEFAULT_MULTI_CHUNK_SLEEP_SECONDS,
     novelty_reference_records: list[dict[str, Any]] | None = None,
     min_novelty_score: int | None = None,
+    knowledge_root: str | Path | None = None,
 ) -> list[Any]:
-    """Input: client, recorder, JSONL path. Output: check summaries. Run custom expressions with cloned settings."""
+    """Input: client, recorder, JSONL path, options, vault root. Output: summaries. Run expressions with active rules."""
     items = load_expression_file_items(expression_file)
     detail_cache: dict[str, dict[str, Any]] = {}
     seen_hashes = set(seen_hashes or set())
@@ -1763,6 +1998,7 @@ def run_expression_file_batch(
         "run_expression_file",
         defer_poll=defer_poll,
         multi_chunk_sleep_seconds=multi_chunk_sleep_seconds,
+        knowledge_root=knowledge_root,
     )
 
 
@@ -1832,7 +2068,19 @@ def run_field_batch(
     multi_chunk_sleep_seconds: float = DEFAULT_MULTI_CHUNK_SLEEP_SECONDS,
 ) -> list[Any]:
     """Input: WQB client, recorder, config, field filters, mode. Output: check summaries. Run seed fields."""
-    field_source = "api"
+    selection = resolve_source_inputs(
+        config.get("knowledge_root", default_knowledge_root()),
+        config,
+        field_search=field_search,
+        dataset_id=dataset_id,
+        exact_field_id=exact_field_id,
+        allow_live_fallback=True,
+        max_fields=FIELD_BATCH_API_MAX_RECORDS,
+    )
+    operator_source = selection.operator_source
+    template_source = selection.template_source
+    knowledge_fields = filter_fields_by_suffix(selection.fields, field_suffix)
+    knowledge_field_ids = {str(field.get("id", "")) for field in knowledge_fields}
     if field_cache_path:
         field_cache = json.loads(Path(field_cache_path).read_text(encoding="utf-8"))
         fields = cached_fields(
@@ -1842,6 +2090,13 @@ def run_field_batch(
             field_suffix=field_suffix,
         )
         field_source = "cache"
+        source_provenance: list[dict[str, Any]] = []
+    elif knowledge_fields:
+        fields = selection.fields
+        field_source = selection.field_source
+        source_provenance = [
+            row for row in selection.provenance if str(row.get("field_id", "")) in knowledge_field_ids
+        ]
     else:
         fields = fetch_data_fields(
             client,
@@ -1853,6 +2108,8 @@ def run_field_batch(
             search=field_search,
             max_records=FIELD_BATCH_API_MAX_RECORDS,
         )
+        field_source = "live_api"
+        source_provenance = []
     all_field_ids = {str(field.get("id")) for field in fields if field.get("id")}
     if not field_cache_path:
         fields = filter_fields_by_suffix(fields, field_suffix)
@@ -1888,6 +2145,9 @@ def run_field_batch(
             "exact_field_id": exact_field_id,
             "submit_mode": submit_mode,
             "field_source": field_source,
+            "operator_source": operator_source,
+            "template_source": template_source,
+            "source_provenance": source_provenance,
             "field_cache_path": field_cache_path,
             "defer_poll": defer_poll,
             "multi_chunk_sleep_seconds": multi_chunk_sleep_seconds,
@@ -1950,6 +2210,11 @@ def run_field_batch(
                 "template_mode": template_mode,
                 "workflow_stage": workflow_stage,
                 "human_idea": human_idea,
+                "operator_source": operator_source,
+                "operator_provenance": expression_operator_provenance(
+                    candidate.expression,
+                    config.get("knowledge_root", default_knowledge_root()),
+                ),
             }
         )
         payloads.append(simulation_payload(candidate.settings, candidate.expression))
@@ -2034,7 +2299,17 @@ def run_field_batch(
                         },
                     )
                 continue
-            alpha_ids = resolve_multisimulation_alpha_ids(client, progress)
+            try:
+                alpha_ids = resolve_multisimulation_alpha_ids(client, progress)
+            except requests.exceptions.RequestException as err:
+                for item in chunk_metadata:
+                    record_recoverable_network_error(
+                        recorder,
+                        "run_field_batch_multi_child_poll",
+                        err,
+                        {"progress_url": progress_url, **item},
+                    )
+                continue
             for item, alpha_id in zip(chunk_metadata, alpha_ids):
                 try:
                     summary = fetch_check_summary(client, alpha_id)
@@ -2251,6 +2526,7 @@ def retry_planned_candidates(
         submit_mode,
         "retry_planned",
         defer_poll=defer_poll,
+        knowledge_root=config.get("knowledge_root", default_knowledge_root()),
     )
 
 
@@ -2264,12 +2540,26 @@ def submit_candidate_payloads(
     defer_poll: bool = False,
     multi_chunk_sleep_seconds: float = DEFAULT_MULTI_CHUNK_SLEEP_SECONDS,
     sleep_func=time.sleep,
+    knowledge_root: str | Path | None = None,
 ) -> list[Any]:
-    """Input: client, payloads, metadata, mode, stage prefix. Output: summaries. Submit and check payloads."""
+    """Input: client, payloads, mode, options, vault root. Output: summaries. Submit and classify with active rules."""
     summaries = []
     candidate_rows: list[dict[str, Any]] = []
     if submit_mode not in {"multi", "serial"}:
         raise ValueError("submit_mode must be 'multi' or 'serial'")
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    cooldown_state = read_rate_limit_state(recorder.run_dir / "rate_limit_state.json")
+    if cooldown_is_active(cooldown_state, now):
+        recorder.append_jsonl(
+            "run_errors.jsonl",
+            {
+                "stage": f"{stage_prefix}_cooldown",
+                "error_type": "RATE_LIMIT_COOLDOWN_ACTIVE",
+                "retry_at": cooldown_state.get("retry_at", ""),
+                "status": "rate_limit_wait",
+            },
+        )
+        return summaries
     if submit_mode == "multi":
         fallback_payloads: list[dict[str, Any]] = []
         fallback_metadata: list[dict[str, Any]] = []
@@ -2291,8 +2581,20 @@ def submit_candidate_payloads(
                     fallback_payloads.extend(chunk_payloads)
                     fallback_metadata.extend(chunk_metadata)
                 if is_http_status_error(err, 429):
-                    break
+                    record_rate_limit(
+                        recorder.run_dir,
+                        f"{stage_prefix}_multi_submit",
+                        err,
+                        {
+                            **(chunk_metadata[0] if chunk_metadata else {}),
+                            "payload_count": len(chunk_payloads),
+                            "chunk_start": start,
+                        },
+                        datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                    )
+                    return summaries
                 continue
+            reset_rate_limit(recorder.run_dir, f"{stage_prefix}_multi_submit", now)
             for item in chunk_metadata:
                 recorder.append_jsonl("simulation_events.jsonl", {"event": "SUBMITTED", "progress_url": progress_url, **item})
             if defer_poll:
@@ -2316,7 +2618,17 @@ def submit_candidate_payloads(
                         {"event": "ERROR", "message": message, "progress_url": progress_url, **item},
                     )
                 continue
-            alpha_ids = resolve_multisimulation_alpha_ids(client, progress)
+            try:
+                alpha_ids = resolve_multisimulation_alpha_ids(client, progress)
+            except requests.exceptions.RequestException as err:
+                for item in chunk_metadata:
+                    record_recoverable_network_error(
+                        recorder,
+                        f"{stage_prefix}_multi_child_poll",
+                        err,
+                        {"progress_url": progress_url, **item},
+                    )
+                continue
             for item, alpha_id in zip(chunk_metadata, alpha_ids):
                 try:
                     summary = fetch_check_summary(client, alpha_id)
@@ -2340,7 +2652,14 @@ def submit_candidate_payloads(
                     "warnings": [check.name for check in summary.warnings],
                     **item,
                 }
-                record.update(benchmark_fields_for_record(record))
+                record.update(
+                    benchmark_fields_for_record(
+                        record,
+                        knowledge_root=knowledge_root,
+                        run_dir=recorder.run_dir,
+                        consumer="triage",
+                    )
+                )
                 recorder.append_jsonl("all_alphas.jsonl", record)
                 if summary.hard_pass:
                     candidate_rows.append(candidate_row_from_summary(alpha_id, item, summary))
@@ -2356,8 +2675,16 @@ def submit_candidate_payloads(
         except requests.exceptions.RequestException as err:
             record_recoverable_network_error(recorder, f"{stage_prefix}_submit", err, item)
             if is_http_status_error(err, 429):
+                record_rate_limit(
+                    recorder.run_dir,
+                    f"{stage_prefix}_submit",
+                    err,
+                    {**item, "payload_count": 1},
+                    datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                )
                 break
             continue
+        reset_rate_limit(recorder.run_dir, f"{stage_prefix}_serial_submit", now)
         recorder.append_jsonl("simulation_events.jsonl", {"event": "SUBMITTED", "progress_url": progress_url, **item})
         if defer_poll:
             continue
@@ -2393,7 +2720,14 @@ def submit_candidate_payloads(
             "warnings": [check.name for check in summary.warnings],
             **item,
         }
-        record.update(benchmark_fields_for_record(record))
+        record.update(
+            benchmark_fields_for_record(
+                record,
+                knowledge_root=knowledge_root,
+                run_dir=recorder.run_dir,
+                consumer="triage",
+            )
+        )
         recorder.append_jsonl("all_alphas.jsonl", record)
         if summary.hard_pass:
             candidate_rows.append(candidate_row_from_summary(alpha_id, item, summary))
@@ -2476,10 +2810,27 @@ def complete_in_flight_simulations(client, recorder: RunRecorder) -> list[str]:
                 terminal_hashes.add(str(expression_hash))
             continue
 
-        if len(pending_events) == 1 and progress.get("alpha"):
-            alpha_ids = [extract_alpha_id(progress)]
-        else:
-            alpha_ids = resolve_multisimulation_alpha_ids(client, progress)
+        try:
+            if len(pending_events) == 1 and progress.get("alpha"):
+                alpha_ids = [extract_alpha_id(progress)]
+            else:
+                alpha_ids = resolve_multisimulation_alpha_ids(client, progress)
+        except requests.exceptions.RequestException as err:
+            for event in pending_events:
+                record_recoverable_network_error(
+                    recorder,
+                    "complete_in_flight_child_poll",
+                    err,
+                    {
+                        "parent_alpha_id": event.get("parent_alpha_id"),
+                        "expression_hash": event.get("expression_hash"),
+                        "progress_url": progress_url,
+                        "operator_replacements": event.get("operator_replacements", {}),
+                        "setting_overrides": event.get("setting_overrides", {}),
+                        "setting_variant": event.get("setting_variant", {}),
+                    },
+                )
+            continue
         for event, alpha_id in zip(pending_events, alpha_ids):
             expression_hash = event.get("expression_hash")
             try:
@@ -2549,6 +2900,12 @@ def complete_in_flight_simulations(client, recorder: RunRecorder) -> list[str]:
 
     if candidate_rows:
         recorder.write_candidates(candidate_rows)
+    if completed_alpha_ids:
+        reset_rate_limit(
+            recorder.run_dir,
+            "complete_in_flight",
+            datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        )
     return completed_alpha_ids
 
 
@@ -2571,7 +2928,12 @@ def scan_existing(config: dict[str, Any], max_scan: int, run_dir: str | None = N
             )
         )
         return
-    candidates = scan_existing_alpha_candidates(client, recorder, max_scan=max_scan)
+    candidates = scan_existing_alpha_candidates(
+        client,
+        recorder,
+        max_scan=max_scan,
+        knowledge_root=config.get("knowledge_root", default_knowledge_root()),
+    )
     recorder.write_markdown(
         "run_summary.md",
         f"# Existing Alpha Scan\n\nScanned up to {max_scan} IS Alphas. Candidates found: {len(candidates)}.\n",
@@ -2593,7 +2955,7 @@ def complete_in_flight(config: dict[str, Any], run_dir: str | None = None) -> No
                 {
                     "run_dir": str(selected_run_dir),
                     "completed_alpha_ids": [],
-                    "status": summarize_run_dir(selected_run_dir),
+                    "status": summarize_run_dir(selected_run_dir, config.get("knowledge_root", default_knowledge_root())),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -2606,7 +2968,7 @@ def complete_in_flight(config: dict[str, Any], run_dir: str | None = None) -> No
             {
                 "run_dir": str(selected_run_dir),
                 "completed_alpha_ids": completed_alpha_ids,
-                "status": summarize_run_dir(selected_run_dir),
+                "status": summarize_run_dir(selected_run_dir, config.get("knowledge_root", default_knowledge_root())),
             },
             ensure_ascii=False,
             indent=2,
@@ -2633,7 +2995,7 @@ def retry_planned(
         print(json.dumps({"run_dir": str(selected_run_dir), "status": "auth_recoverable_error"}, ensure_ascii=False, indent=2))
         return
     summaries = retry_planned_candidates(client, recorder, config, submit_mode=submit_mode, defer_poll=defer_poll)
-    run_status = summarize_run_dir(selected_run_dir)
+    run_status = summarize_run_dir(selected_run_dir, config.get("knowledge_root", default_knowledge_root()))
     status_label = field_batch_status_label(run_status, summaries)
     print(
         json.dumps(
@@ -2686,8 +3048,9 @@ def run_expression_file(
         multi_chunk_sleep_seconds=multi_chunk_sleep_seconds,
         novelty_reference_records=novelty_reference_records,
         min_novelty_score=min_novelty_score,
+        knowledge_root=config.get("knowledge_root", default_knowledge_root()),
     )
-    run_status = summarize_run_dir(selected_run_dir)
+    run_status = summarize_run_dir(selected_run_dir, config.get("knowledge_root", default_knowledge_root()))
     print(
         json.dumps(
             {
@@ -2755,7 +3118,7 @@ def refresh_alpha(
         raise
 
     if summary is None:
-        run_status = summarize_run_dir(run_dir)
+        run_status = summarize_run_dir(run_dir, config.get("knowledge_root", default_knowledge_root()))
         status_label = "pending_recovery" if run_status["in_flight_count"] else "simulation_error"
         recorder.write_markdown(
             "run_summary.md",
@@ -2832,7 +3195,7 @@ def refresh_alpha_batch(
             return
         raise
 
-    run_status = summarize_run_dir(run_dir)
+    run_status = summarize_run_dir(run_dir, config.get("knowledge_root", default_knowledge_root()))
     status_label = "pending_recovery" if run_status["in_flight_count"] and not summaries else "completed"
     print(
         json.dumps(
@@ -2876,7 +3239,7 @@ def repair_alpha_with_field(
         field_expression,
         blend_weights,
     )
-    run_status = summarize_run_dir(run_dir)
+    run_status = summarize_run_dir(run_dir, config.get("knowledge_root", default_knowledge_root()))
     status_label = field_batch_status_label(run_status, summaries)
     print(
         json.dumps(
@@ -2910,14 +3273,14 @@ def field_batch(
     field_cache_path: str = "",
     defer_poll: bool = False,
     multi_chunk_sleep_seconds: float = DEFAULT_MULTI_CHUNK_SLEEP_SECONDS,
-) -> None:
-    """Input: run config and field filters. Output: run artifacts. Run seed batch from selected fields."""
+) -> dict[str, Any]:
+    """Input: run config and field filters. Output: batch summary. Run seed batch from selected fields."""
     run_dir = make_run_dir(config)
     recorder = RunRecorder(run_dir)
     try:
         require_readiness_gate(**_live_gate_kwargs(config, run_dir))
     except ReadinessGateError as err:
-        _print_readiness_blocked(
+        return _print_readiness_blocked(
             run_dir,
             err,
             {
@@ -2928,29 +3291,23 @@ def field_batch(
                 "workflow_stage": workflow_stage,
             },
         )
-        return
     client = build_client(config)
     if not authenticate_for_run(client, recorder, "field_batch_auth"):
-        print(
-            json.dumps(
-                {
-                    "run_dir": str(run_dir),
-                    "status": "auth_recoverable_error",
-                    "field_search": field_search,
-                    "dataset_id": dataset_id,
-                    "field_suffix": field_suffix,
-                    "template_mode": template_mode,
-                    "workflow_stage": workflow_stage,
-                    "exact_field_id": exact_field_id,
-                    "field_cache_path": field_cache_path,
-                    "defer_poll": defer_poll,
-                    "multi_chunk_sleep_seconds": multi_chunk_sleep_seconds,
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
-        return
+        payload = {
+            "run_dir": str(run_dir),
+            "status": "auth_recoverable_error",
+            "field_search": field_search,
+            "dataset_id": dataset_id,
+            "field_suffix": field_suffix,
+            "template_mode": template_mode,
+            "workflow_stage": workflow_stage,
+            "exact_field_id": exact_field_id,
+            "field_cache_path": field_cache_path,
+            "defer_poll": defer_poll,
+            "multi_chunk_sleep_seconds": multi_chunk_sleep_seconds,
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return payload
     summaries = run_field_batch(
         client,
         recorder,
@@ -2967,32 +3324,28 @@ def field_batch(
         defer_poll=defer_poll,
         multi_chunk_sleep_seconds=multi_chunk_sleep_seconds,
     )
-    run_status = summarize_run_dir(run_dir)
+    run_status = summarize_run_dir(run_dir, config.get("knowledge_root", default_knowledge_root()))
     status_label = field_batch_status_label(run_status, summaries)
-    print(
-        json.dumps(
-            {
-                "run_dir": str(run_dir),
-                "status": status_label,
-                "field_search": field_search,
-                "dataset_id": dataset_id,
-                "field_suffix": field_suffix,
-                "template_mode": template_mode,
-                "workflow_stage": workflow_stage,
-                "human_idea": human_idea,
-                "exact_field_id": exact_field_id,
-                "field_cache_path": field_cache_path,
-                "defer_poll": defer_poll,
-                "multi_chunk_sleep_seconds": multi_chunk_sleep_seconds,
-                "checked_count": len(summaries),
-                "hard_pass_alpha_ids": [summary.alpha_id for summary in summaries if summary.hard_pass],
-                "failed": {summary.alpha_id: [check.name for check in summary.failed] for summary in summaries},
-                "pending": {summary.alpha_id: [check.name for check in summary.pending] for summary in summaries},
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
+    payload = {
+        "run_dir": str(run_dir),
+        "status": status_label,
+        "field_search": field_search,
+        "dataset_id": dataset_id,
+        "field_suffix": field_suffix,
+        "template_mode": template_mode,
+        "workflow_stage": workflow_stage,
+        "human_idea": human_idea,
+        "exact_field_id": exact_field_id,
+        "field_cache_path": field_cache_path,
+        "defer_poll": defer_poll,
+        "multi_chunk_sleep_seconds": multi_chunk_sleep_seconds,
+        "checked_count": len(summaries),
+        "hard_pass_alpha_ids": [summary.alpha_id for summary in summaries if summary.hard_pass],
+        "failed": {summary.alpha_id: [check.name for check in summary.failed] for summary in summaries},
+        "pending": {summary.alpha_id: [check.name for check in summary.pending] for summary in summaries},
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return payload
 
 
 def smoke(config: dict[str, Any]) -> None:
@@ -3204,11 +3557,34 @@ def parse_args() -> argparse.Namespace:
             "retry-planned",
             "run-expression-file",
             "plan-research-options",
+            "discover-data-scope-matrix",
+            "plan-stratified-data-capture",
+            "capture-platform-data-fields",
+            "compile-data-ledger",
+            "compile-operator-semantics",
+            "migrate-knowledge-vault",
+            "knowledge-contract-check",
             "knowledge-health-check",
             "readiness-check",
             "launch-workflow",
+            "launch-console",
             "bootstrap-knowledge",
+            "compile-research-records",
+            "compile-knowledge",
+            "delivery-verify",
+            "delivery-gate",
+            "capture-interaction-note",
             "schedule-research",
+            "workflow-start",
+            "workflow-continue",
+            "workflow-auto-continue",
+            "workflow-status",
+            "workflow-resume",
+            "workflow-abort",
+            "workflow-import-scout-seed-artifacts",
+            "workflow-approve-candidates",
+            "workflow-request-candidate-approval",
+            "workflow-update-candidate-status",
         ],
     )
     parser.add_argument("--config", default="configs/stage1_usa_d1.yaml")
@@ -3246,10 +3622,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--request-base-backoff-seconds", type=int, default=None)
     parser.add_argument("--max-options", type=int, default=5)
     parser.add_argument("--option-output-dir", default=default_option_output_dir())
-    parser.add_argument("--freshness-manifest", default="wiki/80_maintenance/freshness_manifest.json")
-    parser.add_argument("--freshness-report", default="wiki/80_maintenance/freshness_report.md")
+    parser.add_argument("--freshness-manifest", default="machine/freshness_manifest.json")
+    parser.add_argument("--freshness-report", default="machine/reports/freshness_report.md")
     parser.add_argument("--knowledge-root", default=str(default_knowledge_root()))
+    parser.add_argument("--summary", default="")
+    parser.add_argument("--category", default="")
+    parser.add_argument("--tag", action="append", default=[])
+    parser.add_argument("--evidence-path", action="append", default=[])
     parser.add_argument("--knowledge-seed-root", default="docs/knowledge")
+    parser.add_argument("--apply-cleanup", action="store_true", default=False)
+    parser.add_argument("--max-case-reports", type=int, default=20)
+    parser.add_argument("--runs-root", default="")
+    parser.add_argument("--console-base-url", default="")
+    parser.add_argument("--data-capture-date", default="")
+    parser.add_argument("--capture-region", default="")
+    parser.add_argument("--capture-delay", default="")
+    parser.add_argument("--capture-universe", default="")
+    parser.add_argument("--max-scopes", type=int, default=0)
+    parser.add_argument("--max-datasets-per-scope", type=int, default=0)
+    parser.add_argument("--max-fields-per-dataset", type=int, default=0)
+    parser.add_argument("--fields-per-scope", type=int, default=0)
+    parser.add_argument("--capture-plan-path", default="")
+    parser.add_argument("--resume-capture", action="store_true", default=False)
+    parser.add_argument("--capture-dir", default="")
     parser.add_argument("--readiness-output-dir", default="")
     parser.add_argument("--readiness-mode", choices=["maintenance", "plan-only", "research", "submit-candidate"], default="plan-only")
     parser.add_argument("--batch-size", type=int, default=30)
@@ -3266,10 +3661,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-handoffs", action="store_true", default=False)
     parser.add_argument("--option-json", default="")
     parser.add_argument("--option-index", type=int, default=None)
-    parser.add_argument("--schedule-output", default="wiki/70_decisions/research_schedule.md")
+    parser.add_argument("--schedule-output", default="machine/decisions/research_schedule.md")
     parser.add_argument("--schedule-region", default="USA")
     parser.add_argument("--schedule-delay", type=int, default=1)
     parser.add_argument("--schedule-universe", default="TOP3000")
+    parser.add_argument("--objective", default="")
+    parser.add_argument("--selected-option-id", default="")
+    parser.add_argument("--selected-region", default="")
+    parser.add_argument("--selected-delay", type=int, default=None)
+    parser.add_argument("--selected-universe", default="")
+    parser.add_argument("--now", default="")
+    parser.add_argument("--reason", default="")
+    parser.add_argument("--candidate-id", action="append", default=[])
+    parser.add_argument("--approved-by", default="user")
+    parser.add_argument("--candidate-version", type=int, default=None)
+    parser.add_argument("--candidate-expression-hash", default="")
+    parser.add_argument("--candidate-json", default="")
+    parser.add_argument("--candidate-status", choices=sorted(STATUS_UPDATE_STATUSES), default="")
+    parser.add_argument("--source-run-id", default="")
+    parser.add_argument("--console-host", default="127.0.0.1")
+    parser.add_argument("--console-port", type=int, default=8765)
+    parser.add_argument("--no-open-browser", action="store_true", default=False)
     return parser.parse_args()
 
 
@@ -3323,7 +3735,155 @@ def main() -> None:
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
+    if args.command == "launch-console":
+        result = run_console(
+            host=args.console_host,
+            port=args.console_port,
+            knowledge_root=args.knowledge_root,
+            runs_root=args.run_dir,
+            open_browser=not args.no_open_browser,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    if args.command == "delivery-gate":
+        if not cli_flag_present(sys.argv[1:], "--knowledge-root"):
+            raise SystemExit("--knowledge-root is required for delivery-gate")
+        if not args.runs_root:
+            raise SystemExit("--runs-root is required for delivery-gate")
+        result = run_delivery_gate(
+            args.knowledge_root,
+            args.runs_root,
+            console_base_url=str(args.console_base_url),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    if args.command == "delivery-verify":
+        if not cli_flag_present(sys.argv[1:], "--knowledge-root"):
+            raise SystemExit("--knowledge-root is required for delivery-verify")
+        result = run_delivery_verification(args.knowledge_root)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    if args.command.startswith("workflow-"):
+        workflow_overrides = dict(overrides)
+        if cli_flag_present(sys.argv[1:], "--knowledge-root"):
+            workflow_overrides["knowledge_root"] = args.knowledge_root
+        if args.run_dir:
+            workflow_overrides["run_root"] = args.run_dir
+        config = load_config(args.config, overrides=workflow_overrides)
+        orchestrator_paths = default_orchestrator_paths(config)
+        orchestrator = WorkflowOrchestrator(orchestrator_paths)
+        now = args.now or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        if args.command == "workflow-start":
+            if not args.objective or not args.selected_option_id:
+                raise SystemExit("--objective and --selected-option-id are required for workflow-start")
+            selected_scope_values = (args.selected_region, args.selected_delay, args.selected_universe)
+            if any(value not in (None, "") for value in selected_scope_values) and not all(value not in (None, "") for value in selected_scope_values):
+                raise SystemExit("--selected-region, --selected-delay, and --selected-universe must be provided together")
+            selected_scope = (
+                {"region": args.selected_region, "delay": args.selected_delay, "universe": args.selected_universe}
+                if all(value not in (None, "") for value in selected_scope_values)
+                else None
+            )
+            result = orchestrator.start(args.objective, args.selected_option_id, now, selected_scope=selected_scope)
+        elif args.command == "workflow-continue":
+            result = orchestrator.continue_once(now)
+        elif args.command == "workflow-auto-continue":
+            from wqb.workflow_auto_continue import auto_continue_workflow
+
+            def source_batch_runner(run_config: dict[str, Any], metadata: dict[str, Any]) -> dict[str, object]:
+                """Input: source config and bridge metadata. Output: source batch summary. Run the approved bounded Scout batch."""
+                return field_batch(
+                    run_config,
+                    field_search=str(metadata.get("field_search", "")),
+                    dataset_id=str(metadata.get("dataset_id", "")),
+                    template_mode=str(metadata.get("template_mode", "economic")),
+                    workflow_stage=str(metadata.get("workflow_stage", "scout")),
+                    exact_field_id=str(metadata.get("exact_field_id", "")),
+                    submit_mode=str(metadata.get("submit_mode", "multi")),
+                )
+
+            def complete_runner(source_run_dir: str) -> dict[str, object]:
+                """Input: source run path. Output: source run summary. Complete only existing submitted simulations."""
+                complete_in_flight(config, source_run_dir)
+                return summarize_run_dir(source_run_dir, config.get("knowledge_root", default_knowledge_root()))
+
+            def retry_runner(source_run_dir: str) -> dict[str, object]:
+                """Input: source run path. Output: source run summary. Retry only source-planned candidates."""
+                retry_planned(config, source_run_dir, submit_mode=args.submit_mode, defer_poll=args.defer_poll)
+                return summarize_run_dir(source_run_dir, config.get("knowledge_root", default_knowledge_root()))
+
+            result = auto_continue_workflow(
+                orchestrator_paths,
+                config,
+                now,
+                enable_live_api=args.enable_live_api,
+                source_batch_runner=source_batch_runner if args.enable_live_api else None,
+                complete_in_flight_runner=complete_runner if args.enable_live_api else None,
+                retry_planned_runner=retry_runner if args.enable_live_api else None,
+            )
+        elif args.command == "workflow-status":
+            from wqb.workflow_auto_continue import decorate_workflow_status_with_source_bridge
+
+            result = decorate_workflow_status_with_source_bridge(
+                orchestrator_paths,
+                orchestrator.status(),
+                now,
+            )
+        elif args.command == "workflow-resume":
+            result = orchestrator.resume(now)
+        elif args.command == "workflow-abort":
+            if not args.reason:
+                raise SystemExit("--reason is required for workflow-abort")
+            result = orchestrator.abort(args.reason, now)
+        elif args.command == "workflow-import-scout-seed-artifacts":
+            if not args.source_run_id:
+                raise SystemExit("--source-run-id is required for workflow-import-scout-seed-artifacts")
+            result = orchestrator.import_scout_seed_artifacts(args.source_run_id, now)
+        elif args.command == "workflow-approve-candidates":
+            result = orchestrator.approve_candidates(args.candidate_id, now, args.approved_by)
+        elif args.command == "workflow-request-candidate-approval":
+            if not args.candidate_json:
+                raise SystemExit("--candidate-json is required for workflow-request-candidate-approval")
+            try:
+                candidates = json.loads(Path(args.candidate_json).read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise SystemExit(f"unable to load --candidate-json: {exc}") from exc
+            if not isinstance(candidates, list) or not all(
+                isinstance(candidate, dict) for candidate in candidates
+            ):
+                raise SystemExit("--candidate-json must contain a list of objects")
+            result = orchestrator.request_candidate_approval(candidates, now)
+        else:
+            if (
+                len(args.candidate_id) != 1
+                or args.candidate_version is None
+                or not args.candidate_expression_hash
+                or not args.candidate_status
+            ):
+                raise SystemExit(
+                    "--candidate-id, --candidate-version, --candidate-expression-hash, and --candidate-status "
+                    "are required for workflow-update-candidate-status"
+                )
+            status_args = (
+                args.candidate_id[0],
+                args.candidate_version,
+                args.candidate_expression_hash,
+                args.candidate_status,
+                now,
+            )
+            if args.source_run_id:
+                result = orchestrator.update_candidate_status(
+                    *status_args, source_run_id=args.source_run_id
+                )
+            else:
+                result = orchestrator.update_candidate_status(*status_args)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
     config = load_config(args.config, overrides=overrides)
+    if cli_flag_present(sys.argv[1:], "--knowledge-root"):
+        config["knowledge_root"] = args.knowledge_root
+    else:
+        config.setdefault("knowledge_root", str(default_knowledge_root()))
     if args.command == "dry-run":
         dry_run(config)
     elif args.command == "smoke":
@@ -3446,11 +4006,77 @@ def main() -> None:
     elif args.command == "plan-stage":
         plan_stage(args.workflow_stage, args.dataset_id)
     elif args.command == "plan-research-options":
+        if not args.enable_live_api:
+            raise SystemExit("--enable-live-api is required for plan-research-options")
         result = plan_research_options(config, args.max_options, args.option_output_dir)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "discover-data-scope-matrix":
+        if not args.enable_live_api:
+            raise SystemExit("--enable-live-api is required for discover-data-scope-matrix")
+        result = discover_data_scope_matrix_command(
+            config,
+            args.knowledge_root,
+            instrument_types=None,
+            regions=parse_optional_csv(args.capture_region),
+            delays=parse_optional_int_csv(args.capture_delay),
+            universes=parse_optional_csv(args.capture_universe),
+            max_scopes=args.max_scopes,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "plan-stratified-data-capture":
+        result = plan_stratified_data_capture_command(
+            args.knowledge_root,
+            fields_per_scope=args.fields_per_scope or 100,
+            max_scopes=args.max_scopes,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "capture-platform-data-fields":
+        if not args.enable_live_api:
+            raise SystemExit("--enable-live-api is required for capture-platform-data-fields")
+        generated_at = args.data_capture_date or None
+        if generated_at and len(generated_at) == 10:
+            generated_at = f"{generated_at}T00:00:00+00:00"
+        result = capture_platform_data_fields_command(
+            config,
+            args.knowledge_root,
+            instrument_types=None,
+            regions=parse_optional_csv(args.capture_region),
+            delays=parse_optional_int_csv(args.capture_delay),
+            universes=parse_optional_csv(args.capture_universe),
+            max_scopes=args.max_scopes,
+            max_datasets_per_scope=args.max_datasets_per_scope,
+            max_fields_per_dataset=args.max_fields_per_dataset,
+            resume_capture=args.resume_capture,
+            generated_at=generated_at,
+            capture_plan_path=args.capture_plan_path or None,
+            fields_per_scope=args.fields_per_scope,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "compile-data-ledger":
+        result = compile_data_ledger_command(args.knowledge_root, capture_dir=args.capture_dir or None)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "compile-operator-semantics":
+        from wqb.operator_semantics import compile_operator_semantics
+
+        generated = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        result = compile_operator_semantics(args.knowledge_root, generated)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "migrate-knowledge-vault":
+        result = run_knowledge_vault_migration(args.knowledge_root)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "knowledge-contract-check":
+        from wqb.knowledge_freshness import evaluate_knowledge_contract_health
+
+        root = Path(args.knowledge_root)
+        result = evaluate_knowledge_contract_health(root)
+        output_result = dict(result)
+        output_result["issues"] = [dict(issue, issue=issue["message"]) for issue in result["issues"]]
+        print(json.dumps(output_result, ensure_ascii=False, indent=2))
+        if result["issues"] and args.readiness_mode in {"research", "submit-candidate"}:
+            raise SystemExit(1)
     elif args.command == "knowledge-health-check":
         result = knowledge_health_check(
-            default_knowledge_root(),
+            args.knowledge_root,
             args.freshness_manifest,
             args.freshness_report,
             today_value=args.today or None,
@@ -3474,6 +4100,27 @@ def main() -> None:
     elif args.command == "bootstrap-knowledge":
         result = bootstrap_knowledge_command(args.knowledge_root, args.knowledge_seed_root)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "compile-research-records":
+        result = compile_research_records_command(args.knowledge_root)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "compile-knowledge":
+        result = run_knowledge_maintenance(
+            args.knowledge_root,
+            apply_cleanup=bool(args.apply_cleanup),
+            max_case_reports=int(args.max_case_reports),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "capture-interaction-note":
+        if not args.summary or not args.category:
+            raise SystemExit("--summary and --category are required for capture-interaction-note")
+        path = append_interaction_note(
+            args.knowledge_root,
+            args.summary,
+            args.category,
+            list(args.tag),
+            list(args.evidence_path),
+        )
+        print(json.dumps({"path": str(path)}, ensure_ascii=False, indent=2))
     elif args.command == "schedule-research":
         if not args.option_json:
             raise SystemExit("--option-json is required for schedule-research")

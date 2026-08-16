@@ -4,9 +4,30 @@ import json
 from pathlib import Path
 from typing import Any
 
+from wqb.benchmark_rules import default_benchmark_rules, rules_for_consumer, rules_for_issue_type
+
 
 PROPOSAL_JSONL = "workflow_change_proposals.jsonl"
 PROPOSAL_MARKDOWN = "workflow_change_proposals.md"
+PROPOSAL_STATUSES = (
+    "proposed",
+    "rejected",
+    "accepted_for_wiki",
+    "accepted_for_implementation",
+    "accepted_as_experiment",
+    "applied",
+    "deferred",
+)
+
+
+def normalize_proposal_status(status: str) -> str:
+    """Input: status string. Output: normalized status. Validate proposal lifecycle status."""
+    normalized = str(status).strip().lower()
+    if normalized == "accepted":
+        normalized = "accepted_for_implementation"
+    if normalized not in PROPOSAL_STATUSES:
+        raise ValueError(f"unsupported proposal status: {status}")
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -26,6 +47,10 @@ class WorkflowChangeProposal:
     user_decision_options: list[str]
     status: str
     user_decision: str = ""
+    current_behavior: str = ""
+    expected_impact: str = ""
+    applied_at: str = ""
+    supersedes: list[str] | None = None
 
 
 def workflow_change_proposal_to_dict(proposal: WorkflowChangeProposal) -> dict[str, Any]:
@@ -33,8 +58,22 @@ def workflow_change_proposal_to_dict(proposal: WorkflowChangeProposal) -> dict[s
     return asdict(proposal)
 
 
-def _rule_text(issue_type: str, summary: str) -> tuple[str, str, str]:
-    """Input: issue type and summary. Output: rule, benefit, risk. Map repeated issue to proposal text."""
+def _rule_text(
+    issue_type: str,
+    summary: str,
+    benchmark_rules: list[Any] | None = None,
+) -> tuple[str, str, str]:
+    """Input: issue, summary, optional active rules. Output: rule, benefit, risk. Apply benchmark authority."""
+    active_rules = default_benchmark_rules() if benchmark_rules is None else benchmark_rules
+    proposal_rules = rules_for_consumer(active_rules, "workflow_proposals")
+    matched_rules = rules_for_issue_type(proposal_rules, issue_type)
+    if matched_rules:
+        rule = matched_rules[0]
+        return (
+            rule.action,
+            f"Applies active benchmark rule `{rule.rule_id}` before the issue recurs.",
+            rule.risk,
+        )
     normalized = issue_type.lower()
     if "prod_correlation" in normalized:
         return (
@@ -61,13 +100,17 @@ def _rule_text(issue_type: str, summary: str) -> tuple[str, str, str]:
     )
 
 
-def proposal_from_issue(issue: dict[str, Any], generated_at: str) -> WorkflowChangeProposal:
-    """Input: issue dict and timestamp. Output: proposal. Convert one research issue into a reviewable rule proposal."""
+def proposal_from_issue(
+    issue: dict[str, Any],
+    generated_at: str,
+    benchmark_rules: list[Any] | None = None,
+) -> WorkflowChangeProposal:
+    """Input: issue, timestamp, optional active rules. Output: proposal. Convert an issue using rule authority."""
     issue_type = str(issue.get("issue_type", "manual_review"))
     summary = str(issue.get("summary", "Unclassified workflow issue."))
     evidence_paths = [str(item) for item in issue.get("evidence_paths", []) if str(item)]
     affected_modules = [str(item) for item in issue.get("affected_modules", []) if str(item)]
-    proposed_rule_change, expected_benefit, risk = _rule_text(issue_type, summary)
+    proposed_rule_change, expected_benefit, risk = _rule_text(issue_type, summary, benchmark_rules)
     identity = json.dumps(
         {"issue_type": issue_type, "summary": summary, "evidence_paths": evidence_paths},
         ensure_ascii=False,
@@ -86,9 +129,17 @@ def proposal_from_issue(issue: dict[str, Any], generated_at: str) -> WorkflowCha
         expected_benefit=expected_benefit,
         risk=risk,
         required_code_changes=affected_modules,
-        required_knowledge_updates=["knowledge/wiki/50_benchmarks", "knowledge/wiki/60_workflows"],
-        user_decision_options=["accept", "reject", "revise", "defer"],
+        required_knowledge_updates=[
+            "knowledge/machine/benchmark_rules.jsonl",
+            "knowledge/wiki/40_benchmark_and_repair_rules.md",
+            "knowledge/wiki/50_engineering_lessons.md",
+        ],
+        user_decision_options=["accepted_for_wiki", "accepted_for_implementation", "accepted_as_experiment", "rejected", "deferred"],
         status="proposed",
+        current_behavior=summary,
+        expected_impact=expected_benefit,
+        applied_at="",
+        supersedes=[],
     )
 
 
@@ -128,8 +179,16 @@ def _proposal_from_dict(row: dict[str, Any]) -> WorkflowChangeProposal:
         required_code_changes=[str(item) for item in row.get("required_code_changes", []) if str(item)],
         required_knowledge_updates=[str(item) for item in row.get("required_knowledge_updates", []) if str(item)],
         user_decision_options=[str(item) for item in row.get("user_decision_options", []) if str(item)],
-        status=str(row.get("status", "proposed")),
+        status=(
+            normalize_proposal_status(str(row.get("status", "proposed")))
+            if str(row.get("status", "proposed")).strip().lower() in {*PROPOSAL_STATUSES, "accepted"}
+            else str(row.get("status", "proposed"))
+        ),
         user_decision=str(row.get("user_decision", "")),
+        current_behavior=str(row.get("current_behavior", "")),
+        expected_impact=str(row.get("expected_impact", "")),
+        applied_at=str(row.get("applied_at", "")),
+        supersedes=[str(item) for item in (row.get("supersedes") or []) if str(item)],
     )
 
 
@@ -141,12 +200,9 @@ def write_workflow_proposals(output_dir: Path, proposals: list[WorkflowChangePro
     rows: list[dict[str, Any]] = []
     row_indexes: dict[str, int] = {}
     if jsonl_path.exists():
-        for line in jsonl_path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                row = json.loads(line)
-                if isinstance(row, dict):
-                    row_indexes[str(row.get("proposal_id", ""))] = len(rows)
-                    rows.append(row)
+        for row in load_workflow_proposals(output_dir):
+            row_indexes[str(row.get("proposal_id", ""))] = len(rows)
+            rows.append(row)
     for proposal in proposals:
         incoming = workflow_change_proposal_to_dict(proposal)
         proposal_id = proposal.proposal_id
@@ -167,5 +223,54 @@ def write_workflow_proposals(output_dir: Path, proposals: list[WorkflowChangePro
     markdown = ["# Workflow Change Proposals", ""]
     for row in rows:
         markdown.append(_proposal_markdown(_proposal_from_dict(row)))
+    markdown_path.write_text("\n\n".join(markdown), encoding="utf-8")
+    return jsonl_path, markdown_path
+
+
+def load_workflow_proposals(output_dir: str | Path) -> list[dict[str, Any]]:
+    """Input: proposal output dir. Output: proposal rows. Load persisted workflow proposal JSONL."""
+    jsonl_path = Path(output_dir) / PROPOSAL_JSONL
+    if not jsonl_path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in jsonl_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if isinstance(row, dict):
+            status = str(row.get("status", "proposed"))
+            if status.strip().lower() in {*PROPOSAL_STATUSES, "accepted"}:
+                row["status"] = normalize_proposal_status(status)
+            rows.append(row)
+    return rows
+
+
+def update_workflow_proposal_decision(
+    output_dir: str | Path,
+    proposal_id: str,
+    status: str,
+    user_decision: str,
+) -> tuple[Path, Path]:
+    """Input: output dir, proposal id, status, decision. Output: artifact paths. Persist user decision."""
+    normalized_status = normalize_proposal_status(status)
+    rows = load_workflow_proposals(output_dir)
+    matched = False
+    for row in rows:
+        if str(row.get("proposal_id", "")) == str(proposal_id):
+            row["status"] = normalized_status
+            row["user_decision"] = str(user_decision)
+            matched = True
+            break
+    if not matched:
+        raise ValueError(f"proposal not found: {proposal_id}")
+    proposals = [_proposal_from_dict(row) for row in rows]
+    jsonl_path = Path(output_dir) / PROPOSAL_JSONL
+    markdown_path = Path(output_dir) / PROPOSAL_MARKDOWN
+    with jsonl_path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    markdown = ["# Workflow Change Proposals", ""]
+    for proposal in proposals:
+        markdown.append(_proposal_markdown(proposal))
     markdown_path.write_text("\n\n".join(markdown), encoding="utf-8")
     return jsonl_path, markdown_path

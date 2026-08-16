@@ -5,15 +5,154 @@ from pathlib import Path
 
 from wqb.data_ledger import (
     DataLedgerRecord,
+    data_ledger_record_from_dict,
     data_ledger_record_to_dict,
+    data_record_authority,
+    load_data_ledger_from_knowledge,
+    is_authoritative_data_record,
     load_data_ledger,
     score_data_for_research,
     select_data_for_research,
+    summarize_data_ledger_authority,
     write_data_ledger_markdown,
 )
 
 
 class DataLedgerTest(unittest.TestCase):
+    def test_readiness_prefers_machine_resource_over_legacy_resource(self):
+        machine_row = json.dumps({"dataset_id": "machine", "field_id": "machine_field"}) + "\n"
+        legacy_row = json.dumps({"dataset_id": "legacy", "field_id": "legacy_field"}) + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            (root / "machine").mkdir(parents=True)
+            (root / "wiki" / "20_semantics").mkdir(parents=True)
+            (root / "machine" / "data_ledger.jsonl").write_text(machine_row, encoding="utf-8")
+            (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(legacy_row, encoding="utf-8")
+
+            records = load_data_ledger_from_knowledge(root)
+
+        self.assertEqual(records[0].field_id, "machine_field")
+
+    def test_readiness_reads_legacy_resource_when_machine_resource_has_not_been_compiled(self):
+        legacy_row = json.dumps({"dataset_id": "legacy", "field_id": "legacy_field"}) + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            (root / "wiki" / "20_semantics").mkdir(parents=True)
+            (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(legacy_row, encoding="utf-8")
+
+            records = load_data_ledger_from_knowledge(root)
+
+        self.assertEqual(records[0].field_id, "legacy_field")
+
+    def test_authority_requires_certified_canonical_raw_capture_evidence(self):
+        scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+        record = data_ledger_record_from_dict(
+            {
+                "dataset_id": "fundamental3",
+                "field_id": "cash_field",
+                "field_type": "MATRIX",
+                "region": "USA",
+                "delay": 1,
+                "universe": "TOP3000",
+                "coverage": 1.0,
+                "source_quality": "platform_raw_capture",
+                "coverage_status": "measured_raw",
+                "source_updated_at": "2026-07-22",
+                "source_paths": ["raw/platform/data_fields/2026-07-22/data_fields.jsonl"],
+                "available_scopes": [scope],
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            capture = root / "raw" / "platform" / "data_fields" / "2026-07-22"
+            capture.mkdir(parents=True)
+            (capture / "data_fields.jsonl").write_text(
+                json.dumps(
+                    {
+                        "scope": scope,
+                        "data_set": {"id": "fundamental3"},
+                        "field": {"id": "cash_field", "type": "MATRIX"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(data_record_authority(record, root), "unclassified")
+
+            (capture / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "generated_at": "2026-07-22T08:00:00+00:00",
+                        "certification_status": "complete",
+                        "requested_matrix": [scope],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (capture / "scopes.jsonl").write_text(
+                json.dumps({"scope": scope, "status": "completed", "certification_status": "complete"}) + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(data_record_authority(record, root), "authoritative_measured")
+            self.assertTrue(is_authoritative_data_record(record, root))
+
+    def test_data_record_authority_distinguishes_cache_and_measured_platform_rows(self):
+        cache = DataLedgerRecord(
+            dataset_id="fundamental3",
+            dataset_name="Fundamentals",
+            field_id="fnd3_q_cash_fast_d1",
+            field_type="MATRIX",
+            region="USA",
+            delay=1,
+            universe="TOP3000",
+            semantic_tags=["cash"],
+            coverage=0.8,
+            alpha_count=1,
+            user_count=1,
+            simulation_usage_count=0,
+            submitted_usage_count=0,
+            last_used_at="",
+            best_result_label="unexplored_cache_candidate",
+            correlation_risk="low",
+            source_paths=["docs/knowledge/cache/platform_metadata.json"],
+            source_quality="platform_metadata_cache",
+            coverage_status="measured_cache",
+        )
+        measured = data_ledger_record_from_dict(data_ledger_record_to_dict(cache) | {
+            "source_quality": "platform_raw_capture",
+            "coverage_status": "measured_raw",
+            "source_updated_at": "2026-07-22",
+            "source_paths": ["raw/platform/data_fields/2026-07-22/data_fields.jsonl"],
+        })
+
+        self.assertEqual(data_record_authority(cache), "seed_cache")
+        self.assertEqual(data_record_authority(measured), "authoritative_measured")
+        self.assertFalse(is_authoritative_data_record(cache))
+        self.assertTrue(is_authoritative_data_record(measured))
+        self.assertEqual(
+            summarize_data_ledger_authority([cache, measured])["authoritative_measured_count"],
+            1,
+        )
+
+    def test_select_data_rejects_cross_product_scope_when_exact_scopes_exist(self):
+        record = DataLedgerRecord(
+            dataset_id="fundamental3", dataset_name="Fundamentals", field_id="cash_field", field_type="MATRIX",
+            region="USA", delay=1, universe="TOP3000", semantic_tags=["cash"], coverage=1.0,
+            alpha_count=0, user_count=0, simulation_usage_count=0, submitted_usage_count=0,
+            last_used_at="", best_result_label="unexplored", correlation_risk="low", source_paths=[],
+            available_regions=["USA", "EUR"], available_delays=[0, 1], available_universes=["TOP500", "TOP3000"],
+            available_scopes=[
+                {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"},
+                {"instrument_type": "EQUITY", "region": "EUR", "delay": 0, "universe": "TOP500"},
+            ],
+        )
+
+        selected = select_data_for_research([record], "cash", "USA", 0, limit=5, universe="TOP500")
+
+        self.assertEqual(selected, [])
+
     def test_load_data_ledger_round_trips_jsonl(self):
         row = {
             "dataset_id": "news12",
@@ -46,6 +185,9 @@ class DataLedgerTest(unittest.TestCase):
             "crowding_risk": "medium",
             "known_operators": ["ts_delta", "rank"],
             "repair_usage_count": 2,
+            "source_quality": "platform_raw_capture",
+            "coverage_status": "measured_raw",
+            "source_updated_at": "2026-07-09",
         }
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "data_ledger.jsonl"
@@ -64,9 +206,15 @@ class DataLedgerTest(unittest.TestCase):
         self.assertEqual(records[0].crowding_risk, "medium")
         self.assertEqual(records[0].known_operators, ["ts_delta", "rank"])
         self.assertEqual(records[0].repair_usage_count, 2)
+        self.assertEqual(records[0].source_quality, "platform_raw_capture")
+        self.assertEqual(records[0].coverage_status, "measured_raw")
+        self.assertEqual(records[0].source_updated_at, "2026-07-09")
         serialized = data_ledger_record_to_dict(records[0])
         self.assertEqual(serialized["instrument_type"], "EQUITY")
         self.assertEqual(serialized["repair_usage_count"], 2)
+        self.assertEqual(serialized["source_quality"], "platform_raw_capture")
+        self.assertEqual(serialized["coverage_status"], "measured_raw")
+        self.assertEqual(serialized["source_updated_at"], "2026-07-09")
 
     def test_select_data_hard_filters_region_delay_and_universe_before_ranking(self):
         matching = DataLedgerRecord(
@@ -176,6 +324,39 @@ class DataLedgerTest(unittest.TestCase):
 
         self.assertIn("analyst9_eps_revision", text)
         self.assertIn("analyst_revision, growth", text)
+
+    def test_write_data_ledger_markdown_limits_large_human_preview(self):
+        records = [
+            DataLedgerRecord(
+                dataset_id="dataset",
+                dataset_name="Dataset",
+                field_id=f"field_{index:03d}",
+                field_type="MATRIX",
+                region="USA",
+                delay=1,
+                universe="TOP3000",
+                semantic_tags=["growth"],
+                coverage=0.5,
+                alpha_count=0,
+                user_count=0,
+                simulation_usage_count=0,
+                submitted_usage_count=0,
+                last_used_at="",
+                best_result_label="unexplored",
+                correlation_risk="low",
+                source_paths=["raw/platform/data_fields/2026-07-29/data_fields.jsonl"],
+            )
+            for index in range(205)
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            output = write_data_ledger_markdown(Path(tmp) / "data_ledger.md", records, "2026-07-10T00:00:00Z")
+            text = output.read_text(encoding="utf-8")
+
+        self.assertIn("Total records: `205`", text)
+        self.assertIn("Preview records: `200`", text)
+        self.assertIn("Full machine ledger: `data_ledger.jsonl`", text)
+        self.assertIn("field_199", text)
+        self.assertNotIn("field_200", text)
 
 
 if __name__ == "__main__":

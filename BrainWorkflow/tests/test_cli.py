@@ -4,8 +4,9 @@ import os
 import shutil
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from argparse import Namespace
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -13,9 +14,12 @@ from uuid import uuid4
 import requests
 
 from wqb.expression import expression_hash
+from wqb.knowledge_contracts import SourceIndexRow, update_source_index
+from wqb.knowledge_source_resolver import SourceSelection
 from wqb.principle_model import OptionCard, ScoreBreakdown, SourceEvidence
 from wqb.cli import (
     authenticate_for_run,
+    benchmark_fields_for_record,
     cache_metadata,
     config_overrides_from_args,
     complete_in_flight_simulations,
@@ -50,6 +54,7 @@ from wqb.cli import (
 )
 from wqb.config import load_config
 from wqb.recorder import RunRecorder
+from wqb.simulator import SimulationPollTimeout
 
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -72,12 +77,25 @@ def cleanup_run_dir(run_dir: Path) -> None:
 
 def write_ready_knowledge_artifacts(root: Path) -> None:
     """Input: knowledge root. Output: none. Create minimal scope-ready knowledge test artifacts."""
-    (root / "wiki" / "20_semantics").mkdir(parents=True, exist_ok=True)
-    (root / "wiki" / "30_templates").mkdir(parents=True, exist_ok=True)
-    (root / "wiki" / "50_benchmarks").mkdir(parents=True, exist_ok=True)
+    fresh_date = date.today().isoformat()
+    (root / "machine").mkdir(parents=True, exist_ok=True)
     (root / "wiki" / "10_foundations").mkdir(parents=True, exist_ok=True)
-    (root / "wiki" / "80_maintenance").mkdir(parents=True, exist_ok=True)
-    (root / "wiki" / "20_semantics" / "data_ledger.jsonl").write_text(
+    scope = {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}
+    capture = root / "raw" / "platform" / "data_fields" / fresh_date
+    capture.mkdir(parents=True, exist_ok=True)
+    (capture / "data_fields.jsonl").write_text(
+        json.dumps({"scope": scope, "data_set": {"id": "news12"}, "field": {"id": "news_field"}}) + "\n",
+        encoding="utf-8",
+    )
+    (capture / "scopes.jsonl").write_text(
+        json.dumps({"scope": scope, "status": "completed", "certification_status": "complete"}) + "\n",
+        encoding="utf-8",
+    )
+    (capture / "manifest.json").write_text(
+        json.dumps({"generated_at": f"{fresh_date}T00:00:00Z", "certification_status": "complete", "requested_matrix": [scope]}),
+        encoding="utf-8",
+    )
+    (root / "machine" / "data_ledger.jsonl").write_text(
         json.dumps(
             {
                 "dataset_id": "news12",
@@ -96,16 +114,20 @@ def write_ready_knowledge_artifacts(root: Path) -> None:
                 "last_used_at": "",
                 "best_result_label": "unexplored",
                 "correlation_risk": "low",
-                "source_paths": [],
+                "source_paths": [f"raw/platform/data_fields/{fresh_date}/data_fields.jsonl"],
+                "source_quality": "platform_raw_capture",
+                "coverage_status": "measured_raw",
+                "source_updated_at": fresh_date,
                 "available_regions": ["USA"],
                 "available_delays": [1],
                 "available_universes": ["TOP3000"],
+                "available_scopes": [scope],
             }
         )
         + "\n",
         encoding="utf-8",
     )
-    (root / "wiki" / "30_templates" / "template_library.jsonl").write_text(
+    (root / "machine" / "template_library.jsonl").write_text(
         json.dumps(
             {
                 "template_id": "matrix_rank",
@@ -126,15 +148,30 @@ def write_ready_knowledge_artifacts(root: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    (root / "wiki" / "50_benchmarks" / "correlation_and_novelty.md").write_text("# Benchmarks\n", encoding="utf-8")
+    (root / "machine" / "benchmark_rules.jsonl").write_text(
+        json.dumps(
+            {
+                "rule_id": "near_miss",
+                "issue_types": ["pnl_signal"],
+                "description": "Promote stable PnL.",
+                "promotion_condition": "Stable PnL is observed.",
+                "action": "Send to repair.",
+                "evidence_paths": ["raw/research/near_misses/example.md"],
+                "consumed_by": ["triage", "repair_loop", "candidate_gate"],
+                "risk": "May promote a fragile signal.",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     (root / "wiki" / "10_foundations" / "activity_snapshot.md").write_text("# Activity Snapshot\n", encoding="utf-8")
-    (root / "wiki" / "80_maintenance" / "freshness_manifest.json").write_text(
+    (root / "machine" / "freshness_manifest.json").write_text(
         json.dumps(
             [
-                {"name": "data_ledger", "path": "wiki/20_semantics/data_ledger.jsonl", "updated_at": "2026-07-10", "max_age_days": 7},
-                {"name": "template_library", "path": "wiki/30_templates/template_library.jsonl", "updated_at": "2026-07-10", "max_age_days": 7},
-                {"name": "benchmark_rules", "path": "wiki/50_benchmarks/correlation_and_novelty.md", "updated_at": "2026-07-10", "max_age_days": 7},
-                {"name": "activity_snapshot", "path": "wiki/10_foundations/activity_snapshot.md", "updated_at": "2026-07-10", "max_age_days": 7},
+                {"name": "data_ledger", "path": "machine/data_ledger.jsonl", "updated_at": fresh_date, "max_age_days": 7},
+                {"name": "template_library", "path": "machine/template_library.jsonl", "updated_at": fresh_date, "max_age_days": 7},
+                {"name": "benchmark_rules", "path": "machine/benchmark_rules.jsonl", "updated_at": fresh_date, "max_age_days": 7},
+                {"name": "activity_snapshot", "path": "wiki/10_foundations/activity_snapshot.md", "updated_at": fresh_date, "max_age_days": 7},
             ]
         ),
         encoding="utf-8",
@@ -142,6 +179,75 @@ def write_ready_knowledge_artifacts(root: Path) -> None:
 
 
 class CliTests(unittest.TestCase):
+    def test_benchmark_fields_use_persisted_rulebook(self):
+        from wqb.benchmark_rules import BenchmarkRule, write_benchmark_rules_jsonl
+
+        record = {
+            "hard_pass": False,
+            "metrics": {"sharpe": 0.7, "fitness": 0.1, "returns": 0.1, "turnover": 0.2},
+            "failed": ["LOW_SHARPE"],
+            "pending": [],
+            "signal_note": "stable pnl",
+        }
+        promotion = BenchmarkRule(
+            rule_id="cli_persisted_promotion",
+            issue_types=["pnl_signal"],
+            description="Promote stable PnL.",
+            promotion_condition="Stable PnL is observed.",
+            action="Send the candidate to repair.",
+            evidence_paths=[],
+            consumed_by=["candidate_gate"],
+            risk="May promote a fragile signal.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            path = root / "machine" / "benchmark_rules.jsonl"
+            write_benchmark_rules_jsonl(path, [])
+            before = benchmark_fields_for_record(
+                record,
+                knowledge_root=root,
+                consumer="candidate_gate",
+            )
+
+            write_benchmark_rules_jsonl(path, [promotion])
+            after = benchmark_fields_for_record(
+                record,
+                knowledge_root=root,
+                consumer="candidate_gate",
+            )
+
+        self.assertEqual(before["benchmark_label"], "weak_discard")
+        self.assertEqual(after["benchmark_label"], "repairable_signal")
+
+    def test_benchmark_fields_ignore_rule_for_unrelated_consumer(self):
+        from wqb.benchmark_rules import BenchmarkRule
+
+        record = {
+            "hard_pass": False,
+            "metrics": {"sharpe": 0.7, "fitness": 0.1, "returns": 0.1, "turnover": 0.2},
+            "failed": ["LOW_SHARPE"],
+            "pending": [],
+            "signal_note": "stable pnl",
+        }
+        proposal_rule = BenchmarkRule(
+            rule_id="proposal_only_pnl",
+            issue_types=["pnl_signal"],
+            description="Draft a workflow proposal.",
+            promotion_condition="Stable PnL is observed.",
+            action="Create a proposal.",
+            evidence_paths=[],
+            consumed_by=["workflow_proposals"],
+            risk="May create noisy proposals.",
+        )
+
+        fields = benchmark_fields_for_record(
+            record,
+            benchmark_rules=[proposal_rule],
+            consumer="triage",
+        )
+
+        self.assertEqual(fields["benchmark_label"], "weak_discard")
+
     def test_launch_workflow_writes_manifest_readiness_and_handoffs(self):
         from wqb.cli import launch_workflow
 
@@ -318,6 +424,71 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.readiness_mode, "research")
         self.assertTrue(args.enable_live_api)
 
+    def test_parse_args_accepts_workflow_auto_continue(self):
+        with patch("sys.argv", ["wqb", "workflow-auto-continue", "--enable-live-api"]):
+            args = parse_args()
+
+        self.assertEqual(args.command, "workflow-auto-continue")
+        self.assertTrue(args.enable_live_api)
+
+    def test_workflow_auto_continue_cli_does_not_inject_live_runners_without_authorization(self):
+        config = {"run_root": "runs", "knowledge_root": "knowledge"}
+        with patch("sys.argv", ["wqb", "workflow-auto-continue"]), patch(
+            "wqb.cli.load_config", return_value=config
+        ), patch(
+            "wqb.workflow_auto_continue.auto_continue_workflow",
+            return_value={"status": "paused"},
+        ) as dispatcher, redirect_stdout(io.StringIO()):
+            main()
+
+        kwargs = dispatcher.call_args.kwargs
+        self.assertFalse(kwargs["enable_live_api"])
+        self.assertIsNone(kwargs["source_batch_runner"])
+        self.assertIsNone(kwargs["complete_in_flight_runner"])
+        self.assertIsNone(kwargs["retry_planned_runner"])
+
+    def test_compile_knowledge_dispatches_maintenance_pipeline(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "compile-knowledge", "--knowledge-root", "knowledge", "--apply-cleanup", "--max-case-reports", "7"]), patch(
+            "wqb.cli.run_knowledge_maintenance",
+            return_value={"status": "completed", "report_path": "knowledge/raw/maintenance/compile_reports/2026-07-30.json"},
+        ) as maintenance, redirect_stdout(output):
+            main()
+
+        maintenance.assert_called_once_with("knowledge", apply_cleanup=True, max_case_reports=7)
+        self.assertEqual(json.loads(output.getvalue())["status"], "completed")
+
+    def test_delivery_gate_dispatches_with_required_roots(self):
+        output = io.StringIO()
+        with patch(
+            "sys.argv",
+            ["wqb", "delivery-gate", "--knowledge-root", "knowledge", "--runs-root", "runs", "--console-base-url", "http://127.0.0.1:8765"],
+        ), patch(
+            "wqb.cli.run_delivery_gate",
+            return_value={"status": "passed", "report_path": "knowledge/raw/maintenance/delivery_gates/2026-07-30.json"},
+        ) as gate, redirect_stdout(output):
+            main()
+
+        gate.assert_called_once_with("knowledge", "runs", console_base_url="http://127.0.0.1:8765")
+        self.assertEqual(json.loads(output.getvalue())["status"], "passed")
+
+    def test_delivery_verify_dispatches_local_verification_runner(self):
+        output = io.StringIO()
+        with patch(
+            "sys.argv",
+            ["wqb", "delivery-verify", "--knowledge-root", "knowledge"],
+        ), patch(
+            "wqb.cli.run_delivery_verification",
+            return_value={
+                "status": "passed",
+                "report_path": "knowledge/raw/maintenance/delivery_checks/20260730T000000Z.json",
+            },
+        ) as verify, redirect_stdout(output):
+            main()
+
+        verify.assert_called_once_with("knowledge")
+        self.assertEqual(json.loads(output.getvalue())["status"], "passed")
+
     def test_readiness_check_main_dispatches_without_simulation(self):
         output = io.StringIO()
         with patch("sys.argv", ["wqb", "readiness-check"]), patch(
@@ -338,7 +509,7 @@ class CliTests(unittest.TestCase):
             knowledge_root="knowledge",
             data_ledger_count=1,
             template_count=1,
-            artifact_paths=["knowledge/wiki/20_semantics/data_ledger.jsonl"],
+            artifact_paths=["knowledge/machine/data_ledger.jsonl"],
             warnings=[],
         )
         with patch("wqb.cli.bootstrap_knowledge", return_value=fake_summary):
@@ -362,12 +533,12 @@ class CliTests(unittest.TestCase):
         expected = TESTS_DIR.parents[2] / "knowledge"
 
         self.assertEqual(default_knowledge_root(), expected)
-        self.assertEqual(Path(default_option_output_dir()), expected / "wiki" / "70_decisions")
+        self.assertEqual(Path(default_option_output_dir()), expected / "machine" / "decisions")
 
         custom_root = TESTS_DIR / "_custom_knowledge"
         with patch.dict(os.environ, {"BRAIN_KNOWLEDGE_ROOT": str(custom_root)}):
             self.assertEqual(default_knowledge_root(), custom_root)
-            self.assertEqual(Path(default_option_output_dir()), custom_root / "wiki" / "70_decisions")
+            self.assertEqual(Path(default_option_output_dir()), custom_root / "machine" / "decisions")
 
     def test_learn_capture_defaults_to_raw_layer(self):
         from scripts import capture_learn_material
@@ -388,7 +559,11 @@ class CliTests(unittest.TestCase):
         )
         self.assertEqual(
             capture_learn_material.WIKI_LEARN_PAGE,
-            expected / "wiki" / "10_foundations" / "learn_material_index.md",
+            expected / "machine" / "previews" / "learn_material_index.md",
+        )
+        self.assertEqual(
+            capture_learn_material.WIKI_OPERATOR_PAGE,
+            expected / "machine" / "previews" / "operator_catalog_official.md",
         )
 
     def test_config_overrides_from_args_includes_request_hyperparameters(self):
@@ -426,46 +601,113 @@ class CliTests(unittest.TestCase):
             pass
 
         with tempfile.TemporaryDirectory() as tmp:
+            knowledge_root = Path(tmp) / "knowledge"
+            write_ready_knowledge_artifacts(knowledge_root)
+            machine = knowledge_root / "machine"
+            (machine / "operator_ledger.jsonl").write_text(
+                json.dumps(
+                    {
+                        "operator": "rank",
+                        "family": "cross_sectional",
+                        "workflow_uses": ["discovery"],
+                        "compatible_field_types": ["MATRIX"],
+                        "template_tags": ["power_pool"],
+                        "risk_tags": [],
+                        "repair_levers": [],
+                        "source_paths": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (machine / "benchmark_rules.jsonl").write_text(
+                json.dumps(
+                    {
+                        "rule_id": "test_rule",
+                        "issue_types": ["correlation"],
+                        "description": "Test rule.",
+                        "promotion_condition": "Test condition.",
+                        "action": "Test action.",
+                        "evidence_paths": [],
+                        "consumed_by": ["research_planner"],
+                        "risk": "low",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             with patch("wqb.cli.build_client", return_value=FakeClient()), patch(
                 "wqb.cli.refresh_incentive_snapshot", return_value=snapshot
             ):
-                result = plan_research_options({"request_timeout_seconds": 1}, max_options=3, output_dir=tmp)
+                result = plan_research_options(
+                    {"request_timeout_seconds": 1, "knowledge_root": str(knowledge_root)},
+                    max_options=3,
+                    output_dir=tmp,
+                )
 
             self.assertGreaterEqual(result["option_count"], 1)
             self.assertTrue(Path(result["jsonl_path"]).exists())
             self.assertTrue(Path(result["markdown_path"]).exists())
+            row = json.loads(Path(result["jsonl_path"]).read_text(encoding="utf-8").splitlines()[0])
+            self.assertIn("data_authority", row)
+            self.assertEqual(row["operator_semantic_count"], 1)
+            self.assertIn("template_matrix_ready_count", row)
+            self.assertEqual(row["benchmark_rule_count"], 1)
+            self.assertIn("maintenance_blockers", row)
+
+    def test_plan_research_options_main_requires_live_api_flag(self):
+        with patch("sys.argv", ["wqb", "plan-research-options"]):
+            with self.assertRaisesRegex(SystemExit, "--enable-live-api is required"):
+                main()
+
+    def test_plan_research_options_main_dispatches_when_live_api_enabled(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "plan-research-options", "--enable-live-api"]), patch(
+            "wqb.cli.plan_research_options",
+            return_value={"option_count": 1, "jsonl_path": "cards.jsonl", "markdown_path": "cards.md"},
+        ) as planner, redirect_stdout(output):
+            main()
+
+        planner.assert_called_once()
+        self.assertEqual(json.loads(output.getvalue())["option_count"], 1)
 
     def test_knowledge_health_check_writes_report_without_simulation(self):
         from wqb.cli import knowledge_health_check
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            knowledge_root = root / "knowledge"
+            for name in ("raw", "machine", "wiki"):
+                (knowledge_root / name).mkdir(parents=True)
             manifest = root / "freshness.json"
-            report = root / "knowledge" / "wiki" / "80_maintenance" / "freshness_report.md"
+            report = root / "freshness_report.md"
             manifest.write_text(
                 json.dumps(
                     [
                         {
                             "name": "data_ledger",
-                            "path": "knowledge/wiki/20_semantics/data_ledger.jsonl",
+                            "path": "machine/data_ledger.jsonl",
                             "updated_at": "2026-07-08",
                             "max_age_days": 1,
                         },
-                        {"name": "template_library", "path": "knowledge/wiki/30_templates/template_library.jsonl", "updated_at": "2026-07-08", "max_age_days": 7},
-                        {"name": "benchmark_rules", "path": "knowledge/wiki/50_benchmarks", "updated_at": "2026-07-08", "max_age_days": 3},
-                        {"name": "activity_snapshot", "path": "knowledge/wiki/10_foundations/activity_snapshot.md", "updated_at": "2026-07-08", "max_age_days": 1},
+                        {"name": "template_library", "path": "machine/template_library.jsonl", "updated_at": "2026-07-08", "max_age_days": 7},
+                        {"name": "benchmark_rules", "path": "machine/benchmark_rules.jsonl", "updated_at": "2026-07-08", "max_age_days": 3},
+                        {"name": "activity_snapshot", "path": "raw/platform/activities/activity_snapshot.md", "updated_at": "2026-07-08", "max_age_days": 1},
                     ]
                 ),
                 encoding="utf-8",
             )
 
-            result = knowledge_health_check(root, manifest, report, today_value="2026-07-10")
+            result = knowledge_health_check(knowledge_root, manifest, report, today_value="2026-07-10")
 
             self.assertTrue(Path(result["report_path"]).exists())
-            self.assertIn("missing", report.read_text(encoding="utf-8"))
+            report_text = report.read_text(encoding="utf-8")
+            self.assertIn("missing", report_text)
+            self.assertIn("Knowledge Contract Health", report_text)
 
         self.assertEqual(result["stale_count"], 4)
         self.assertEqual(result["missing_count"], 4)
+        self.assertEqual(result["contract_issue_count"], 0)
 
     def test_knowledge_health_check_rejects_partial_manifest(self):
         from wqb.cli import knowledge_health_check
@@ -501,8 +743,8 @@ class CliTests(unittest.TestCase):
             write_ready_knowledge_artifacts(root)
             option_path = root / "option.json"
             option_path.write_text(json.dumps(option_card_to_dict(option)), encoding="utf-8")
-            ledger_dir = root / "wiki" / "20_semantics"
-            template_dir = root / "wiki" / "30_templates"
+            ledger_dir = root / "machine"
+            template_dir = root / "machine"
             ledger_dir.mkdir(parents=True, exist_ok=True)
             template_dir.mkdir(parents=True, exist_ok=True)
             (ledger_dir / "data_ledger.jsonl").write_text(
@@ -524,10 +766,19 @@ class CliTests(unittest.TestCase):
                         "last_used_at": "2026-07-09",
                         "best_result_label": "repairable_signal",
                         "correlation_risk": "medium",
-                        "source_paths": ["raw"],
+                        "source_paths": [f"raw/platform/data_fields/{date.today().isoformat()}/data_fields.jsonl"],
+                        "source_quality": "platform_raw_capture",
+                        "coverage_status": "measured_raw",
+                        "source_updated_at": date.today().isoformat(),
+                        "available_scopes": [{"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}],
                     }
                 )
                 + "\n",
+                encoding="utf-8",
+            )
+            capture_fields = root / "raw" / "platform" / "data_fields" / date.today().isoformat() / "data_fields.jsonl"
+            capture_fields.write_text(
+                json.dumps({"scope": {"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}, "data_set": {"id": "news12"}, "field": {"id": "news12_sentiment_fast_d1"}}) + "\n",
                 encoding="utf-8",
             )
             (template_dir / "template_library.jsonl").write_text(
@@ -584,7 +835,7 @@ class CliTests(unittest.TestCase):
             ledger_dir.mkdir(parents=True, exist_ok=True)
             template_dir.mkdir(parents=True, exist_ok=True)
             (ledger_dir / "data_ledger.jsonl").write_text(
-                json.dumps({"dataset_id": "news12", "dataset_name": "News", "field_id": "news_field", "field_type": "MATRIX", "region": "USA", "delay": 1, "universe": "TOP3000", "semantic_tags": ["power_pool"], "coverage": 0.8, "alpha_count": 0, "user_count": 0, "simulation_usage_count": 0, "submitted_usage_count": 0, "last_used_at": "", "best_result_label": "unexplored", "correlation_risk": "low", "source_paths": []}) + "\n",
+                json.dumps({"dataset_id": "news12", "dataset_name": "News", "field_id": "news_field", "field_type": "MATRIX", "region": "USA", "delay": 1, "universe": "TOP3000", "semantic_tags": ["power_pool"], "coverage": 0.8, "alpha_count": 0, "user_count": 0, "simulation_usage_count": 0, "submitted_usage_count": 0, "last_used_at": "", "best_result_label": "unexplored", "correlation_risk": "low", "source_paths": [f"raw/platform/data_fields/{date.today().isoformat()}/data_fields.jsonl"], "source_quality": "platform_raw_capture", "coverage_status": "measured_raw", "source_updated_at": date.today().isoformat(), "available_scopes": [{"instrument_type": "EQUITY", "region": "USA", "delay": 1, "universe": "TOP3000"}]}) + "\n",
                 encoding="utf-8",
             )
             (template_dir / "template_library.jsonl").write_text(
@@ -642,6 +893,35 @@ class CliTests(unittest.TestCase):
         self.assertEqual(schedule_args.option_index, 2)
         self.assertIsNone(schedule_without_index.option_index)
 
+    def test_knowledge_contract_check_main_reports_contract_issues_without_simulation(self):
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            raw_path = root / "raw" / "platform" / "learn" / "2026-07-22" / "operators.md"
+            raw_path.parent.mkdir(parents=True)
+            raw_path.write_text("---\nsource_type: platform_api\n---\n# Operators\n", encoding="utf-8")
+            source_index = update_source_index(
+                root,
+                [
+                    SourceIndexRow(
+                        path="raw/platform/learn/2026-07-22/operators.md",
+                        source_family="learn",
+                        source_type="platform_api",
+                        contents="operator capture",
+                        update_check="compare operators",
+                        compiled_targets=[],
+                    )
+                ],
+            )
+
+            with patch("sys.argv", ["wqb", "knowledge-contract-check", "--knowledge-root", str(root)]), redirect_stdout(output):
+                main()
+
+        result = json.loads(output.getvalue())
+        self.assertGreater(result["issue_count"], 0)
+        self.assertIn("missing source_family", [item["issue"] for item in result["issues"]])
+        self.assertNotIn(str(source_index), [item["path"] for item in result["issues"]])
+
     def test_schedule_research_main_requires_option_json(self):
         with patch("sys.argv", ["wqb", "schedule-research"]):
             with self.assertRaisesRegex(SystemExit, "--option-json is required"):
@@ -678,6 +958,151 @@ class CliTests(unittest.TestCase):
 
         health_check.assert_called_once()
         self.assertEqual(json.loads(output.getvalue())["report_path"], "report.md")
+
+    def test_knowledge_health_check_main_uses_explicit_knowledge_root(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "knowledge-health-check", "--knowledge-root", "custom_knowledge"]), patch(
+            "wqb.cli.knowledge_health_check", return_value={"record_count": 1, "stale_count": 0, "missing_count": 0, "report_path": "report.md"}
+        ) as health_check, redirect_stdout(output):
+            main()
+
+        self.assertEqual(health_check.call_args.args[0], "custom_knowledge")
+        self.assertEqual(json.loads(output.getvalue())["report_path"], "report.md")
+        self.assertEqual(health_check.call_args.args[2], "machine/reports/freshness_report.md")
+
+    def test_compile_research_records_main_dispatches_without_network(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "compile-research-records", "--knowledge-root", "custom_knowledge"]), patch(
+            "wqb.cli.compile_research_records_command",
+            return_value={"record_count": 1, "markdown_path": "compile.md", "json_path": "compile.json"},
+        ) as compiler, redirect_stdout(output):
+            main()
+
+        compiler.assert_called_once_with("custom_knowledge")
+        self.assertEqual(json.loads(output.getvalue())["markdown_path"], "compile.md")
+
+    def test_capture_interaction_note_main_writes_raw_note_without_network(self):
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch(
+                "sys.argv",
+                [
+                    "wqb",
+                    "capture-interaction-note",
+                    "--knowledge-root",
+                    str(root),
+                    "--summary",
+                    "Keep a regression test for every fixed workflow bug.",
+                    "--category",
+                    "workflow_rule",
+                    "--tag",
+                    "maintenance",
+                    "--evidence-path",
+                    "milestone.md",
+                ],
+            ), redirect_stdout(output):
+                main()
+
+            result = json.loads(output.getvalue())
+            notes = (root / "raw" / "community" / "user_messages").rglob("interaction_notes.jsonl")
+            note_paths = list(notes)
+
+        self.assertEqual(len(note_paths), 1)
+        self.assertEqual(Path(result["path"]), note_paths[0])
+
+    def test_capture_platform_data_fields_requires_live_api_flag(self):
+        with patch("sys.argv", ["wqb", "capture-platform-data-fields"]):
+            with self.assertRaises(SystemExit) as ctx:
+                main()
+
+        self.assertIn("--enable-live-api", str(ctx.exception))
+
+    def test_capture_platform_data_fields_dispatches_with_scope_limits(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "capture-platform-data-fields", "--enable-live-api", "--capture-region", "USA,EUR", "--capture-delay", "1", "--capture-universe", "TOP3000", "--max-scopes", "2"]):
+            with patch("wqb.cli.capture_platform_data_fields_command", return_value={"field_count": 7}) as command:
+                with redirect_stdout(output):
+                    main()
+
+        kwargs = command.call_args.kwargs
+        self.assertEqual(kwargs["regions"], ["USA", "EUR"])
+        self.assertEqual(kwargs["delays"], [1])
+        self.assertEqual(kwargs["universes"], ["TOP3000"])
+        self.assertEqual(kwargs["max_scopes"], 2)
+        self.assertEqual(json.loads(output.getvalue())["field_count"], 7)
+
+    def test_stratified_capture_commands_dispatch_without_live_field_capture(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "plan-stratified-data-capture", "--knowledge-root", "knowledge", "--fields-per-scope", "25", "--max-scopes", "4"]):
+            with patch("wqb.cli.plan_stratified_data_capture_command", return_value={"scope_count": 4}) as command:
+                with redirect_stdout(output):
+                    main()
+
+        self.assertEqual(command.call_args.args[0], "knowledge")
+        self.assertEqual(command.call_args.kwargs["fields_per_scope"], 25)
+        self.assertEqual(command.call_args.kwargs["max_scopes"], 4)
+        self.assertEqual(json.loads(output.getvalue())["scope_count"], 4)
+
+    def test_capture_platform_data_fields_forwards_stratified_plan_arguments(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "capture-platform-data-fields", "--enable-live-api", "--capture-plan-path", "plan.jsonl", "--fields-per-scope", "25"]):
+            with patch("wqb.cli.capture_platform_data_fields_command", return_value={"field_count": 2}) as command:
+                with redirect_stdout(output):
+                    main()
+
+        self.assertEqual(command.call_args.kwargs["capture_plan_path"], "plan.jsonl")
+        self.assertEqual(command.call_args.kwargs["fields_per_scope"], 25)
+
+    def test_compile_data_ledger_dispatches_without_live_api(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "compile-data-ledger", "--knowledge-root", "knowledge"]):
+            with patch("wqb.cli.compile_data_ledger_command", return_value={"record_count": 3}) as command:
+                with redirect_stdout(output):
+                    main()
+
+        self.assertEqual(command.call_args.args[0], "knowledge")
+        self.assertEqual(json.loads(output.getvalue())["record_count"], 3)
+
+    def test_compile_operator_semantics_writes_local_ledger_without_live_api(self):
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("sys.argv", ["wqb", "compile-operator-semantics", "--knowledge-root", str(root)]), redirect_stdout(output):
+                main()
+
+            result = json.loads(output.getvalue())
+            jsonl_path = root / "machine" / "operator_ledger.jsonl"
+            markdown_path = root / "machine" / "previews" / "operator_semantics.md"
+            self.assertEqual(result["record_count"], 3)
+            self.assertEqual(Path(result["jsonl_path"]), jsonl_path)
+            self.assertEqual(Path(result["markdown_path"]), markdown_path)
+            self.assertTrue(jsonl_path.exists())
+            self.assertIn("vec_avg", markdown_path.read_text(encoding="utf-8"))
+            self.assertFalse((root / "wiki" / "20_operator_semantics.md").exists())
+
+    def test_migrate_knowledge_vault_dispatches_without_live_api(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "migrate-knowledge-vault", "--knowledge-root", "knowledge"]):
+            with patch("wqb.cli.run_knowledge_vault_migration", return_value={"status": "completed"}) as command:
+                with redirect_stdout(output):
+                    main()
+
+        command.assert_called_once_with("knowledge")
+        self.assertEqual(json.loads(output.getvalue())["status"], "completed")
+
+    def test_launch_console_parse_and_dispatch(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "launch-console", "--console-host", "127.0.0.1", "--console-port", "0", "--no-open-browser"]), patch(
+            "wqb.cli.run_console",
+            return_value={"url": "http://127.0.0.1:0", "host": "127.0.0.1", "port": 0},
+        ) as launcher, redirect_stdout(output):
+            args = parse_args()
+            self.assertEqual(args.command, "launch-console")
+            main()
+
+        launcher.assert_called_once()
+        self.assertEqual(json.loads(output.getvalue())["url"], "http://127.0.0.1:0")
 
     def test_dry_run_prints_payloads_without_network(self):
         config = load_config(
@@ -1469,6 +1894,58 @@ class CliTests(unittest.TestCase):
         finally:
             cleanup_run_dir(run_dir)
 
+    def test_refresh_existing_alpha_batch_records_recoverable_child_poll_error(self):
+        class FakeResponse:
+            def __init__(self, headers=None, payload=None):
+                self.headers = headers or {}
+                self.payload = payload or {}
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        class FakeClient:
+            def get_json(self, path):
+                if path == "/alphas/old1":
+                    return {
+                        "settings": {"region": "USA", "decay": 10},
+                        "regular": {"code": "rank(close)"},
+                    }
+                raise AssertionError(f"unexpected path: {path}")
+
+            def post_json(self, path, payload):
+                return FakeResponse(headers={"Location": "/simulations/parent"})
+
+            def request(self, method, path):
+                if path == "/simulations/parent":
+                    return FakeResponse(payload={"children": ["child1"]})
+                if path == "/simulations/child1":
+                    raise SimulationPollTimeout("simulation poll exceeded Retry-After limit for /simulations/child1")
+                raise AssertionError(f"unexpected request: {method} {path}")
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+
+            summaries = refresh_existing_alpha_batch(
+                FakeClient(),
+                recorder,
+                "old1",
+                setting_variants=[{"decay": 15}],
+            )
+
+            self.assertEqual(summaries, [])
+            errors = recorder.read_jsonl("run_errors.jsonl")
+            self.assertEqual(errors[0]["stage"], "refresh_alpha_batch_child_poll")
+            self.assertEqual(errors[0]["status_code"], "SIMULATION_POLL_TIMEOUT")
+            self.assertEqual(errors[0]["progress_url"], "/simulations/parent")
+            self.assertIn("/simulations/child1", errors[0]["message"])
+            self.assertEqual(summarize_run_dir(run_dir)["in_flight_count"], 1)
+        finally:
+            cleanup_run_dir(run_dir)
+
     def test_complete_in_flight_simulations_records_checked_alpha(self):
         class FakeResponse:
             def __init__(self, payload=None):
@@ -1508,6 +1985,17 @@ class CliTests(unittest.TestCase):
                     "operator_replacements": {},
                 },
             )
+            (run_dir / "rate_limit_state.json").write_text(
+                json.dumps(
+                    {
+                        "status": "cooldown",
+                        "attempt_count": 3,
+                        "consecutive_429_count": 3,
+                        "retry_at": "2026-08-12T00:00:00+00:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             completed = complete_in_flight_simulations(FakeClient(), recorder)
 
@@ -1520,6 +2008,9 @@ class CliTests(unittest.TestCase):
             self.assertEqual(alpha_record["expression"], "rank(sentiment_a)")
             self.assertEqual(alpha_record["field_search"], "sentiment")
             self.assertTrue((run_dir / "candidates.csv").exists())
+            reset = json.loads((run_dir / "rate_limit_state.json").read_text(encoding="utf-8"))
+            self.assertEqual(reset["status"], "ready")
+            self.assertEqual(reset["consecutive_429_count"], 0)
         finally:
             cleanup_run_dir(run_dir)
 
@@ -2215,6 +2706,108 @@ class CliTests(unittest.TestCase):
         finally:
             cleanup_run_dir(run_dir)
 
+    def test_submit_candidate_payloads_does_not_fallback_after_multi_rate_limit(self):
+        class FakeResponse:
+            def __init__(self, headers=None):
+                self.headers = headers or {}
+
+            def raise_for_status(self):
+                return None
+
+        class FakeClient:
+            def __init__(self):
+                self.paths = []
+                self.multi_attempts = 0
+
+            def post_json(self, path, payload):
+                self.paths.append(path)
+                if path == "/simulations" and isinstance(payload, list):
+                    self.multi_attempts += 1
+                    response = requests.Response()
+                    response.status_code = 400 if self.multi_attempts == 1 else 429
+                    response.headers["Retry-After"] = "60"
+                    raise requests.exceptions.HTTPError("submit failed", response=response)
+                return FakeResponse(headers={"Location": "/simulations/serial"})
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+            payloads = [
+                {"type": "REGULAR", "regular": "rank(field_0)", "settings": {}},
+                {"type": "REGULAR", "regular": "rank(field_1)", "settings": {}},
+            ]
+            metadata = [
+                {"expression_hash": "h0", "expression": "rank(field_0)"},
+                {"expression_hash": "h1", "expression": "rank(field_1)"},
+            ]
+            client = FakeClient()
+
+            with patch("wqb.cli.FIELD_BATCH_MULTI_CHUNK_SIZE", 1):
+                summaries = submit_candidate_payloads(
+                    client,
+                    recorder,
+                    payloads,
+                    metadata,
+                    submit_mode="multi",
+                    stage_prefix="unit",
+                    defer_poll=True,
+                )
+
+            self.assertEqual(summaries, [])
+            self.assertEqual(recorder.read_jsonl("simulation_events.jsonl"), [])
+            self.assertEqual(client.paths, ["/simulations", "/simulations"])
+            self.assertEqual((run_dir / "rate_limit_state.json").exists(), True)
+        finally:
+            cleanup_run_dir(run_dir)
+
+    def test_submit_candidate_payloads_records_recoverable_multi_child_poll_error(self):
+        class FakeResponse:
+            def __init__(self, headers=None, payload=None):
+                self.headers = headers or {}
+                self.payload = payload or {}
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        class FakeClient:
+            def post_json(self, path, payload):
+                return FakeResponse(headers={"Location": "/simulations/parent"})
+
+            def request(self, method, path):
+                if path == "/simulations/parent":
+                    return FakeResponse(payload={"children": ["child1"]})
+                if path == "/simulations/child1":
+                    raise SimulationPollTimeout("simulation poll exceeded Retry-After limit for /simulations/child1")
+                raise AssertionError(f"unexpected request: {method} {path}")
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+            payloads = [{"type": "REGULAR", "regular": "rank(field_0)", "settings": {}}]
+            metadata = [{"expression_hash": "h0", "expression": "rank(field_0)"}]
+
+            summaries = submit_candidate_payloads(
+                FakeClient(),
+                recorder,
+                payloads,
+                metadata,
+                submit_mode="multi",
+                stage_prefix="unit",
+            )
+
+            self.assertEqual(summaries, [])
+            errors = recorder.read_jsonl("run_errors.jsonl")
+            self.assertEqual(errors[0]["stage"], "unit_multi_child_poll")
+            self.assertEqual(errors[0]["status_code"], "SIMULATION_POLL_TIMEOUT")
+            self.assertEqual(errors[0]["progress_url"], "/simulations/parent")
+            self.assertIn("/simulations/child1", errors[0]["message"])
+            self.assertEqual(summarize_run_dir(run_dir)["in_flight_count"], 1)
+        finally:
+            cleanup_run_dir(run_dir)
+
     def test_run_field_batch_uses_field_search_and_records_check(self):
         class FakeResponse:
             def __init__(self, headers=None, payload=None):
@@ -2378,7 +2971,11 @@ class CliTests(unittest.TestCase):
             recorder = RunRecorder(run_dir)
             config = load_config(
                 "configs/stage1_usa_d1.yaml",
-                overrides={"max_alphas_per_round": 1, "run_root": str(TESTS_DIR)},
+                overrides={
+                    "max_alphas_per_round": 1,
+                    "knowledge_root": str(run_dir / "knowledge"),
+                    "run_root": str(TESTS_DIR),
+                },
             )
             client = FakeClient()
 
@@ -2520,7 +3117,11 @@ class CliTests(unittest.TestCase):
             recorder = RunRecorder(run_dir)
             config = load_config(
                 "configs/stage1_usa_d1.yaml",
-                overrides={"max_alphas_per_round": 1, "run_root": str(TESTS_DIR)},
+                overrides={
+                    "max_alphas_per_round": 1,
+                    "knowledge_root": str(run_dir / "knowledge"),
+                    "run_root": str(TESTS_DIR),
+                },
             )
             client = FakeClient()
 
@@ -2538,6 +3139,223 @@ class CliTests(unittest.TestCase):
                 "rank(annual_operating_cashflow_amount_fast_d1) - rank(fnd3_a_capex_fast_d1)",
             )
             self.assertEqual(recorder.read_jsonl("run_meta.jsonl")[0]["template_mode"], "relational")
+        finally:
+            cleanup_run_dir(run_dir)
+
+    def test_run_field_batch_records_knowledge_source_provenance(self):
+        run_dir = make_run_dir()
+        with tempfile.TemporaryDirectory() as tmp:
+            knowledge_root = Path(tmp)
+            machine_root = knowledge_root / "machine"
+            machine_root.mkdir()
+            (machine_root / "data_ledger.jsonl").write_text(
+                json.dumps(
+                    {
+                        "field_id": "buzz_intensity_score_15",
+                        "field_type": "VECTOR",
+                        "dataset_id": "analyst_buzz",
+                        "coverage": 0.93,
+                        "instrument_type": "EQUITY",
+                        "region": "USA",
+                        "delay": 1,
+                        "universe": "TOP3000",
+                        "source_quality": "platform_raw_capture",
+                        "source_updated_at": "2026-08-12",
+                        "source_paths": ["raw/platform/data_fields/2026-08-12/data_fields.md"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (machine_root / "operator_ledger.jsonl").write_text(json.dumps({"operator": "vec_count"}) + "\n", encoding="utf-8")
+            (machine_root / "template_library.jsonl").write_text(json.dumps({"template_id": "vector_event_count_surprise"}) + "\n", encoding="utf-8")
+            try:
+                recorder = RunRecorder(run_dir)
+                config = load_config(
+                    "configs/stage1_usa_d1.yaml",
+                    overrides={"max_alphas_per_round": 0, "knowledge_root": str(knowledge_root), "run_root": str(TESTS_DIR)},
+                )
+
+                run_field_batch(object(), recorder, config, field_search="buzz")
+
+                meta = recorder.read_jsonl("run_meta.jsonl")[0]
+                self.assertEqual(meta["field_source"], "knowledge")
+                self.assertEqual(meta["operator_source"], "code_generator")
+                self.assertEqual(meta["template_source"], "code_templates")
+                self.assertEqual(meta["source_provenance"][0]["field_id"], "buzz_intensity_score_15")
+            finally:
+                cleanup_run_dir(run_dir)
+
+    def test_run_field_batch_records_operator_provenance_on_planned_candidates(self):
+        run_dir = make_run_dir()
+        with tempfile.TemporaryDirectory() as tmp:
+            knowledge_root = Path(tmp)
+            machine_root = knowledge_root / "machine"
+            machine_root.mkdir()
+            (machine_root / "data_ledger.jsonl").write_text(
+                json.dumps(
+                    {
+                        "field_id": "buzz_trend_metric_11",
+                        "field_type": "VECTOR",
+                        "dataset_id": "analyst_buzz",
+                        "coverage": 0.93,
+                        "instrument_type": "EQUITY",
+                        "region": "USA",
+                        "delay": 1,
+                        "universe": "TOP3000",
+                        "source_quality": "platform_raw_capture",
+                        "source_updated_at": "2026-08-12",
+                        "source_paths": ["raw/platform/data_fields/2026-08-12/data_fields.md"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (machine_root / "operator_ledger.jsonl").write_text(
+                "\n".join(
+                    json.dumps(row)
+                    for row in (
+                        {
+                            "operator": "rank",
+                            "family": "cross_sectional_normalizer",
+                            "workflow_uses": ["normalize_cross_section"],
+                            "compatible_field_types": ["MATRIX"],
+                            "template_tags": ["cross_sectional_normalizer"],
+                            "risk_tags": ["crowded_when_common"],
+                            "repair_levers": ["group_rank"],
+                            "source_paths": ["raw/platform/learn/operators.md"],
+                        },
+                        {
+                            "operator": "vec_avg",
+                            "family": "vector_to_matrix",
+                            "workflow_uses": ["summarize_vector_values"],
+                            "compatible_field_types": ["VECTOR"],
+                            "template_tags": ["vector_to_matrix"],
+                            "risk_tags": ["invalid_raw_vector_use"],
+                            "repair_levers": ["replace_vec_count_with_vec_avg"],
+                            "source_paths": ["raw/platform/learn/operators.md"],
+                        },
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            try:
+                recorder = RunRecorder(run_dir)
+                config = load_config(
+                    "configs/stage1_usa_d1.yaml",
+                    overrides={"max_alphas_per_round": 1, "knowledge_root": str(knowledge_root), "run_root": str(TESTS_DIR)},
+                )
+
+                with patch("wqb.cli.submit_simulation", side_effect=requests.exceptions.ConnectionError("offline")):
+                    run_field_batch(
+                        object(),
+                        recorder,
+                        config,
+                        field_search="buzz",
+                        template_mode="economic",
+                        submit_mode="serial",
+                    )
+
+                meta = recorder.read_jsonl("run_meta.jsonl")[0]
+                planned = recorder.read_jsonl("planned_candidates.jsonl")[0]
+                operators = [row["operator"] for row in planned["operator_provenance"]]
+                self.assertEqual(meta["field_source"], "knowledge")
+                self.assertEqual(meta["operator_source"], "code_generator")
+                self.assertEqual(operators, ["rank", "vec_avg"])
+                self.assertEqual(planned["operator_provenance"][0]["source"], "knowledge_operator_ledger")
+                self.assertIn("raw/platform/learn/operators.md", planned["operator_provenance"][1]["source_paths"])
+            finally:
+                cleanup_run_dir(run_dir)
+
+    def test_run_field_batch_labels_missing_knowledge_as_live_api_fallback(self):
+        run_dir = make_run_dir()
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                recorder = RunRecorder(run_dir)
+                config = load_config(
+                    "configs/stage1_usa_d1.yaml",
+                    overrides={"max_alphas_per_round": 0, "knowledge_root": tmp, "run_root": str(TESTS_DIR)},
+                )
+
+                with patch("wqb.cli.fetch_data_fields", return_value=[{"id": "fallback_buzz", "type": "VECTOR", "coverage": 0.8}]):
+                    run_field_batch(object(), recorder, config, field_search="buzz")
+
+                meta = recorder.read_jsonl("run_meta.jsonl")[0]
+                self.assertEqual(meta["field_source"], "live_api")
+                self.assertEqual(meta["source_provenance"], [])
+            finally:
+                cleanup_run_dir(run_dir)
+
+    def test_run_field_batch_falls_back_when_suffix_removes_knowledge_fields(self):
+        run_dir = make_run_dir()
+        with tempfile.TemporaryDirectory() as tmp:
+            knowledge_root = Path(tmp)
+            machine_root = knowledge_root / "machine"
+            machine_root.mkdir()
+            (machine_root / "data_ledger.jsonl").write_text(
+                json.dumps(
+                    {
+                        "field_id": "buzz_unsuffixed",
+                        "field_type": "VECTOR",
+                        "dataset_id": "analyst_buzz",
+                        "coverage": 0.93,
+                        "instrument_type": "EQUITY",
+                        "region": "USA",
+                        "delay": 1,
+                        "universe": "TOP3000",
+                        "source_quality": "platform_raw_capture",
+                        "source_paths": ["raw/platform/data_fields/2026-08-12/data_fields.md"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            try:
+                recorder = RunRecorder(run_dir)
+                config = load_config(
+                    "configs/stage1_usa_d1.yaml",
+                    overrides={"max_alphas_per_round": 0, "knowledge_root": str(knowledge_root), "run_root": str(TESTS_DIR)},
+                )
+
+                with patch("wqb.cli.fetch_data_fields", return_value=[{"id": "buzz_fast_d1", "type": "VECTOR", "coverage": 0.8}]) as fetch:
+                    run_field_batch(object(), recorder, config, field_search="buzz", field_suffix="_fast_d1")
+
+                meta = recorder.read_jsonl("run_meta.jsonl")[0]
+                self.assertEqual(meta["field_source"], "live_api")
+                self.assertEqual(meta["source_provenance"], [])
+                fetch.assert_called_once()
+            finally:
+                cleanup_run_dir(run_dir)
+
+    def test_run_field_batch_cache_clears_unused_knowledge_provenance(self):
+        run_dir = make_run_dir()
+        cache_path = run_dir / "field_cache.json"
+        cache_path.write_text(
+            json.dumps({"field_queries": [{"fields": [{"id": "cached_buzz", "type": "VECTOR", "coverage": 1.0}]}]}),
+            encoding="utf-8",
+        )
+        selection = SourceSelection(
+            [{"id": "knowledge_buzz", "type": "VECTOR", "coverage": 1.0}],
+            "knowledge",
+            "code_generator",
+            "code_templates",
+            [{"field_id": "knowledge_buzz", "source_quality": "platform_raw_capture"}],
+            [],
+        )
+        try:
+            recorder = RunRecorder(run_dir)
+            config = load_config(
+                "configs/stage1_usa_d1.yaml",
+                overrides={"max_alphas_per_round": 0, "run_root": str(TESTS_DIR)},
+            )
+
+            with patch("wqb.cli.resolve_source_inputs", return_value=selection):
+                run_field_batch(object(), recorder, config, field_cache_path=str(cache_path))
+
+            meta = recorder.read_jsonl("run_meta.jsonl")[0]
+            self.assertEqual(meta["field_source"], "cache")
+            self.assertEqual(meta["source_provenance"], [])
         finally:
             cleanup_run_dir(run_dir)
 
@@ -2754,7 +3572,7 @@ class CliTests(unittest.TestCase):
         run_dir = make_run_dir()
         try:
             recorder = RunRecorder(run_dir)
-            config = load_config("configs/stage1_usa_d1.yaml", overrides={"max_alphas_per_round": 20})
+            config = load_config("configs/stage1_usa_d1.yaml", overrides={"max_alphas_per_round": 2})
             client = FakeClient()
 
             run_field_batch(
@@ -2770,8 +3588,9 @@ class CliTests(unittest.TestCase):
             meta = recorder.read_jsonl("run_meta.jsonl")[0]
             self.assertEqual(meta["workflow_stage"], "scout")
             self.assertEqual(meta["human_idea"], "Test simple data-field signal.")
-            self.assertEqual(meta["requested_max_alphas"], 20)
+            self.assertEqual(meta["requested_max_alphas"], 2)
             self.assertEqual(meta["effective_max_alphas"], 30)
+            self.assertEqual(meta["candidate_generation_limit"], 90)
         finally:
             cleanup_run_dir(run_dir)
 
@@ -2823,7 +3642,11 @@ class CliTests(unittest.TestCase):
             recorder = RunRecorder(run_dir)
             config = load_config(
                 "configs/stage1_usa_d1.yaml",
-                overrides={"max_alphas_per_round": 2, "run_root": str(TESTS_DIR)},
+                overrides={
+                    "max_alphas_per_round": 2,
+                    "knowledge_root": str(run_dir / "knowledge"),
+                    "run_root": str(TESTS_DIR),
+                },
             )
             client = FakeClient()
 
@@ -2897,6 +3720,113 @@ class CliTests(unittest.TestCase):
             self.assertEqual([item["event"] for item in submitted[:2]], ["SUBMITTED", "SUBMITTED"])
             self.assertEqual({item["progress_url"] for item in submitted[:2]}, {"/simulations/multi1"})
             self.assertEqual(len(recorder.read_jsonl("all_alphas.jsonl")), 2)
+        finally:
+            cleanup_run_dir(run_dir)
+
+    def test_run_field_batch_records_recoverable_poll_timeout(self):
+        class FakeResponse:
+            def __init__(self, headers=None, payload=None):
+                self.headers = headers or {}
+                self.payload = payload or {}
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        class FakeClient:
+            def get_json(self, path):
+                if path.startswith("/data-fields"):
+                    return {"results": [{"id": "field_0", "coverage": 1.0, "alphaCount": 0}]}
+                raise AssertionError(f"unexpected path: {path}")
+
+            def post_json(self, path, payload):
+                return FakeResponse(headers={"Location": "/simulations/stuck"})
+
+            def request(self, method, path):
+                raise SimulationPollTimeout("simulation poll exceeded Retry-After limit for /simulations/stuck")
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+            config = load_config(
+                "configs/stage1_usa_d1.yaml",
+                overrides={"max_alphas_per_round": 1, "run_root": str(TESTS_DIR)},
+            )
+
+            summaries = run_field_batch(
+                FakeClient(),
+                recorder,
+                config,
+                field_search="field",
+                workflow_stage="seed",
+                submit_mode="serial",
+            )
+
+            self.assertEqual(summaries, [])
+            errors = recorder.read_jsonl("run_errors.jsonl")
+            self.assertEqual(errors[0]["stage"], "run_field_batch_poll")
+            self.assertEqual(errors[0]["status"], "RECOVERABLE")
+            self.assertEqual(errors[0]["status_code"], "SIMULATION_POLL_TIMEOUT")
+            self.assertEqual(errors[0]["progress_url"], "/simulations/stuck")
+            self.assertEqual(summarize_run_dir(run_dir)["in_flight_count"], 1)
+        finally:
+            cleanup_run_dir(run_dir)
+
+    def test_run_field_batch_records_recoverable_multi_child_poll_timeout(self):
+        class FakeResponse:
+            def __init__(self, headers=None, payload=None):
+                self.headers = headers or {}
+                self.payload = payload or {}
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        class FakeClient:
+            def get_json(self, path):
+                if path.startswith("/data-fields"):
+                    return {"results": [{"id": "field_0", "coverage": 1.0, "alphaCount": 0}]}
+                raise AssertionError(f"unexpected path: {path}")
+
+            def post_json(self, path, payload):
+                return FakeResponse(headers={"Location": "/simulations/parent"})
+
+            def request(self, method, path):
+                if path == "/simulations/parent":
+                    return FakeResponse(payload={"children": ["child1"]})
+                if path == "/simulations/child1":
+                    raise SimulationPollTimeout("simulation poll exceeded Retry-After limit for /simulations/child1")
+                raise AssertionError(f"unexpected request: {method} {path}")
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+            config = load_config(
+                "configs/stage1_usa_d1.yaml",
+                overrides={"max_alphas_per_round": 1, "run_root": str(TESTS_DIR)},
+            )
+
+            summaries = run_field_batch(
+                FakeClient(),
+                recorder,
+                config,
+                field_search="field",
+                workflow_stage="seed",
+                submit_mode="multi",
+            )
+
+            self.assertEqual(summaries, [])
+            errors = recorder.read_jsonl("run_errors.jsonl")
+            self.assertEqual(errors[0]["stage"], "run_field_batch_multi_child_poll")
+            self.assertEqual(errors[0]["status"], "RECOVERABLE")
+            self.assertEqual(errors[0]["status_code"], "SIMULATION_POLL_TIMEOUT")
+            self.assertEqual(errors[0]["progress_url"], "/simulations/parent")
+            self.assertIn("/simulations/child1", errors[0]["message"])
+            self.assertEqual(summarize_run_dir(run_dir)["in_flight_count"], 1)
         finally:
             cleanup_run_dir(run_dir)
 
@@ -3346,6 +4276,30 @@ class CliTests(unittest.TestCase):
             self.assertEqual(len(recorder.read_jsonl("simulation_events.jsonl")), 0)
             errors = recorder.read_jsonl("run_errors.jsonl")
             self.assertEqual(errors[0]["status_code"], 429)
+            self.assertTrue((run_dir / "rate_limit_state.json").exists())
+        finally:
+            cleanup_run_dir(run_dir)
+
+    def test_retry_planned_candidates_respects_active_cooldown(self):
+        class FakeClient:
+            def post_json(self, path, payload):
+                raise AssertionError("active cooldown must stop submission")
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+            recorder.append_jsonl("planned_candidates.jsonl", {"expression_hash": "h1", "expression": "rank(field_a)"})
+            (run_dir / "rate_limit_state.json").write_text(
+                json.dumps({"status": "cooldown", "retry_at": "2099-01-01T00:00:00+00:00"}),
+                encoding="utf-8",
+            )
+            config = load_config("configs/stage1_usa_d1.yaml", overrides={"run_root": str(TESTS_DIR)})
+
+            summaries = retry_planned_candidates(FakeClient(), recorder, config, submit_mode="serial")
+
+            self.assertEqual(summaries, [])
+            errors = recorder.read_jsonl("run_errors.jsonl")
+            self.assertEqual(errors[0]["status"], "rate_limit_wait")
         finally:
             cleanup_run_dir(run_dir)
 
@@ -3424,6 +4378,53 @@ class CliTests(unittest.TestCase):
         finally:
             cleanup_run_dir(run_dir)
 
+    def test_complete_in_flight_simulations_records_recoverable_child_poll_error(self):
+        class FakeResponse:
+            def __init__(self, payload=None):
+                self.headers = {}
+                self.payload = payload or {}
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        class FakeClient:
+            def request(self, method, path):
+                if path == "/simulations/parent1":
+                    return FakeResponse(payload={"children": ["child1"]})
+                if path == "/simulations/child1":
+                    raise SimulationPollTimeout("simulation poll exceeded Retry-After limit for /simulations/child1")
+                raise AssertionError(f"unexpected path: {path}")
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+            recorder.append_jsonl(
+                "simulation_events.jsonl",
+                {
+                    "event": "SUBMITTED",
+                    "parent_alpha_id": "old1",
+                    "expression_hash": "abc",
+                    "progress_url": "/simulations/parent1",
+                    "operator_replacements": {},
+                },
+            )
+
+            completed = complete_in_flight_simulations(FakeClient(), recorder)
+
+            self.assertEqual(completed, [])
+            errors = recorder.read_jsonl("run_errors.jsonl")
+            self.assertEqual(errors[0]["stage"], "complete_in_flight_child_poll")
+            self.assertEqual(errors[0]["status"], "RECOVERABLE")
+            self.assertEqual(errors[0]["status_code"], "SIMULATION_POLL_TIMEOUT")
+            self.assertEqual(errors[0]["progress_url"], "/simulations/parent1")
+            self.assertIn("/simulations/child1", errors[0]["message"])
+            self.assertEqual(summarize_run_dir(run_dir)["in_flight_count"], 1)
+        finally:
+            cleanup_run_dir(run_dir)
+
     def test_complete_in_flight_simulations_resolves_multisimulation_children(self):
         class FakeResponse:
             def __init__(self, payload=None):
@@ -3480,6 +4481,294 @@ class CliTests(unittest.TestCase):
             self.assertEqual(len(recorder.read_jsonl("all_alphas.jsonl")), 2)
         finally:
             cleanup_run_dir(run_dir)
+
+
+class WorkflowOrchestratorCliTests(unittest.TestCase):
+    def test_cli_and_console_defaults_share_run_root(self):
+        from wqb.cli import default_orchestrator_paths
+        from wqb.console_state import default_console_paths
+
+        self.assertEqual(
+            default_orchestrator_paths({"knowledge_root": "knowledge"}).run_root,
+            default_console_paths().runs_root,
+        )
+
+    def test_parse_args_accepts_workflow_start(self):
+        with patch(
+            "sys.argv",
+            ["wqb", "workflow-start", "--objective", "Power Pool", "--selected-option-id", "option-1"],
+        ):
+            from wqb.cli import parse_args
+
+            args = parse_args()
+
+        self.assertEqual(args.command, "workflow-start")
+        self.assertEqual(args.objective, "Power Pool")
+
+    def test_workflow_status_dispatches_orchestrator(self):
+        from wqb.cli import main
+
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "workflow.yaml"
+            run_root = root / "configured_runs"
+            knowledge_root = root / "configured_knowledge"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "region: USA",
+                        "universe: TOP3000",
+                        "delay: 1",
+                        f"run_root: {run_root.as_posix()}",
+                        f"knowledge_root: {knowledge_root.as_posix()}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with patch("sys.argv", ["wqb", "workflow-status", "--config", str(config_path)]), patch(
+                "wqb.cli.WorkflowOrchestrator"
+            ) as orchestrator_cls, redirect_stdout(output):
+                orchestrator_cls.return_value.status.return_value = {"status": "created"}
+                main()
+
+        self.assertEqual(json.loads(output.getvalue())["status"], "created")
+        paths = orchestrator_cls.call_args.args[0]
+        self.assertEqual(paths.run_root, run_root)
+        self.assertEqual(paths.knowledge_root, knowledge_root)
+
+    def test_workflow_status_run_dir_overrides_configured_run_root(self):
+        from wqb.cli import main
+
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "workflow.yaml"
+            configured_run_root = root / "configured_runs"
+            override_run_root = root / "console_runs"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "region: USA",
+                        "universe: TOP3000",
+                        "delay: 1",
+                        f"run_root: {configured_run_root.as_posix()}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with patch("sys.argv", ["wqb", "workflow-status", "--config", str(config_path), "--run-dir", str(override_run_root)]), patch(
+                "wqb.cli.WorkflowOrchestrator"
+            ) as orchestrator_cls, redirect_stdout(output):
+                orchestrator_cls.return_value.status.return_value = {"status": "created"}
+                main()
+
+        paths = orchestrator_cls.call_args.args[0]
+        self.assertEqual(paths.run_root, override_run_root)
+
+    def test_workflow_status_exposes_source_bridge_maintenance_blocker(self):
+        from wqb.cli import main
+        from wqb.source_bridge import SourceBridgeDecision
+
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "workflow.yaml"
+            run_root = root / "runs"
+            active_run = run_root / "active"
+            knowledge_root = root / "knowledge"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "region: USA",
+                        "universe: TOP3000",
+                        "delay: 1",
+                        f"run_root: {run_root.as_posix()}",
+                        f"knowledge_root: {knowledge_root.as_posix()}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            raw_status = {
+                "active": True,
+                "status": "paused",
+                "current_stage": "scout_seed",
+                "next_action": "workflow-resume",
+                "pause_reason": "local artifacts required before plan-only stage completion: candidates.csv",
+                "run_dir": str(active_run),
+            }
+            decision = SourceBridgeDecision(
+                "maintenance_blocker",
+                "consecutive platform rate limit threshold reached",
+                "source1",
+                str(run_root / "source1"),
+                [str(run_root / "source1" / "rate_limit_state.json")],
+                {"consecutive_429_count": 3, "max_consecutive_429": 3},
+            )
+            with patch("sys.argv", ["wqb", "workflow-status", "--config", str(config_path)]), patch(
+                "wqb.cli.WorkflowOrchestrator"
+            ) as orchestrator_cls, patch(
+                "wqb.workflow_auto_continue.inspect_scout_seed_source_bridge",
+                return_value=decision,
+            ) as bridge, redirect_stdout(output):
+                orchestrator_cls.return_value.status.return_value = raw_status
+                main()
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["next_action"], "maintenance-blocker")
+        self.assertEqual(payload["source_bridge"]["action"], "maintenance_blocker")
+        self.assertIn("rate limit", payload["source_bridge"]["reason"])
+        bridge.assert_called_once()
+
+    def test_workflow_continue_dispatches_orchestrator(self):
+        from wqb.cli import main
+
+        output = io.StringIO()
+        with patch("sys.argv", ["wqb", "workflow-continue", "--now", "2026-07-12T00:01:00Z"]), patch(
+            "wqb.cli.WorkflowOrchestrator"
+        ) as orchestrator_cls, redirect_stdout(output):
+            orchestrator_cls.return_value.continue_once.return_value = {"current_stage": "schedule"}
+            main()
+
+        orchestrator_cls.return_value.continue_once.assert_called_once_with("2026-07-12T00:01:00Z")
+        self.assertEqual(json.loads(output.getvalue())["current_stage"], "schedule")
+
+    def test_workflow_import_scout_seed_artifacts_dispatches_orchestrator(self):
+        from wqb.cli import main
+
+        output = io.StringIO()
+        argv = [
+            "wqb",
+            "workflow-import-scout-seed-artifacts",
+            "--source-run-id",
+            "source-stage1",
+            "--now",
+            "2026-07-12T00:04:00Z",
+        ]
+        with patch("sys.argv", argv), patch("wqb.cli.WorkflowOrchestrator") as orchestrator_cls, redirect_stdout(output):
+            orchestrator_cls.return_value.import_scout_seed_artifacts.return_value = {
+                "status": "paused",
+                "imported_artifacts": ["candidates.csv"],
+            }
+            main()
+
+        orchestrator_cls.return_value.import_scout_seed_artifacts.assert_called_once_with(
+            "source-stage1",
+            "2026-07-12T00:04:00Z",
+        )
+        self.assertEqual(json.loads(output.getvalue())["imported_artifacts"], ["candidates.csv"])
+
+    def test_workflow_request_candidate_approval_loads_json_and_dispatches(self):
+        from wqb.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            candidate_path = Path(tmp) / "candidates.json"
+            candidates = [{"candidate_id": "c1"}]
+            candidate_path.write_text(json.dumps(candidates), encoding="utf-8")
+            output = io.StringIO()
+            argv = [
+                "wqb", "workflow-request-candidate-approval", "--candidate-json", str(candidate_path),
+                "--now", "2026-07-12T00:01:00Z",
+            ]
+            with patch("sys.argv", argv), patch("wqb.cli.WorkflowOrchestrator") as orchestrator_cls, redirect_stdout(output):
+                orchestrator_cls.return_value.request_candidate_approval.return_value = {"status": "waiting_for_user"}
+                main()
+
+        orchestrator_cls.return_value.request_candidate_approval.assert_called_once_with(
+            candidates, "2026-07-12T00:01:00Z"
+        )
+        self.assertEqual(json.loads(output.getvalue())["status"], "waiting_for_user")
+
+    def test_workflow_request_candidate_approval_rejects_non_object_list_items(self):
+        from wqb.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            candidate_path = Path(tmp) / "candidates.json"
+            candidate_path.write_text(json.dumps(["c1"]), encoding="utf-8")
+            with patch("sys.argv", ["wqb", "workflow-request-candidate-approval", "--candidate-json", str(candidate_path)]):
+                with self.assertRaisesRegex(SystemExit, "list of objects"):
+                    main()
+
+    def test_workflow_update_candidate_status_dispatches_through_orchestrator(self):
+        from wqb.cli import main
+
+        output = io.StringIO()
+        argv = [
+            "wqb",
+            "workflow-update-candidate-status",
+            "--candidate-id",
+            "c1",
+            "--candidate-version",
+            "1",
+            "--candidate-expression-hash",
+            "h1",
+            "--candidate-status",
+            "manually_submitted",
+            "--now",
+            "2026-07-12T01:00:00Z",
+        ]
+        with patch("sys.argv", argv), patch("wqb.cli.WorkflowOrchestrator") as orchestrator_cls, redirect_stdout(output):
+            orchestrator_cls.return_value.update_candidate_status.return_value = {"status": "manually_submitted"}
+            main()
+
+        orchestrator_cls.return_value.update_candidate_status.assert_called_once_with(
+            "c1", 1, "h1", "manually_submitted", "2026-07-12T01:00:00Z"
+        )
+
+    def test_workflow_update_candidate_status_forwards_source_run_selector(self):
+        from wqb.cli import main
+
+        output = io.StringIO()
+        argv = [
+            "wqb",
+            "workflow-update-candidate-status",
+            "--candidate-id", "c1",
+            "--candidate-version", "1",
+            "--candidate-expression-hash", "h1",
+            "--candidate-status", "manually_submitted",
+            "--source-run-id", "run-completed",
+            "--now", "2026-07-12T01:00:00Z",
+        ]
+        with patch("sys.argv", argv), patch("wqb.cli.WorkflowOrchestrator") as orchestrator_cls, redirect_stdout(output):
+            orchestrator_cls.return_value.update_candidate_status.return_value = {
+                "status": "manually_submitted"
+            }
+            main()
+
+        orchestrator_cls.return_value.update_candidate_status.assert_called_once_with(
+            "c1",
+            1,
+            "h1",
+            "manually_submitted",
+            "2026-07-12T01:00:00Z",
+            source_run_id="run-completed",
+        )
+
+    def test_workflow_update_candidate_status_rejects_invalidated_without_dispatch(self):
+        from wqb.cli import main
+
+        output = io.StringIO()
+        error = io.StringIO()
+        argv = [
+            "wqb",
+            "workflow-update-candidate-status",
+            "--candidate-id", "c1",
+            "--candidate-version", "1",
+            "--candidate-expression-hash", "h1",
+            "--candidate-status", "invalidated",
+        ]
+        with (
+            patch("sys.argv", argv),
+            patch("wqb.cli.WorkflowOrchestrator") as orchestrator_cls,
+            redirect_stdout(output),
+            redirect_stderr(error),
+        ):
+            orchestrator_cls.return_value.update_candidate_status.return_value = {"status": "invalidated"}
+            with self.assertRaises(SystemExit) as raised:
+                main()
+
+        self.assertEqual(raised.exception.code, 2)
+        orchestrator_cls.assert_not_called()
 
 
 if __name__ == "__main__":

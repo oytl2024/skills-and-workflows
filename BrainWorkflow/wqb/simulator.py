@@ -1,6 +1,35 @@
 import time
 from typing import Any
 
+import requests
+
+
+MAX_SIMULATION_POLL_RETRY_AFTER_POLLS = 120
+MAX_SIMULATION_POLL_RETRY_AFTER_WAIT_SECONDS = 900.0
+
+
+class SimulationPollTimeout(requests.exceptions.Timeout):
+    """Input: poll metadata. Output: recoverable timeout exception. Signal bounded simulation polling expiry."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        progress_url: str = "",
+        retry_after_polls: int | None = None,
+        wait_seconds: float | None = None,
+        max_polls: int | None = None,
+        max_wait_seconds: float | None = None,
+        response=None,
+    ) -> None:
+        super().__init__(message, response=response)
+        self.simulation_poll_timeout = True
+        self.progress_url = progress_url
+        self.retry_after_polls = retry_after_polls
+        self.wait_seconds = wait_seconds
+        self.max_polls = max_polls
+        self.max_wait_seconds = max_wait_seconds
+
 
 def submit_simulation(client, payload: dict[str, Any]) -> str:
     """Input: WQB client and simulation payload. Output: progress URL. Submit one simulation."""
@@ -22,13 +51,62 @@ def submit_multisimulation(client, payloads: list[dict[str, Any]]) -> str:
     return location
 
 
-def poll_simulation(client, progress_url: str) -> dict[str, Any]:
-    """Input: WQB client and progress URL. Output: final progress JSON. Poll until platform says complete."""
+def _retry_after_seconds(value: str) -> float:
+    """Input: Retry-After header string. Output: seconds as float. Parse platform pacing hints."""
+    seconds = float(value)
+    if seconds < 0:
+        raise requests.exceptions.InvalidHeader(f"Retry-After must be non-negative: {value}")
+    return seconds
+
+
+def _request_progress(client, progress_url: str):
+    """Input: WQB-compatible client and URL. Output: response. Request progress without client Retry-After sleep."""
+    try:
+        return client.request("GET", progress_url, respect_retry_after=False)
+    except TypeError as err:
+        if "respect_retry_after" not in str(err):
+            raise
+        return client.request("GET", progress_url)
+
+
+def poll_simulation(
+    client,
+    progress_url: str,
+    max_retry_after_polls: int = MAX_SIMULATION_POLL_RETRY_AFTER_POLLS,
+    max_retry_after_wait_seconds: float = MAX_SIMULATION_POLL_RETRY_AFTER_WAIT_SECONDS,
+) -> dict[str, Any]:
+    """Input: WQB client, progress URL, bounds. Output: final progress JSON. Poll with bounded platform pacing."""
+    if max_retry_after_polls < 0:
+        raise ValueError("max_retry_after_polls must be greater than or equal to 0")
+    if max_retry_after_wait_seconds < 0:
+        raise ValueError("max_retry_after_wait_seconds must be greater than or equal to 0")
+    retry_after_polls = 0
+    retry_after_wait_seconds = 0.0
     while True:
-        response = client.request("GET", progress_url)
+        response = _request_progress(client, progress_url)
         retry_after = response.headers.get("Retry-After")
         if retry_after:
-            time.sleep(float(retry_after))
+            retry_after_polls += 1
+            sleep_seconds = _retry_after_seconds(str(retry_after))
+            projected_wait = retry_after_wait_seconds + sleep_seconds
+            if retry_after_polls > max_retry_after_polls or projected_wait > max_retry_after_wait_seconds:
+                raise SimulationPollTimeout(
+                    (
+                        "simulation poll exceeded Retry-After limit "
+                        f"for {progress_url}: polls={retry_after_polls}, "
+                        f"wait_seconds={projected_wait:.1f}, "
+                        f"max_polls={max_retry_after_polls}, "
+                        f"max_wait_seconds={max_retry_after_wait_seconds:.1f}"
+                    ),
+                    progress_url=progress_url,
+                    retry_after_polls=retry_after_polls,
+                    wait_seconds=projected_wait,
+                    max_polls=max_retry_after_polls,
+                    max_wait_seconds=max_retry_after_wait_seconds,
+                    response=response,
+                )
+            retry_after_wait_seconds = projected_wait
+            time.sleep(sleep_seconds)
             continue
         response.raise_for_status()
         return response.json()

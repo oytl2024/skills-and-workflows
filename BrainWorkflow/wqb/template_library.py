@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from wqb.data_ledger import DataLedgerRecord
+from wqb.knowledge_paths import existing_machine_resource_path
 
 
 FIELD_TYPE_MATCH_BONUS = 3.0
@@ -47,6 +48,12 @@ class TemplateRecord:
     decay: str = ""
     known_antipatterns: list[str] = field(default_factory=list)
     crowded_variants: list[str] = field(default_factory=list)
+    data_semantics: list[str] = field(default_factory=list)
+    economic_hypothesis: str = ""
+    operator_composition: list[str] = field(default_factory=list)
+    abandon_conditions: list[str] = field(default_factory=list)
+    benchmark_rule_ids: list[str] = field(default_factory=list)
+    template_family: str = ""
 
 
 def template_record_to_dict(record: TemplateRecord) -> dict[str, Any]:
@@ -54,8 +61,8 @@ def template_record_to_dict(record: TemplateRecord) -> dict[str, Any]:
     return asdict(record)
 
 
-def _template_from_dict(row: dict[str, Any]) -> TemplateRecord:
-    """Input: dict row. Output: TemplateRecord. Normalize one JSONL row from the template library."""
+def template_record_from_dict(row: dict[str, Any]) -> TemplateRecord:
+    """Input: dict row. Output: TemplateRecord. Normalize one JSON-safe template row."""
     return TemplateRecord(
         template_id=str(row.get("template_id", "")),
         hypothesis=str(row.get("hypothesis", "")),
@@ -80,7 +87,18 @@ def _template_from_dict(row: dict[str, Any]) -> TemplateRecord:
         decay=str(row.get("decay", "")),
         known_antipatterns=[str(item) for item in row.get("known_antipatterns", []) if str(item)],
         crowded_variants=[str(item) for item in row.get("crowded_variants", []) if str(item)],
+        data_semantics=[str(item) for item in row.get("data_semantics", []) if str(item)],
+        economic_hypothesis=str(row.get("economic_hypothesis", row.get("hypothesis", ""))),
+        operator_composition=[str(item) for item in row.get("operator_composition", []) if str(item)],
+        abandon_conditions=[str(item) for item in row.get("abandon_conditions", []) if str(item)],
+        benchmark_rule_ids=[str(item) for item in row.get("benchmark_rule_ids", []) if str(item)],
+        template_family=str(row.get("template_family", "")),
     )
+
+
+def _template_from_dict(row: dict[str, Any]) -> TemplateRecord:
+    """Input: dict row. Output: TemplateRecord. Keep the legacy private loader adapter."""
+    return template_record_from_dict(row)
 
 
 def load_template_library(path: Path) -> list[TemplateRecord]:
@@ -92,6 +110,57 @@ def load_template_library(path: Path) -> list[TemplateRecord]:
         if line.strip():
             records.append(_template_from_dict(json.loads(line)))
     return records
+
+
+def template_library_path_for_knowledge(knowledge_root: str | Path) -> Path:
+    """Input: knowledge root. Output: Path. Return the current template-library authority path."""
+    return existing_machine_resource_path(knowledge_root, "template_library")
+
+
+def load_template_library_from_knowledge(knowledge_root: str | Path) -> list[TemplateRecord]:
+    """Input: knowledge root. Output: TemplateRecord list. Load canonical template records with legacy fallback."""
+    return load_template_library(template_library_path_for_knowledge(knowledge_root))
+
+
+def template_matrix_ready(template: TemplateRecord) -> bool:
+    """Input: template record. Output: bool. Check whether template has the full matrix fields."""
+    correlation_risk = template.correlation_risk.strip().lower()
+    return all(
+        [
+            bool(template.data_semantics),
+            bool(template.economic_hypothesis),
+            bool(template.required_field_types),
+            bool(template.compatible_semantic_tags),
+            bool(template.operator_tags),
+            bool(template.compatible_regions),
+            bool(template.compatible_delays),
+            bool(template.compatible_universes),
+            bool(template.suitable_horizons),
+            bool(template.neutralization_styles),
+            bool(template.turnover_bucket),
+            bool(template.local_gates),
+            bool(template.experiment_paths),
+            bool(template.intended_direction),
+            bool(template.interpretation),
+            bool(template.decay),
+            bool(template.operator_composition),
+            bool(template.source_paths),
+            bool(template.repair_levers),
+            bool(template.abandon_conditions),
+            bool(template.template_family),
+            correlation_risk not in {"", "unknown", "unclassified", "none", "n/a", "not_applicable"},
+        ]
+    )
+
+
+def template_matrix_summary(templates: list[TemplateRecord]) -> dict[str, Any]:
+    """Input: templates. Output: summary dict. Count matrix readiness."""
+    ready = [template for template in templates if template_matrix_ready(template)]
+    return {
+        "template_count": len(templates),
+        "matrix_ready_count": len(ready),
+        "seed_only_count": len(templates) - len(ready),
+    }
 
 
 def score_template_for_data(template: TemplateRecord, data_record: DataLedgerRecord, incentive: str) -> float:
@@ -113,6 +182,8 @@ def score_template_for_data(template: TemplateRecord, data_record: DataLedgerRec
         score += MEDIUM_RISK_BONUS
     elif risk == "high":
         score -= HIGH_RISK_PENALTY
+    if template_matrix_ready(template):
+        score += 1.0
     return round(score, 4)
 
 
@@ -155,14 +226,15 @@ def write_template_library_markdown(path: Path, templates: list[TemplateRecord],
         "",
         f"Generated at: `{generated_at}`",
         "",
-        "| Template | Status | Hypothesis | Field Types | Tags | Risk |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| Template | Family | Status | Matrix Ready | Hypothesis | Field Types | Tags | Risk |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for template in templates:
         field_types = ", ".join(template.required_field_types)
         tags = ", ".join(template.compatible_semantic_tags)
+        ready = "yes" if template_matrix_ready(template) else "no"
         lines.append(
-            f"| `{template.template_id}` | {template.status} | {template.hypothesis} | {field_types} | {tags} | {template.correlation_risk} |"
+            f"| `{template.template_id}` | {template.template_family} | {template.status} | {ready} | {template.hypothesis} | {field_types} | {tags} | {template.correlation_risk} |"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path

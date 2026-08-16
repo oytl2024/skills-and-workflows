@@ -9,6 +9,9 @@ from wqb.template_library import (
     load_template_library,
     score_template_for_data,
     select_templates_for_data,
+    template_matrix_ready,
+    template_matrix_summary,
+    template_record_from_dict,
     template_record_to_dict,
     write_template_library_markdown,
 )
@@ -36,7 +39,95 @@ def sample_data() -> DataLedgerRecord:
     )
 
 
+def complete_matrix_row() -> dict[str, object]:
+    """Input: none. Output: template row dict. Build every required Spec B matrix dimension."""
+    return {
+        "template_id": "complete_event_matrix",
+        "hypothesis": "Fresh event data is incorporated gradually.",
+        "skeleton": "rank(ts_delta({field}, 1))",
+        "required_field_types": ["MATRIX"],
+        "compatible_semantic_tags": ["event"],
+        "operator_tags": ["time_series_surprise"],
+        "status": "discovery_ready",
+        "correlation_risk": "medium",
+        "repair_levers": ["group_neutralize"],
+        "source_paths": ["wiki/30_templates/template_families.md"],
+        "compatible_regions": ["USA"],
+        "compatible_delays": [1],
+        "compatible_universes": ["TOP3000"],
+        "suitable_horizons": ["short"],
+        "neutralization_styles": ["subindustry"],
+        "turnover_bucket": "medium",
+        "local_gates": ["field_type_gate"],
+        "experiment_paths": ["wiki/40_experiments/event.md"],
+        "intended_direction": "long positive event changes",
+        "interpretation": "Fresh changes should precede excess returns.",
+        "decay": "fast",
+        "data_semantics": ["event", "fast_d1"],
+        "economic_hypothesis": "Fresh event data is incorporated gradually.",
+        "operator_composition": ["ts_delta", "rank"],
+        "abandon_conditions": ["three_batches_no_signal"],
+        "benchmark_rule_ids": ["near_miss_stable_pnl"],
+        "template_family": "event_surprise",
+    }
+
+
 class TemplateLibraryTest(unittest.TestCase):
+    def test_matrix_ready_requires_every_spec_b_dimension(self):
+        complete = complete_matrix_row()
+        required_dimensions = [
+            "data_semantics",
+            "economic_hypothesis",
+            "required_field_types",
+            "compatible_semantic_tags",
+            "operator_tags",
+            "compatible_regions",
+            "compatible_delays",
+            "compatible_universes",
+            "suitable_horizons",
+            "neutralization_styles",
+            "turnover_bucket",
+            "local_gates",
+            "experiment_paths",
+            "intended_direction",
+            "interpretation",
+            "decay",
+            "source_paths",
+            "repair_levers",
+        ]
+
+        self.assertTrue(template_matrix_ready(template_record_from_dict(complete)))
+        for field_name in required_dimensions:
+            incomplete = dict(complete)
+            incomplete[field_name] = "" if isinstance(complete[field_name], str) else []
+            with self.subTest(field=field_name):
+                self.assertFalse(template_matrix_ready(template_record_from_dict(incomplete)))
+
+        unknown_risk = dict(complete)
+        unknown_risk["correlation_risk"] = "unknown"
+        self.assertFalse(template_matrix_ready(template_record_from_dict(unknown_risk)))
+
+    def test_template_record_loads_matrix_fields_with_backward_compatibility(self):
+        legacy = template_record_from_dict(
+            {
+                "template_id": "matrix_fast_delta_rank",
+                "hypothesis": "Fresh changes capture underreaction.",
+                "skeleton": "rank(ts_delta({field}, 1))",
+                "required_field_types": ["MATRIX"],
+                "compatible_semantic_tags": ["event"],
+                "operator_tags": ["time_series_surprise"],
+                "status": "seed",
+                "correlation_risk": "low",
+                "repair_levers": ["window_3"],
+                "source_paths": ["wiki/30_templates/template_families.md"],
+            }
+        )
+        matrix = template_record_from_dict(complete_matrix_row())
+
+        self.assertFalse(template_matrix_ready(legacy))
+        self.assertTrue(template_matrix_ready(matrix))
+        self.assertEqual(template_matrix_summary([legacy, matrix])["matrix_ready_count"], 1)
+
     def test_load_template_library_round_trips_jsonl(self):
         row = {
             "template_id": "event_fast_delta_rank",

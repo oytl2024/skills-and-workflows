@@ -5,6 +5,57 @@ from urllib.parse import quote
 GROUPING_FIELD_IDS = {"country", "industry", "subindustry", "currency", "market", "sector", "exchange"}
 
 
+def _payload_rows_and_count(payload: Any) -> tuple[list[dict[str, Any]], int | None]:
+    """Input: API payload. Output: rows and optional total count. Strictly validate catalog result shapes."""
+    count: int | None = None
+    if isinstance(payload, list):
+        raw_rows = payload
+    elif isinstance(payload, dict):
+        if "results" not in payload:
+            raise ValueError("catalog payload must be a list or contain a results list")
+        raw_rows = payload["results"]
+        if not isinstance(raw_rows, list):
+            raise ValueError("catalog payload results must be a list")
+        if "count" in payload:
+            raw_count = payload.get("count")
+            if isinstance(raw_count, bool) or not isinstance(raw_count, int) or raw_count < 0:
+                raise ValueError("catalog payload count must be a non-negative integer")
+            count = raw_count
+    else:
+        raise ValueError("catalog payload must be a list or contain a results list")
+    if not all(isinstance(item, dict) for item in raw_rows):
+        raise ValueError("catalog result entries must be JSON objects")
+    return [dict(item) for item in raw_rows], count
+
+
+def _fetch_paginated_rows(client, path_builder, limit: int, max_records: int) -> tuple[list[dict[str, Any]], bool]:
+    """Input: client, path builder, page and record limits. Output: rows and truncation flag. Fetch a bounded catalog safely."""
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    page_limit = min(max(int(limit), 1), 50)
+    record_limit = max(int(max_records), 0)
+    latest_count: int | None = None
+    while len(rows) < record_limit:
+        request_limit = min(page_limit, record_limit - len(rows))
+        batch, authoritative_count = _payload_rows_and_count(client.get_json(path_builder(request_limit, offset)))
+        if authoritative_count is not None:
+            latest_count = authoritative_count
+        rows.extend(batch[:request_limit])
+        fetched = offset + len(batch)
+        if latest_count is not None and latest_count > fetched and len(batch) < request_limit:
+            return rows, True
+        if len(batch) < request_limit:
+            return rows, False
+        if latest_count is not None and latest_count <= fetched:
+            return rows, False
+        offset += request_limit
+    if record_limit == 0:
+        return rows, False
+    if latest_count is not None and latest_count > len(rows):
+        return rows, True
+    return rows, bool(result_rows(client.get_json(path_builder(1, offset))))
+
+
 def fetch_data_fields(
     client,
     instrument_type: str,
@@ -17,10 +68,25 @@ def fetch_data_fields(
     max_records: int = 300,
 ) -> list[dict[str, Any]]:
     """Input: WQB client and field filters. Output: data-field records. Fetch a bounded field pool."""
-    fields: list[dict[str, Any]] = []
-    offset = 0
-    page_limit = min(max(int(limit), 1), 50)
-    while offset < max_records:
+    fields, _ = fetch_data_fields_with_metadata(
+        client, instrument_type, region, delay, universe, dataset_id, search, limit, max_records
+    )
+    return fields
+
+
+def fetch_data_fields_with_metadata(
+    client,
+    instrument_type: str,
+    region: str,
+    delay: int,
+    universe: str,
+    dataset_id: str = "",
+    search: str = "",
+    limit: int = 50,
+    max_records: int = 300,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Input: WQB client and field filters. Output: rows and truncation flag. Detect bounded field pagination."""
+    def path_builder(page_limit: int, offset: int) -> str:
         path = (
             f"/data-fields?instrumentType={instrument_type}&region={region}&delay={delay}"
             f"&universe={universe}&limit={page_limit}&offset={offset}"
@@ -29,13 +95,9 @@ def fetch_data_fields(
             path += f"&dataset.id={quote(dataset_id)}"
         if search:
             path += f"&search={quote(search)}"
-        result = client.get_json(path)
-        batch = result.get("results", [])
-        fields.extend(batch)
-        if len(batch) < page_limit:
-            break
-        offset += page_limit
-    return fields[:max_records]
+        return path
+
+    return _fetch_paginated_rows(client, path_builder, limit, max_records)
 
 
 def select_seed_fields(fields: list[dict[str, Any]], max_fields: int = 40) -> list[dict[str, Any]]:
@@ -72,11 +134,8 @@ def field_ids(fields: list[dict[str, Any]]) -> set[str]:
 
 def result_rows(payload: Any) -> list[dict[str, Any]]:
     """Input: API payload. Output: result rows. Normalize list and {'results': list} shapes."""
-    if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)]
-    if isinstance(payload, dict) and isinstance(payload.get("results"), list):
-        return [item for item in payload["results"] if isinstance(item, dict)]
-    return []
+    rows, _ = _payload_rows_and_count(payload)
+    return rows
 
 
 def fetch_operators(client) -> list[dict[str, Any]]:
@@ -94,20 +153,29 @@ def fetch_data_sets(
     max_records: int = 1000,
 ) -> list[dict[str, Any]]:
     """Input: client and setting filters. Output: dataset rows. Fetch a bounded dataset catalog."""
-    rows: list[dict[str, Any]] = []
-    offset = 0
-    page_limit = min(max(int(limit), 1), 50)
-    while offset < max_records:
-        path = (
+    rows, _ = fetch_data_sets_with_metadata(
+        client, instrument_type, region, delay, universe, limit, max_records
+    )
+    return rows
+
+
+def fetch_data_sets_with_metadata(
+    client,
+    instrument_type: str,
+    region: str,
+    delay: int,
+    universe: str,
+    limit: int = 100,
+    max_records: int = 1000,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Input: client and setting filters. Output: rows and truncation flag. Detect bounded dataset pagination."""
+    def path_builder(page_limit: int, offset: int) -> str:
+        return (
             f"/data-sets?instrumentType={instrument_type}&region={region}&delay={delay}"
             f"&universe={universe}&limit={page_limit}&offset={offset}"
         )
-        batch = result_rows(client.get_json(path))
-        rows.extend(batch)
-        if len(batch) < page_limit:
-            break
-        offset += page_limit
-    return rows[:max_records]
+
+    return _fetch_paginated_rows(client, path_builder, limit, max_records)
 
 
 def build_metadata_cache(
