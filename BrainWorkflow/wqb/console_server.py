@@ -144,7 +144,7 @@ def _render_proposal_lifecycle(counts: dict[str, Any]) -> str:
 def _render_option_controls(cards: list[dict[str, Any]]) -> str:
     """Input: option card rows. Output: HTML. Render selectable research option cards."""
     if not cards:
-        return "<div class='empty'>No research options. Refresh option cards with live API authorization.</div>"
+        return "<div class='empty'>No research options are available.</div>"
     rows = []
     for index, card in enumerate(cards, start=1):
         option_id = str(card.get("option_id") or _fallback_option_id(index))
@@ -155,7 +155,7 @@ def _render_option_controls(cards: list[dict[str, Any]]) -> str:
         total = score.get("total", "") if isinstance(score, dict) else ""
         rows.append(
             "<label class='option-card'>"
-            f"<input type=\"radio\" name=\"selected_option_id\" value=\"{escape(option_id)}\">"
+            f"<input type=\"radio\" name=\"selected_option_id\" value=\"{escape(option_id)}\" required>"
             f"<span class='option-title'>{escape(title)}</span>"
             f"<span class='option-meta'>{escape(incentive)} | {escape(scope)} | score {escape(str(total))}</span>"
             "</label>"
@@ -329,30 +329,13 @@ def render_dashboard(state: dict[str, Any]) -> str:
 <input type="hidden" name="action" value="workflow-stop">
 <button>Stop workflow</button>
 </form>
-<details>
-<summary>Maintenance diagnostics</summary>
-<p>Manual resume/import commands are maintenance-only. Use them only when a recorded blocker says the automatic bridge is broken.</p>
-</details>
-"""
-    knowledge_forms = """
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="readiness-check"><button>Run readiness check</button></form>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="compile-research-records"><button>Compile research records</button></form>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="compile-knowledge"><button>Compile knowledge</button></form>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="delivery-gate"><button>Run delivery gate</button></form>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="plan-research-options"><label><input type="checkbox" name="enable_live_api"> Enable live API</label><button>Refresh research options</button></form>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="knowledge-health-check"><button>Check knowledge health</button></form>
-<form method="post" action="/actions/run"><input type="hidden" name="action" value="capture-interaction-note"><textarea name="summary" required></textarea><select name="category"><option value="workflow_rule">workflow_rule</option><option value="engineering_lesson">engineering_lesson</option><option value="factor_lesson">factor_lesson</option><option value="proposal_seed">proposal_seed</option></select><input name="tag"><input name="evidence_path"><button>Capture interaction note</button></form>
 """
     body = f"""
 <div class="control-center">
 <section class="wide hero"><h2>Objective and Gate Summary</h2><div data-runtime-fragment='objective'>{fragments["objective"]}</div></section>
 <section class="timeline-panel"><h2>Runtime Timeline</h2><div data-runtime-fragment='timeline'>{fragments["timeline"]}</div></section>
 <section class="current-work"><h2>Current Work</h2><div data-runtime-fragment='current_work'>{fragments["current_work"]}</div></section>
-<section class="wide"><h2>Decisions and Approvals</h2><h3>Research Start</h3>{research_start_form}<h3>Workflow Progress</h3>{workflow_progress}{_render_inline_proposals(state.get("proposals", []))}</section>
-<section class="wide"><h2>AI Checkpoints</h2>{_render_ai_checkpoints(state.get("ai_checkpoints", []))}</section>
-<section><h2>Knowledge Maintenance</h2>{knowledge_forms}</section>
-<section><h2>Platform Data</h2><div data-runtime-fragment='platform_data'>{fragments["platform_data"]}</div></section>
-<section class="wide"><h2>Knowledge and Data Authority</h2><h3>Data Authority</h3>{_render_data_authority(state.get("data_authority", {}))}<h3>Knowledge Contracts</h3>{_render_knowledge_contracts(state.get("knowledge_contracts", {}))}<h3>Semantic Ledgers</h3>{_render_semantic_ledgers(state.get("semantic_ledgers", {}))}<h3>Option Blockers</h3>{_option_blockers(option_rows)}</section>
+<section class="wide"><h2>Decisions and Approvals</h2><h3>Research Start</h3>{research_start_form}<h3>Workflow Progress</h3>{workflow_progress}</section>
 <section class="wide"><h2>Recent Jobs</h2><div data-runtime-fragment='recent_jobs'>{fragments["recent_jobs"]}</div></section>
 </div>
 <script>

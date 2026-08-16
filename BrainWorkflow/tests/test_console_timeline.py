@@ -212,6 +212,7 @@ class ConsoleTimelineTests(unittest.TestCase):
             with self.subTest(action=action):
                 state = {
                     **base_state,
+                    "jobs": [{"job_id": "auto-continue", "action": "workflow-auto-continue", "status": "running"}],
                     "source_bridge": {
                         "action": action,
                         "reason": f"{action} reason",

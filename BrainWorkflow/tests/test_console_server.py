@@ -87,19 +87,16 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn("Runtime Timeline", html)
         self.assertIn("Current Work", html)
         self.assertIn("Decisions and Approvals", html)
-        self.assertIn("AI Checkpoints", html)
+        self.assertNotIn("AI Checkpoints", html)
         self.assertIn("Platform data capture", html)
         self.assertIn("Explain blocker.", html)
 
-    def test_render_dashboard_wires_interaction_capture_form(self):
+    def test_render_dashboard_hides_interaction_capture_from_normal_path(self):
         html = render_dashboard({"active_workflow": {"exists": False}, "jobs": []})
 
-        self.assertIn('name="action" value="capture-interaction-note"', html)
-        self.assertIn('name="category"', html)
-        self.assertIn('value="workflow_rule"', html)
-        self.assertIn('value="engineering_lesson"', html)
-        self.assertIn('value="factor_lesson"', html)
-        self.assertIn('value="proposal_seed"', html)
+        self.assertNotIn('name="action" value="capture-interaction-note"', html)
+        self.assertNotIn('name="category"', html)
+        self.assertNotIn('value="workflow_rule"', html)
 
     def test_runtime_fragments_include_refreshed_timeline_work_badges_and_jobs(self):
         state = {
@@ -129,7 +126,7 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn("refreshInFlight = true", html)
         self.assertIn("refreshInFlight = false", html)
 
-    def test_render_dashboard_labels_cache_data_as_not_authoritative(self):
+    def test_render_dashboard_hides_maintenance_authority_panels_from_normal_path(self):
         state = {
             "readiness": {"exists": True, "passed": False},
             "freshness": {"valid": True, "stale_count": 0, "missing_count": 0},
@@ -150,16 +147,12 @@ class ConsoleServerTests(unittest.TestCase):
 
         html = render_dashboard(state)
 
-        self.assertIn("Data Authority", html)
-        self.assertIn("seed/cache", html)
-        self.assertIn("authoritative measured", html)
-        self.assertIn("Knowledge Contracts", html)
-        self.assertIn("operator semantics</strong> 9", html)
-        self.assertIn("matrix-ready templates", html)
-        self.assertIn("active benchmark rules", html)
-        self.assertIn("Authoritative data ledger is missing", html)
+        self.assertNotIn("Data Authority", html)
+        self.assertNotIn("Knowledge Contracts", html)
+        self.assertNotIn("operator semantics</strong> 9", html)
+        self.assertNotIn("Authoritative data ledger is missing", html)
 
-    def test_render_dashboard_exposes_research_progress_and_knowledge_controls(self):
+    def test_render_dashboard_exposes_only_primary_workflow_controls(self):
         state = {
             "readiness": {"exists": True, "passed": True, "blocked": False},
             "freshness": {"exists": True, "stale_count": 0, "missing_count": 0},
@@ -174,11 +167,16 @@ class ConsoleServerTests(unittest.TestCase):
 
         html = render_dashboard(state)
 
-        self.assertIn("Workflow Console", html)
         self.assertIn("Research Start", html)
-        self.assertIn("Knowledge Maintenance", html)
         self.assertIn("Workflow Progress", html)
         self.assertIn("Power Pool", html)
+        self.assertNotIn("Knowledge Maintenance", html)
+        self.assertNotIn('value="readiness-check"', html)
+        self.assertNotIn('value="compile-research-records"', html)
+        self.assertNotIn('value="compile-knowledge"', html)
+        self.assertNotIn('value="delivery-gate"', html)
+        self.assertNotIn('value="plan-research-options"', html)
+        self.assertNotIn('value="knowledge-health-check"', html)
 
     def test_render_dashboard_uses_selectable_option_cards_without_manual_option_id_input(self):
         state = {
@@ -202,6 +200,7 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn('name="selected_option_id"', html)
         self.assertIn('name="selected_scope"', html)
         self.assertIn('value="option-1"', html)
+        self.assertIn('name="selected_option_id" value="option-1" required', html)
         self.assertIn('value="workflow-start-from-option"', html)
         self.assertNotIn('name="selected_option_id" value="option-1" checked', html)
         self.assertNotIn('<input name="objective"', html)
@@ -232,6 +231,16 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn("Stop workflow", html)
         self.assertNotIn('name="source_run_id"', html)
         self.assertNotIn('value="workflow-resume"', html)
+        self.assertNotIn('value="readiness-check"', html)
+        self.assertNotIn('value="compile-research-records"', html)
+        self.assertNotIn('value="compile-knowledge"', html)
+        self.assertNotIn('value="delivery-gate"', html)
+        self.assertNotIn('value="plan-research-options"', html)
+        self.assertNotIn('value="knowledge-health-check"', html)
+        self.assertNotIn('value="capture-platform-data-fields"', html)
+        self.assertNotIn('value="capture-interaction-note"', html)
+        self.assertNotIn('action="/proposals/decision"', html)
+        self.assertNotIn('confirm_submit', html)
 
     def test_option_cards_are_directly_selectable(self):
         state = {
@@ -253,7 +262,14 @@ class ConsoleServerTests(unittest.TestCase):
 
         self.assertIn('type="radio"', html)
         self.assertIn('value="power-pool"', html)
+        self.assertIn('name="selected_option_id" value="power-pool" required', html)
         self.assertIn("Start workflow", html)
+
+    def test_normal_dashboard_does_not_automate_final_alpha_submission(self):
+        html = render_dashboard({"active_workflow": {"exists": True}, "jobs": []})
+
+        self.assertNotIn('name="confirm_submit"', html)
+        self.assertNotIn('value="workflow-submit"', html)
 
     def test_workflow_import_scout_seed_artifacts_action_builds_command(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -281,7 +297,7 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn("--knowledge-root", command)
         self.assertIn("--run-dir", command)
 
-    def test_render_dashboard_exposes_data_capture_and_compile_controls(self):
+    def test_render_dashboard_hides_data_capture_and_compile_controls_from_normal_path(self):
         state = {
             "readiness": {"exists": True, "passed": False, "blocked": True},
             "freshness": {"exists": True, "valid": True, "record_count": 6, "stale_count": 1, "missing_count": 0},
@@ -298,14 +314,13 @@ class ConsoleServerTests(unittest.TestCase):
 
         html = render_dashboard(state)
 
-        self.assertIn('value="capture-platform-data-fields"', html)
-        self.assertIn('name="fields_per_scope" type="number" min="0" value="100"', html)
-        self.assertIn('name="max_scopes" type="number" min="0" value="40"', html)
-        self.assertIn('value="compile-data-ledger"', html)
-        self.assertIn('value="compile-knowledge"', html)
-        self.assertIn('value="delivery-gate"', html)
-        self.assertIn('name="enable_live_api"', html)
-        self.assertIn("120", html)
+        self.assertNotIn('value="capture-platform-data-fields"', html)
+        self.assertNotIn('name="fields_per_scope" type="number" min="0" value="100"', html)
+        self.assertNotIn('name="max_scopes" type="number" min="0" value="40"', html)
+        self.assertNotIn('value="compile-data-ledger"', html)
+        self.assertNotIn('value="compile-knowledge"', html)
+        self.assertNotIn('value="delivery-gate"', html)
+        self.assertNotIn('name="enable_live_api"', html)
 
     def test_render_proposals_uses_select_controls_for_structured_fields(self):
         html = render_proposals([{"proposal_id": "proposal-1", "title": "Lifecycle review", "status": "proposed"}])
