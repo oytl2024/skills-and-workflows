@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from wqb.cli import default_orchestrator_paths
 from wqb.orchestrator import WorkflowOrchestrator
@@ -81,6 +82,44 @@ def write_start_artifacts(root: Path) -> None:
 
 
 class WorkflowAutoContinueTests(unittest.TestCase):
+    def test_auto_continue_stops_at_user_approval_without_calling_runners(self):
+        status = {
+            "active": True,
+            "status": "waiting_for_user",
+            "waiting_for_user": True,
+            "current_stage": "user_approval",
+            "next_action": "user-approval",
+            "run_dir": "runs/active",
+        }
+        orchestrator = Mock()
+        orchestrator.status.return_value = status
+        source_runner = Mock(side_effect=AssertionError("source runner must not run"))
+        in_flight_runner = Mock(side_effect=AssertionError("in-flight runner must not run"))
+        retry_runner = Mock(side_effect=AssertionError("retry runner must not run"))
+
+        with patch("wqb.workflow_auto_continue.WorkflowOrchestrator", return_value=orchestrator):
+            result = auto_continue_workflow(
+                Mock(),
+                {},
+                "2026-08-16T00:00:00+00:00",
+                enable_live_api=True,
+                source_batch_runner=source_runner,
+                complete_in_flight_runner=in_flight_runner,
+                retry_planned_runner=retry_runner,
+            )
+
+        self.assertEqual(result["status"], "waiting_for_user")
+        self.assertEqual(result["current_stage"], "user_approval")
+        self.assertEqual(result["next_action"], "user-approval")
+        self.assertEqual(result["message"], "User approval is required before automatic progress.")
+        self.assertNotIn("submit", str(result).lower())
+        orchestrator.resume.assert_not_called()
+        orchestrator.continue_once.assert_not_called()
+        orchestrator.import_scout_seed_bridge_decision.assert_not_called()
+        source_runner.assert_not_called()
+        in_flight_runner.assert_not_called()
+        retry_runner.assert_not_called()
+
     def test_auto_continue_refuses_without_active_workflow(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = default_orchestrator_paths({"run_root": str(Path(tmp) / "runs"), "knowledge_root": str(Path(tmp) / "knowledge")})
