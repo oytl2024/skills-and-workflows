@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from wqb.source_bridge import (
     active_run_needs_scout_seed_candidates,
@@ -463,3 +464,22 @@ class SourceBridgeTests(unittest.TestCase):
         self.assertEqual(decision.metadata["universe"], "TOP3000")
         self.assertEqual(decision.metadata["workflow_stage"], "scout")
         self.assertEqual(decision.metadata["max_alphas_per_round"], 30)
+
+    def test_bridge_source_batch_metadata_uses_stage_budget_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            active = runs / "active"
+            write_active_metadata(active)
+
+            with patch(
+                "wqb.source_bridge.stage_budget_summary",
+                return_value={"scout": 37, "seed": 8, "discovery": 50, "repair": 8, "submit": 0},
+                create=True,
+            ):
+                decision = inspect_scout_seed_source_bridge(
+                    runs, active, "2026-08-12T00:00:00+00:00"
+                )
+
+        self.assertEqual(decision.action, "start_source_batch")
+        self.assertEqual(decision.metadata["workflow_stage"], "scout")
+        self.assertEqual(decision.metadata["max_alphas_per_round"], 37)

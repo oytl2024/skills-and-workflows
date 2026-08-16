@@ -12,6 +12,7 @@ from wqb.rate_limit_state import (
     rate_limit_requires_maintenance,
     read_rate_limit_state,
 )
+from wqb.research_workflow import stage_budget_summary
 from wqb.workflow_events import append_workflow_event
 from wqb.workflow_stage_adapters import import_scout_seed_artifacts
 
@@ -186,14 +187,16 @@ def _source_batch_metadata(active_run_dir: Path) -> dict[str, Any]:
     first = matches[0]
     field_id = str(first.get("field_id", "")).strip()
     scope = _selected_scope(active_run_dir)
+    stage = "scout"
+    budgets = stage_budget_summary()
     return {
         "field_search": field_id,
         "exact_field_id": field_id,
         "dataset_id": str(first.get("dataset_id", "")).strip(),
         "template_mode": "economic",
-        "workflow_stage": "scout",
+        "workflow_stage": stage,
         "submit_mode": "multi",
-        "max_alphas_per_round": 30,
+        "max_alphas_per_round": int(budgets[stage]),
         **scope,
     }
 

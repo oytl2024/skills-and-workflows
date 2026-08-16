@@ -12,6 +12,27 @@ def _release_lock(run_dir: str, action: str, now: str, lock: dict[str, Any]) -> 
     release_source_run_lock(run_dir, action, now, owner_id=str(lock.get("owner_id", "")))
 
 
+def decorate_workflow_status_with_source_bridge(
+    paths: OrchestratorPaths,
+    status: dict[str, Any],
+    now: str,
+) -> dict[str, Any]:
+    """Input: paths, workflow status, timestamp. Output: status with source bridge overlay. Expose local blockers safely."""
+    if not active_run_needs_scout_seed_candidates(status):
+        return status
+    decision = inspect_scout_seed_source_bridge(paths.run_root, str(status["run_dir"]), now)
+    decision_dict = decision.to_dict()
+    next_action = {
+        "maintenance_blocker": "maintenance-blocker",
+        "rate_limit_wait": "rate-limit-wait",
+        "import_existing": "workflow-auto-continue",
+        "complete_in_flight": "workflow-auto-continue",
+        "retry_planned": "workflow-auto-continue",
+        "start_source_batch": "workflow-auto-continue",
+    }.get(decision.action, decision.action)
+    return {**status, "source_bridge": decision_dict, "next_action": next_action}
+
+
 def auto_continue_workflow(
     paths: OrchestratorPaths,
     config: dict[str, Any],

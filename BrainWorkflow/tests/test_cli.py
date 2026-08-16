@@ -3186,6 +3186,88 @@ class CliTests(unittest.TestCase):
             finally:
                 cleanup_run_dir(run_dir)
 
+    def test_run_field_batch_records_operator_provenance_on_planned_candidates(self):
+        run_dir = make_run_dir()
+        with tempfile.TemporaryDirectory() as tmp:
+            knowledge_root = Path(tmp)
+            machine_root = knowledge_root / "machine"
+            machine_root.mkdir()
+            (machine_root / "data_ledger.jsonl").write_text(
+                json.dumps(
+                    {
+                        "field_id": "buzz_trend_metric_11",
+                        "field_type": "VECTOR",
+                        "dataset_id": "analyst_buzz",
+                        "coverage": 0.93,
+                        "instrument_type": "EQUITY",
+                        "region": "USA",
+                        "delay": 1,
+                        "universe": "TOP3000",
+                        "source_quality": "platform_raw_capture",
+                        "source_updated_at": "2026-08-12",
+                        "source_paths": ["raw/platform/data_fields/2026-08-12/data_fields.md"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (machine_root / "operator_ledger.jsonl").write_text(
+                "\n".join(
+                    json.dumps(row)
+                    for row in (
+                        {
+                            "operator": "rank",
+                            "family": "cross_sectional_normalizer",
+                            "workflow_uses": ["normalize_cross_section"],
+                            "compatible_field_types": ["MATRIX"],
+                            "template_tags": ["cross_sectional_normalizer"],
+                            "risk_tags": ["crowded_when_common"],
+                            "repair_levers": ["group_rank"],
+                            "source_paths": ["raw/platform/learn/operators.md"],
+                        },
+                        {
+                            "operator": "vec_avg",
+                            "family": "vector_to_matrix",
+                            "workflow_uses": ["summarize_vector_values"],
+                            "compatible_field_types": ["VECTOR"],
+                            "template_tags": ["vector_to_matrix"],
+                            "risk_tags": ["invalid_raw_vector_use"],
+                            "repair_levers": ["replace_vec_count_with_vec_avg"],
+                            "source_paths": ["raw/platform/learn/operators.md"],
+                        },
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            try:
+                recorder = RunRecorder(run_dir)
+                config = load_config(
+                    "configs/stage1_usa_d1.yaml",
+                    overrides={"max_alphas_per_round": 1, "knowledge_root": str(knowledge_root), "run_root": str(TESTS_DIR)},
+                )
+
+                with patch("wqb.cli.submit_simulation", side_effect=requests.exceptions.ConnectionError("offline")):
+                    run_field_batch(
+                        object(),
+                        recorder,
+                        config,
+                        field_search="buzz",
+                        template_mode="economic",
+                        submit_mode="serial",
+                    )
+
+                meta = recorder.read_jsonl("run_meta.jsonl")[0]
+                planned = recorder.read_jsonl("planned_candidates.jsonl")[0]
+                operators = [row["operator"] for row in planned["operator_provenance"]]
+                self.assertEqual(meta["field_source"], "knowledge")
+                self.assertEqual(meta["operator_source"], "code_generator")
+                self.assertEqual(operators, ["rank", "vec_avg"])
+                self.assertEqual(planned["operator_provenance"][0]["source"], "knowledge_operator_ledger")
+                self.assertIn("raw/platform/learn/operators.md", planned["operator_provenance"][1]["source_paths"])
+            finally:
+                cleanup_run_dir(run_dir)
+
     def test_run_field_batch_labels_missing_knowledge_as_live_api_fallback(self):
         run_dir = make_run_dir()
         with tempfile.TemporaryDirectory() as tmp:
@@ -4483,6 +4565,60 @@ class WorkflowOrchestratorCliTests(unittest.TestCase):
 
         paths = orchestrator_cls.call_args.args[0]
         self.assertEqual(paths.run_root, override_run_root)
+
+    def test_workflow_status_exposes_source_bridge_maintenance_blocker(self):
+        from wqb.cli import main
+        from wqb.source_bridge import SourceBridgeDecision
+
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "workflow.yaml"
+            run_root = root / "runs"
+            active_run = run_root / "active"
+            knowledge_root = root / "knowledge"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "region: USA",
+                        "universe: TOP3000",
+                        "delay: 1",
+                        f"run_root: {run_root.as_posix()}",
+                        f"knowledge_root: {knowledge_root.as_posix()}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            raw_status = {
+                "active": True,
+                "status": "paused",
+                "current_stage": "scout_seed",
+                "next_action": "workflow-resume",
+                "pause_reason": "local artifacts required before plan-only stage completion: candidates.csv",
+                "run_dir": str(active_run),
+            }
+            decision = SourceBridgeDecision(
+                "maintenance_blocker",
+                "consecutive platform rate limit threshold reached",
+                "source1",
+                str(run_root / "source1"),
+                [str(run_root / "source1" / "rate_limit_state.json")],
+                {"consecutive_429_count": 3, "max_consecutive_429": 3},
+            )
+            with patch("sys.argv", ["wqb", "workflow-status", "--config", str(config_path)]), patch(
+                "wqb.cli.WorkflowOrchestrator"
+            ) as orchestrator_cls, patch(
+                "wqb.workflow_auto_continue.inspect_scout_seed_source_bridge",
+                return_value=decision,
+            ) as bridge, redirect_stdout(output):
+                orchestrator_cls.return_value.status.return_value = raw_status
+                main()
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["next_action"], "maintenance-blocker")
+        self.assertEqual(payload["source_bridge"]["action"], "maintenance_blocker")
+        self.assertIn("rate limit", payload["source_bridge"]["reason"])
+        bridge.assert_called_once()
 
     def test_workflow_continue_dispatches_orchestrator(self):
         from wqb.cli import main

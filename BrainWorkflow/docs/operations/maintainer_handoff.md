@@ -33,6 +33,14 @@ documented prerequisite, treat it as a workflow contract bug. Add a RED test,
 fix the Console/Orchestrator contract, update `docs/operations/user_workflow_manual.md`,
 and then hand the fix back to the operations task.
 
+For Scout/Seed source recovery, distinguish the raw Orchestrator pause from the
+source bridge overlay. The Orchestrator can remain paused with
+`next_action=workflow-resume` because `candidates.csv` is missing, but
+`workflow-status` and the Console's **Current Work** must expose source bridge
+blockers such as `rate-limit-wait` or `maintenance-blocker`. Three consecutive
+source-run 429 responses are a maintenance blocker; do not tell operations to
+keep clicking Continue.
+
 ## Spec B Knowledge Contract
 
 Before changing research scheduling, check whether planner inputs are authoritative or seed/cache. The approved Spec B design is `docs/superpowers/specs/2026-07-21-knowledge-workflow-operating-system-design.md`; implementation plan tasks live in `docs/superpowers/plans/2026-07-22-knowledge-workflow-operating-system-implementation.md`.

@@ -319,6 +319,15 @@ def render_dashboard(state: dict[str, Any]) -> str:
     cards = _normalized_option_rows(option_rows)
     scopes = [scope for scope in state.get("startable_scopes", []) if isinstance(scope, dict)]
     active = state.get("active_workflow", {})
+    source_bridge = state.get("source_bridge", {}) if isinstance(state.get("source_bridge"), dict) else {}
+    current_work = state.get("current_work", {}) if isinstance(state.get("current_work"), dict) else {}
+    maintenance_blocked = (
+        str(source_bridge.get("action", "")) == "maintenance_blocker"
+        or str(current_work.get("next_action", "")) == "maintenance-blocker"
+    )
+    blocker_reason = str(source_bridge.get("reason", "")) or "; ".join(
+        str(item) for item in current_work.get("details", []) if str(item)
+    )
     fragments = render_runtime_fragments(state)
     research_start_form = f"""
 <form method="post" action="/actions/run">
@@ -328,13 +337,25 @@ def render_dashboard(state: dict[str, Any]) -> str:
 <button>Start workflow</button>
 </form>
 """ if not active.get("exists") else ""
-    workflow_progress = f"""
-<p>Active run: <code>{escape(str(active.get('run_id', 'none')))}</code></p>
+    continue_control = (
+        f"""
+<div class="blocked-action">
+<p>Maintenance blocker: {escape(blocker_reason)}</p>
+<button disabled>Continue workflow</button>
+</div>
+"""
+        if maintenance_blocked
+        else """
 <form method="post" action="/actions/run">
 <input type="hidden" name="action" value="workflow-auto-continue">
 <label><input type="checkbox" name="enable_live_api"> Enable live source recovery</label>
 <button>Continue workflow</button>
 </form>
+"""
+    )
+    workflow_progress = f"""
+<p>Active run: <code>{escape(str(active.get('run_id', 'none')))}</code></p>
+{continue_control}
 <form method="post" action="/actions/run">
 <input type="hidden" name="action" value="workflow-stop">
 <button>Stop workflow</button>

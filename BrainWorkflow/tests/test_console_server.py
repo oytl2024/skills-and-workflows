@@ -244,6 +244,39 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertNotIn('action="/proposals/decision"', html)
         self.assertNotIn('confirm_submit', html)
 
+    def test_render_dashboard_disables_continue_when_source_bridge_has_maintenance_blocker(self):
+        state = {
+            "readiness": {"exists": True, "passed": True, "blocked": False},
+            "freshness": {"exists": True, "valid": True, "record_count": 6, "stale_count": 0, "missing_count": 0},
+            "data_coverage": {"exists": True, "field_count": 120, "scope_count": 4, "data_set_count": 8, "error_count": 0, "status": "completed"},
+            "startable_scopes": [],
+            "option_cards": [],
+            "schedule": {"preview": "# Schedule"},
+            "jobs": [],
+            "proposal_counts": {},
+            "active_workflow": {"exists": True, "run_id": "active", "current_stage": "scout_seed", "status": "paused", "next_action": "workflow-resume"},
+            "approved_queue": [],
+            "queue_diagnostics": [],
+            "workflow_events": [],
+            "current_work": {
+                "title": "Maintenance blocker",
+                "status": "blocked",
+                "next_action": "maintenance-blocker",
+                "details": ["consecutive platform rate limit threshold reached"],
+                "evidence_paths": ["runs/source/rate_limit_state.json"],
+            },
+            "source_bridge": {"action": "maintenance_blocker", "reason": "consecutive platform rate limit threshold reached"},
+        }
+
+        html = render_dashboard(state)
+
+        self.assertIn("Maintenance blocker", html)
+        self.assertIn("Continue workflow", html)
+        self.assertIn("disabled", html)
+        self.assertIn("consecutive platform rate limit threshold reached", html)
+        self.assertIn('value="workflow-stop"', html)
+        self.assertNotIn('value="workflow-auto-continue"', html)
+
     def test_option_cards_are_directly_selectable(self):
         state = {
             "readiness": {"exists": True, "passed": True, "blocked": False},

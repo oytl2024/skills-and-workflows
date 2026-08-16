@@ -50,6 +50,7 @@ from wqb.knowledge_vault_migration import run_knowledge_vault_migration
 from wqb.interaction_memory import append_interaction_note
 from wqb.novelty import score_expression_novelty
 from wqb.optimizer import actions_for_check_summary
+from wqb.operator_semantics import expression_operator_provenance
 from wqb.orchestrator import OrchestratorPaths, WorkflowOrchestrator
 from wqb.principle_model import OptionCard, ScoreBreakdown, SourceEvidence
 from wqb.recorder import RunRecorder
@@ -2209,6 +2210,11 @@ def run_field_batch(
                 "template_mode": template_mode,
                 "workflow_stage": workflow_stage,
                 "human_idea": human_idea,
+                "operator_source": operator_source,
+                "operator_provenance": expression_operator_provenance(
+                    candidate.expression,
+                    config.get("knowledge_root", default_knowledge_root()),
+                ),
             }
         )
         payloads.append(simulation_payload(candidate.settings, candidate.expression))
@@ -3764,9 +3770,8 @@ def main() -> None:
         if args.run_dir:
             workflow_overrides["run_root"] = args.run_dir
         config = load_config(args.config, overrides=workflow_overrides)
-        orchestrator = WorkflowOrchestrator(
-            default_orchestrator_paths(config)
-        )
+        orchestrator_paths = default_orchestrator_paths(config)
+        orchestrator = WorkflowOrchestrator(orchestrator_paths)
         now = args.now or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         if args.command == "workflow-start":
             if not args.objective or not args.selected_option_id:
@@ -3808,7 +3813,7 @@ def main() -> None:
                 return summarize_run_dir(source_run_dir, config.get("knowledge_root", default_knowledge_root()))
 
             result = auto_continue_workflow(
-                default_orchestrator_paths(config),
+                orchestrator_paths,
                 config,
                 now,
                 enable_live_api=args.enable_live_api,
@@ -3817,7 +3822,13 @@ def main() -> None:
                 retry_planned_runner=retry_runner if args.enable_live_api else None,
             )
         elif args.command == "workflow-status":
-            result = orchestrator.status()
+            from wqb.workflow_auto_continue import decorate_workflow_status_with_source_bridge
+
+            result = decorate_workflow_status_with_source_bridge(
+                orchestrator_paths,
+                orchestrator.status(),
+                now,
+            )
         elif args.command == "workflow-resume":
             result = orchestrator.resume(now)
         elif args.command == "workflow-abort":

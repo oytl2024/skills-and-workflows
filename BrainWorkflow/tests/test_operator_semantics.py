@@ -6,6 +6,8 @@ from pathlib import Path
 from wqb.operator_semantics import (
     OperatorSemanticRecord,
     compile_operator_semantics,
+    expression_operator_provenance,
+    extract_expression_operators,
     load_operator_semantics,
     operator_semantic_record_from_dict,
     score_operator_for_template,
@@ -181,6 +183,57 @@ class OperatorSemanticsTests(unittest.TestCase):
         self.assertEqual(record.risk_tags, [])
         self.assertEqual(record.repair_levers, ["group_rank"])
         self.assertEqual(record.source_paths, ["docs/knowledge/operator_data_semantics.md"])
+
+    def test_expression_operator_provenance_reads_operator_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "knowledge"
+            write_operator_semantics_jsonl(
+                root / "machine" / "operator_ledger.jsonl",
+                [
+                    OperatorSemanticRecord(
+                        operator="rank",
+                        family="cross_sectional_normalizer",
+                        workflow_uses=["normalize_cross_section"],
+                        compatible_field_types=["MATRIX"],
+                        template_tags=["cross_sectional_normalizer"],
+                        risk_tags=["crowded_when_common"],
+                        repair_levers=["group_rank"],
+                        source_paths=["raw/platform/learn/operators.md"],
+                    ),
+                    OperatorSemanticRecord(
+                        operator="ts_delta",
+                        family="time_series_change",
+                        workflow_uses=["capture_recent_change"],
+                        compatible_field_types=["MATRIX"],
+                        template_tags=["time_series_surprise"],
+                        risk_tags=["turnover_inflation"],
+                        repair_levers=["increase_window"],
+                        source_paths=["raw/platform/learn/operators.md"],
+                    ),
+                    OperatorSemanticRecord(
+                        operator="vec_avg",
+                        family="vector_to_matrix",
+                        workflow_uses=["summarize_vector_values"],
+                        compatible_field_types=["VECTOR"],
+                        template_tags=["vector_to_matrix"],
+                        risk_tags=["invalid_raw_vector_use"],
+                        repair_levers=["replace_vec_count_with_vec_avg"],
+                        source_paths=["raw/platform/learn/operators.md"],
+                    ),
+                ],
+            )
+
+            operators = extract_expression_operators("rank(ts_delta(vec_avg(buzz_trend_metric_11), 5))")
+            provenance = expression_operator_provenance(
+                "rank(ts_delta(vec_avg(buzz_trend_metric_11), 5))",
+                root,
+            )
+
+        self.assertEqual(operators, ["rank", "ts_delta", "vec_avg"])
+        self.assertEqual([row["operator"] for row in provenance], ["rank", "ts_delta", "vec_avg"])
+        self.assertEqual(provenance[0]["source"], "knowledge_operator_ledger")
+        self.assertEqual(provenance[1]["family"], "time_series_change")
+        self.assertIn("raw/platform/learn/operators.md", provenance[2]["source_paths"])
 
     def test_write_and_load_operator_semantics_jsonl_and_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:

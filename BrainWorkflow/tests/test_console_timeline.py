@@ -203,6 +203,7 @@ class ConsoleTimelineTests(unittest.TestCase):
         }
         expected = {
             "rate_limit_wait": ("Rate limited", "waiting"),
+            "maintenance_blocker": ("Maintenance blocker", "blocked"),
             "import_existing": ("Import existing source", "paused"),
             "complete_in_flight": ("Complete in-flight source", "waiting"),
             "retry_planned": ("Retry planned source", "waiting"),

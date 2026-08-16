@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from wqb.knowledge_paths import existing_machine_resource_path, machine_resource_path
@@ -16,6 +17,7 @@ LEGACY_OPERATOR_SOURCE_PREFIXES = (
     (Path("wiki") / "20_semantics").as_posix(),
     (Path("wiki") / "30_templates").as_posix(),
 )
+OPERATOR_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,52 @@ def load_operator_semantics(path: Path) -> list[OperatorSemanticRecord]:
         if line.strip():
             records.append(operator_semantic_record_from_dict(json.loads(line)))
     return records
+
+
+def extract_expression_operators(expression: str) -> list[str]:
+    """Input: expression string. Output: operator names. Extract function-call operators in first-use order."""
+    operators: list[str] = []
+    seen: set[str] = set()
+    for match in OPERATOR_CALL_RE.finditer(expression):
+        operator = match.group(1)
+        if operator not in seen:
+            seen.add(operator)
+            operators.append(operator)
+    return operators
+
+
+def expression_operator_provenance(expression: str, knowledge_root: str | Path) -> list[dict[str, Any]]:
+    """Input: expression and vault root. Output: operator provenance rows. Link generated code operators to the ledger."""
+    ledger_path = existing_machine_resource_path(Path(knowledge_root), "operator_ledger")
+    records = {record.operator: record for record in load_operator_semantics(ledger_path)}
+    provenance: list[dict[str, Any]] = []
+    for operator in extract_expression_operators(expression):
+        record = records.get(operator)
+        if record is None:
+            provenance.append(
+                {
+                    "operator": operator,
+                    "source": "missing_operator_ledger",
+                    "family": "",
+                    "workflow_uses": [],
+                    "risk_tags": [],
+                    "repair_levers": [],
+                    "source_paths": [],
+                }
+            )
+            continue
+        provenance.append(
+            {
+                "operator": operator,
+                "source": "knowledge_operator_ledger",
+                "family": record.family,
+                "workflow_uses": list(record.workflow_uses),
+                "risk_tags": list(record.risk_tags),
+                "repair_levers": list(record.repair_levers),
+                "source_paths": list(record.source_paths),
+            }
+        )
+    return provenance
 
 
 def write_operator_semantics_jsonl(path: Path, records: list[OperatorSemanticRecord]) -> Path:

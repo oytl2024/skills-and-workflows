@@ -36,7 +36,7 @@ If the browser does not open, keep the PowerShell window open and paste the URL 
 
 - **Objective and Gate Summary:** tells you whether readiness/freshness/data coverage allow research.
 - **Runtime Timeline:** shows the workflow stage sequence and which stage is running, paused, blocked, or complete.
-- **Current Work:** shows the current job or workflow blocker. Read this before clicking again.
+- **Current Work:** shows the current job or workflow blocker. Read this before clicking again. If it says `Maintenance blocker`, the Continue button is disabled and the evidence paths are the handoff to maintenance.
 - **Decisions and Approvals:** select a research option, start the workflow, and later record human candidate approvals.
 - **AI Checkpoints:** shows where Codex/GPT judgment is needed later. The local Console does not call a model by itself.
 - **Knowledge and Data Authority:** confirms whether data is authoritative measured data or only seed/cache scaffolding.
@@ -48,7 +48,7 @@ If the browser does not open, keep the PowerShell window open and paste the URL 
 2. Check **Objective and Gate Summary**.
 3. In **Decisions and Approvals**, select one research option card.
 4. Click `Start workflow`.
-5. Click `Continue workflow` whenever the Console shows active work or a deterministic next step. For source recovery that contacts the platform, explicitly select `Enable live source recovery` before continuing.
+5. Click `Continue workflow` whenever the Console shows active work or a deterministic next step. For source recovery that contacts the platform, explicitly select `Enable live source recovery` before continuing. If **Current Work** says `Maintenance blocker`, stop clicking and hand the evidence to the maintenance loop.
 6. Read **Current Work** and **Runtime Timeline** after each action. Source bridge status, cooldown status, and source-run locks are shown there.
 7. When candidate approval appears, review the evidence and record the human decision.
 8. Use `Stop workflow` only when you want to abort the active workflow non-destructively.
@@ -67,6 +67,7 @@ The normal Console path uses one primary advancement control:
 | No active workflow | Select one option card, then click `Start workflow` | Creates a durable Orchestrator run. |
 | Active workflow | Click `Continue workflow` | Runs the next safe deterministic step. Live source runners remain disabled unless explicitly authorized. |
 | Rate limited | After the displayed retry time, select `Enable live source recovery` and click `Continue workflow` | Resumes the persisted planned queue; it does not discard candidates. |
+| Maintenance blocker | Do not click Continue; open a maintenance task with the evidence paths | The Console disables Continue and preserves the run, source binding, and blocker evidence. |
 | Waiting for user | Review the approval shown by the Console | Automatic progress stops until the human decision is recorded. |
 | User wants to stop | Click `Stop workflow` | Aborts the active workflow non-destructively and preserves evidence. |
 
@@ -84,9 +85,11 @@ The bridge validates source field, dataset, Scout stage, and selected scope befo
 binding a source run. The first compatible source selection is persisted under
 the active workflow and later recovery cannot switch to a newer sibling run.
 
-If the Console records a maintenance blocker, use the maintenance-only source
-recovery commands in `docs/operations/operating_guide.md`. Invalid artifacts,
-missing durable evidence, or a repeated unexplained no-op are maintenance issues.
+If the Console records a maintenance blocker, `Current Work` must display the
+blocker and evidence paths, and `Continue workflow` is disabled. Use the
+maintenance-only source recovery commands in `docs/operations/operating_guide.md`.
+Invalid artifacts, missing durable evidence, repeated unexplained no-ops, or
+three consecutive platform 429 responses are maintenance issues.
 
 ### Source Run Polling And Rate Limits
 
@@ -97,8 +100,8 @@ Expected behavior:
 - Repeated `Retry-After` polling has a bounded wait.
 - If the bound is exceeded, the source run records a recoverable `SIMULATION_POLL_TIMEOUT` error in `run_errors.jsonl`.
 - The submitted simulation remains visible as in-flight through `simulation_events.jsonl`.
-- After the displayed retry time, `Continue workflow` resumes the persisted planned queue without losing candidates.
-- Three consecutive 429 responses stop automatic recovery and expose a maintenance blocker. Successful platform progress resets the consecutive counter.
+- Before the consecutive-429 threshold, after the displayed retry time, `Continue workflow` resumes the persisted planned queue without losing candidates.
+- Three consecutive 429 responses stop automatic recovery, expose a maintenance blocker, and disable Continue until maintenance decides the next action. Successful platform progress resets the consecutive counter.
 
 If the browser spinner runs but **Recent Jobs** and `run_errors.jsonl` do not change, treat it as a maintenance bug. The correct fix is a tested workflow/observability repair, not repeated clicking.
 
@@ -143,6 +146,7 @@ If the Console is only running deterministic jobs, the Codex page may not change
 | Browser spinner but no state change | Observability issue | Check `Recent Jobs`; if no job appears, report Console UX bug. |
 | Repeated `Continue workflow` gives the same unexplained state | Workflow contract gap | Do not manually recover it; hand it to the maintenance window. |
 | Source run polls a simulation for a long time after 429/`Retry-After` | Platform pacing or bounded poll recovery | Wait for the displayed retry time, then click `Continue workflow`. |
+| `Maintenance blocker` with `consecutive platform rate limit threshold reached` | Platform threshold or workflow contract stop | Do not click Continue; preserve the source run and hand it to maintenance. |
 | `failed` status | Code/data/platform failure | Stop clicking; inspect diagnostics and hand to maintenance window. |
 | Login/API/network error | External state | Fix credentials, platform login, proxy, or retry after platform recovery. |
 | Need candidate approval or submit confirmation | Human decision | User must choose; do not automate submission. |

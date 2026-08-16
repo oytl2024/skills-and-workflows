@@ -62,9 +62,12 @@ python -m wqb.cli workflow-continue --knowledge-root 'C:\Users\oytl\Desktop\pypr
 ```
 
 Scout source batches use a cap of 30 simulations. Seed refinement uses a cap of
-8 simulations. In normal Console operation, `Continue workflow` owns stage
-advance and source-bridge dispatch. Any source runner that authenticates or calls
-the platform requires the explicit `Enable live source recovery` checkbox.
+8 simulations. The code authority is `wqb.research_workflow.stage_budget_summary()`,
+which returns the `STAGE_MAX_SIMULATIONS` contract. Source bridge metadata reads
+that contract instead of owning a separate hard-coded cap. In normal Console
+operation, `Continue workflow` owns stage advance and source-bridge dispatch.
+Any source runner that authenticates or calls the platform requires the explicit
+`Enable live source recovery` checkbox.
 
 ## Maintenance-Only Recovery Commands
 
@@ -77,6 +80,12 @@ python -m wqb.cli complete-in-flight --run-dir '<source-run-dir>'
 python -m wqb.cli retry-planned --run-dir '<source-run-dir>'
 python -m wqb.cli workflow-import-scout-seed-artifacts --source-run-id '<source-run-id>' --knowledge-root '<knowledge>' --run-dir '<runs>'
 ```
+
+`workflow-status` is a local read and now overlays the source bridge decision on
+top of the raw Orchestrator state. If the active Scout/Seed run is paused for
+missing `candidates.csv` and its bound source run hit the consecutive-429
+threshold, `workflow-status` must report `next_action=maintenance-blocker` with
+`source_bridge.evidence_paths`; it must not fall back to `workflow-resume`.
 
 ## Knowledge Maintenance
 
@@ -260,7 +269,7 @@ Safety rules:
 
 - Platform option refresh requires the `enable_live_api` checkbox.
 - Console source recovery is a durable asynchronous job, reuses an existing running or detached auto-continue job, and requires explicit live-source authorization before platform calls.
-- Source recovery stays bound to the first schedule/scope-compatible source run; exhausted planned queues and the consecutive-429 threshold become maintenance blockers.
+- Source recovery stays bound to the first schedule/scope-compatible source run; exhausted planned queues and the consecutive-429 threshold become maintenance blockers. Under a maintenance blocker, the Console shows `Maintenance blocker`, disables `Continue workflow`, keeps `Stop workflow` available, and links the source evidence.
 - Workflow start refuses to run from the console when required compiled knowledge is stale or missing; run knowledge maintenance first.
 - Submit actions are not auto-triggered by the first console version.
 

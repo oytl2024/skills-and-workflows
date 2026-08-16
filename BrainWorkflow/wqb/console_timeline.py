@@ -149,6 +149,7 @@ def select_current_work(state: dict[str, Any], timeline: list[dict[str, Any]]) -
                 evidence_paths.append(summary_path)
         source_work = {
             "rate_limit_wait": ("Rate limited", "waiting", "Continue workflow after retry time"),
+            "maintenance_blocker": ("Maintenance blocker", "blocked", "maintenance-blocker"),
             "import_existing": ("Import existing source", "paused", "Continue workflow to import source artifacts"),
             "complete_in_flight": ("Complete in-flight source", "waiting", "Continue workflow to recover source results"),
             "retry_planned": ("Retry planned source", "waiting", "Continue workflow to retry planned source work"),
