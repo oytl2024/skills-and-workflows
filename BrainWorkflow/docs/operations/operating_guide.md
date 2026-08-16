@@ -61,27 +61,20 @@ Advance the workflow one legal step at a time:
 python -m wqb.cli workflow-continue --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
 ```
 
-Inspect or resume after interruption:
+Scout source batches use a cap of 30 simulations. Seed refinement uses a cap of
+8 simulations. In normal Console operation, `Continue workflow` owns stage
+advance, cooldown recovery, and source-bridge recovery.
+
+## Maintenance-Only Recovery Commands
+
+The normal Console path is `Continue workflow`. Use these CLI commands only when
+the Console records a maintenance blocker:
 
 ```powershell
-python -m wqb.cli workflow-status --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
-python -m wqb.cli workflow-resume --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
-```
-
-If a live source Scout/Seed run was interrupted or hit a bounded simulation
-poll timeout, keep the active Orchestrator run unchanged and recover the source
-run explicitly:
-
-```powershell
-python -m wqb.cli complete-in-flight --run-dir 'C:\Users\oytl\Desktop\pyproject\brain\runs\<source-run-id>' --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
-```
-
-Then import only after the source run has a valid `candidates.csv`:
-
-```powershell
-python -m wqb.cli workflow-import-scout-seed-artifacts --source-run-id '<source-run-id>' --run-dir 'C:\Users\oytl\Desktop\pyproject\brain\runs' --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
-python -m wqb.cli workflow-resume --run-dir 'C:\Users\oytl\Desktop\pyproject\brain\runs' --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
-python -m wqb.cli workflow-continue --run-dir 'C:\Users\oytl\Desktop\pyproject\brain\runs' --knowledge-root 'C:\Users\oytl\Desktop\pyproject\brain\knowledge'
+python -m wqb.cli workflow-status --knowledge-root '<knowledge>' --run-dir '<runs>'
+python -m wqb.cli complete-in-flight --run-dir '<source-run-dir>'
+python -m wqb.cli retry-planned --run-dir '<source-run-dir>'
+python -m wqb.cli workflow-import-scout-seed-artifacts --source-run-id '<source-run-id>' --knowledge-root '<knowledge>' --run-dir '<runs>'
 ```
 
 ## Knowledge Maintenance
@@ -213,10 +206,9 @@ ledger is `knowledge/machine/operator_ledger.jsonl`; the generated preview is
 
 The normal UI path is:
 
-1. Refresh option cards with live API authorization.
-2. Select one research option card in the console.
-3. Start workflow from the selected card.
-4. Continue the Orchestrator one legal step at a time.
+1. Select one research option card in the console.
+2. Start workflow from the selected card.
+3. Continue the Orchestrator through safe deterministic steps and source recovery.
 
 Do not type option IDs manually in normal operation. The console maps the selected card to `workflow-start`.
 
@@ -252,9 +244,8 @@ Implemented:
 - readiness, freshness, option cards, schedule preview;
 - workflow events and approved queue diagnostics;
 - local web server and browser dashboard;
-- action buttons for readiness, option refresh, workflow start/resume/continue,
-  Scout/Seed artifact import, platform compile, research-record compile, and
-  knowledge health checks;
+- normal-path option-card `Start workflow`, `Continue workflow`, and `Stop workflow` controls;
+- maintenance and proposal routes outside the normal operating path;
 - durable job records under `runs/console_jobs/`;
 - workflow-change proposal form UI.
 
@@ -331,28 +322,19 @@ Open `http://127.0.0.1:8765`. The page is the normal operating surface:
 1. Read `Objective and Gate Summary` for the active objective and readiness blockers.
 2. Check `Runtime Timeline` for running, waiting, blocked, and completed stages.
 3. Inspect `Current Work` for async job progress, status, and evidence paths.
-4. Use `Decisions and Approvals` for research option selection and proposal review.
+4. Use `Decisions and Approvals` for research option selection and human approval review.
 5. Use `AI Checkpoints` to see where later GPT/Codex judgment is required.
-6. Use `Knowledge Maintenance` to run readiness checks, compile research
-   records, refresh research options, and run the knowledge health check.
-7. Use `Platform Data` for live-gated data-field capture, choose the maximum
-   scope count deliberately, compile the data ledger, and watch capture
-   progress in `Current Work` and `Runtime Timeline`.
-8. Read `Knowledge and Data Authority` before starting research. Confirm which
+6. Read `Knowledge and Data Authority` before starting research. Confirm which
    rows are authoritative measured data versus seed/cache data, review contract
    warnings and semantic ledgers, and resolve option blockers before starting.
-9. Use `Recent Jobs` to find each job id, action, and status. Open its persisted
+7. Use `Recent Jobs` to find each job id, action, and status. Open its persisted
    job record to recover an interrupted action and to locate stdout, stderr,
    summary, raw, wiki, or run evidence paths.
 
-`Knowledge Maintenance` actions are local and deterministic unless an action
-explicitly enables a live platform operation. Refreshing research options uses
-the selected measured scope and should be followed by the option cards and
-readiness gates above. In `Platform Data`, keep the live checkbox selected only
-for an authorized capture; the max-scope selector limits the capture breadth,
-and ledger compilation consumes the persisted capture rather than calling the
-platform again. A running capture remains visible as progress and must be
-reconciled before retrying.
+Knowledge maintenance and platform data capture are maintenance-only actions,
+not top-level normal controls. Use them only when the Console records a
+maintenance blocker and follow the commands in this guide. Live API actions
+always require explicit authorization.
 
 `Knowledge and Data Authority` is the decision gate for research inputs: a
 seed/cache row is useful for scaffolding but cannot satisfy authoritative

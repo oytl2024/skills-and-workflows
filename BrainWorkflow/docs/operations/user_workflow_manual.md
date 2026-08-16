@@ -8,7 +8,7 @@ The short rule: the Console is the control surface, the Orchestrator is the stat
 
 BrainWorkflow has two separate loops:
 
-- **Operations loop:** run the existing workflow through Console/CLI, watch durable state, generate source runs, import artifacts, approve candidates, and stop for explicit submission authorization.
+- **Operations loop:** run the existing workflow through the Console, watch durable state, approve candidates, and stop for explicit submission authorization.
 - **Maintenance loop:** change code, tests, docs, workflow rules, knowledge structure, or Console behavior when the operations loop exposes a missing button, repeated no-op, confusing state, or broken contract.
 
 Do not mix these loops in one mental stack. A running workflow should not depend on the long chat remembering what happened. It should be recoverable from Console, `run_state.json`, `workflow_events.jsonl`, `runs/console_jobs/`, `todo.md`, and `milestone.md`.
@@ -37,116 +37,52 @@ If the browser does not open, keep the PowerShell window open and paste the URL 
 - **Objective and Gate Summary:** tells you whether readiness/freshness/data coverage allow research.
 - **Runtime Timeline:** shows the workflow stage sequence and which stage is running, paused, blocked, or complete.
 - **Current Work:** shows the current job or workflow blocker. Read this before clicking again.
-- **Decisions and Approvals:** select a research option, start the workflow, resume/continue, import Scout/Seed artifacts, and later approve candidates.
+- **Decisions and Approvals:** select a research option, start the workflow, and later record human candidate approvals.
 - **AI Checkpoints:** shows where Codex/GPT judgment is needed later. The local Console does not call a model by itself.
-- **Knowledge Maintenance:** run local knowledge compiles and readiness checks; refresh research options only when live API is explicitly enabled.
-- **Platform Data:** live-gated platform data capture and local data-ledger compilation.
 - **Knowledge and Data Authority:** confirms whether data is authoritative measured data or only seed/cache scaffolding.
-- **Recent Jobs:** durable job records. Use this to recover after browser refresh, shutdown, or a stuck spinner.
+- **Recent Jobs:** durable job records for evidence and maintenance diagnosis; it is not a normal control surface.
 
 ## Daily Research Golden Path
 
 1. Open the Console.
 2. Check **Objective and Gate Summary**.
-3. If readiness or knowledge is blocked, use **Knowledge Maintenance** before starting research.
-4. If platform data was refreshed, run `Compile data ledger from raw`, then `Compile knowledge`, then `Run readiness check`.
-5. In **Knowledge Maintenance**, enable live API only when authorized, then click `Refresh research options`.
-6. In **Decisions and Approvals**, select one research option card and one scope.
-7. Click `Start selected workflow`.
-8. Use `Resume workflow` when `next_action` says `workflow-resume`.
-9. Use `Continue workflow` when `next_action` says `workflow-continue`.
-10. When Scout/Seed needs `candidates.csv`, generate a source Scout/Seed run, import it, then resume/continue.
-11. When candidate approval appears, read candidate evidence and approve only exact candidates you want queued.
-12. Alpha submission is never automatic. It requires explicit user authorization.
+3. In **Decisions and Approvals**, select one research option card.
+4. Click `Start workflow`.
+5. Click `Continue workflow` whenever the Console shows active work, a deterministic next step, source recovery, or a retry time that has elapsed.
+6. Read **Current Work** and **Runtime Timeline** after each action. Source bridge status, cooldown status, and source-run locks are shown there.
+7. When candidate approval appears, review the evidence and record the human decision.
+8. Use `Stop workflow` only when you want to abort the active workflow non-destructively.
+9. Alpha submission is never automatic. It requires explicit user authorization.
 
-## Knowledge Maintenance Flow
-
-Use this after research records accumulate or after platform materials/data are refreshed.
-
-Click path:
-
-1. `Compile research records` after completed research runs.
-2. `Compile data ledger from raw` after platform data capture.
-3. `Compile knowledge` after data/material changes.
-4. `Check knowledge health`.
-5. `Run readiness check`.
-
-Interpretation:
-
-- Local compile/check buttons do not call the platform API.
-- `Refresh research options` can call live API only when its live checkbox is selected.
-- `Capture platform data fields` can call live API only when its live checkbox is selected.
-
-If the Console shows stale/missing artifacts, do not start research. Fix maintenance first.
-
-## Platform Data Refresh Flow
-
-Use this only when you intentionally update platform data-field coverage.
-
-Click path:
-
-1. In **Platform Data**, set `fields_per_scope` and `max_scopes`.
-2. Check `enable_live_api`.
-3. Click `Capture platform data fields`.
-4. Watch **Current Work** and **Recent Jobs**.
-5. After the job completes, click `Compile data ledger from raw`.
-6. Click `Compile knowledge`.
-7. Click `Run readiness check`.
-
-Do not launch a second capture because the page spinner is confusing. Check `Recent Jobs` first.
-
-## Research Option Flow
-
-Click path:
-
-1. Check **Knowledge and Data Authority**. Prefer authoritative measured data.
-2. In **Knowledge Maintenance**, check `Enable live API` for option refresh only if authorized.
-3. Click `Refresh research options`.
-4. Read the option cards.
-5. Select one card directly on the card.
-6. Select one scope.
-7. Click `Start selected workflow`.
-
-If cards are missing or options are blocked, this is usually a knowledge/readiness issue, not a simulation issue.
+Readiness, knowledge compilation, and platform-data refresh are maintenance-only
+when the Console records a blocker. Use the command reference in
+`docs/operations/operating_guide.md`; they are not top-level daily controls.
 
 ## Orchestrator Advance Flow
 
-The Orchestrator state controls what you click:
+The normal Console path uses one primary advancement control:
 
-| Status / next_action | Click | Meaning |
+| State | User action | System behavior |
 | --- | --- | --- |
-| `none` / `workflow-start` | Select option + `Start selected workflow` | No active run exists. |
-| `created` / `workflow-continue` | `Continue workflow` | Move into scheduling. |
-| `running` / `workflow-continue` | `Continue workflow` | Advance one legal stage. |
-| `paused` / `workflow-resume` | `Resume workflow` | Reopen a paused run without repeating completed work. |
-| after resume shows `workflow-continue` | `Continue workflow` | Run the next local stage check. |
-| `waiting_for_user` | Candidate approval controls | Human decision required. |
-| `failed` / `workflow-abort` | Stop and ask maintenance window | Failure needs diagnosis; do not keep clicking. |
+| No active workflow | Select one option card, then click `Start workflow` | Creates a durable Orchestrator run. |
+| Active workflow | Click `Continue workflow` | Runs the next safe deterministic step or recovery step. |
+| Rate limited | Click `Continue workflow` after the displayed retry time | Resumes the persisted planned queue; it does not discard candidates. |
+| Waiting for user | Review the approval shown by the Console | Automatic progress stops until the human decision is recorded. |
+| User wants to stop | Click `Stop workflow` | Aborts the active workflow non-destructively and preserves evidence. |
 
 Clicking the wrong button should not corrupt state, but repeated no-op clicks mean the Console is not giving a good enough path. Treat that as a workflow UX issue.
 
-## Scout/Seed Source Run And Import
+## Scout/Seed Recovery
 
-Scout/Seed needs a run-local `candidates.csv` before the active Orchestrator run can move forward.
+Scout source batches are capped at 30 simulations. Seed refinement batches are
+capped at 8 simulations. When Scout/Seed needs source artifacts, the Console
+uses the source bridge to choose a safe recovery path. Click `Continue workflow`
+and read **Current Work** and **Runtime Timeline**; do not type a source run ID,
+copy files, or manually import artifacts during normal operation.
 
-Current state of the system:
-
-- The active Orchestrator run owns the official workflow state.
-- Existing live Stage 1 / field-batch tools may create a separate timestamped source run.
-- The formal bridge is `Import Scout/Seed artifacts`.
-
-Click/operation path:
-
-1. If **Current Work** says `local artifacts required before plan-only stage completion: candidates.csv`, the active run needs Scout/Seed artifacts.
-2. Generate a bounded source Scout/Seed run through the workflow runner/Codex automation using the existing live Stage 1 or field-batch command. This is the part still not fully click-only in the current Console.
-3. Confirm the source run has a valid `candidates.csv`.
-4. In **Workflow Progress**, type the source run id into `Source run ID`.
-5. Click `Import Scout/Seed artifacts`.
-6. Check **Recent Jobs** for completion.
-7. Click `Resume workflow`.
-8. Click `Continue workflow`.
-
-If `Import Scout/Seed artifacts` rejects the source run, the source artifacts are invalid or unsafe. The import path rejects empty candidate files, blank identities, existing active-run artifacts, source path escape, symlink directories, and non-regular files.
+If the Console records a maintenance blocker, use the maintenance-only source
+recovery commands in `docs/operations/operating_guide.md`. Invalid artifacts,
+missing durable evidence, or a repeated unexplained no-op are maintenance issues.
 
 ### Source Run Polling And Rate Limits
 
@@ -157,7 +93,7 @@ Expected behavior:
 - Repeated `Retry-After` polling has a bounded wait.
 - If the bound is exceeded, the source run records a recoverable `SIMULATION_POLL_TIMEOUT` error in `run_errors.jsonl`.
 - The submitted simulation remains visible as in-flight through `simulation_events.jsonl`.
-- The operator can retry later with `complete-in-flight`, run a smaller/different source batch, or switch fields without losing the active Orchestrator run.
+- After the displayed retry time, `Continue workflow` resumes the persisted planned queue without losing candidates.
 
 If the browser spinner runs but **Recent Jobs** and `run_errors.jsonl` do not change, treat it as a maintenance bug. The correct fix is a tested workflow/observability repair, not repeated clicking.
 
@@ -200,9 +136,8 @@ If the Console is only running deterministic jobs, the Codex page may not change
 | Button exists, job runs, state advances | Normal operation | Continue following `next_action`. |
 | Button exists, job is running | Normal async job | Watch **Current Work** and **Recent Jobs**. |
 | Browser spinner but no state change | Observability issue | Check `Recent Jobs`; if no job appears, report Console UX bug. |
-| `paused` with `workflow-resume`, but no resume button | Code/UI bug | Maintenance window must add a tested Console action. |
-| Repeated `Continue workflow` gives same missing artifact | Workflow contract gap unless the missing artifact is expected | Generate/import the artifact if documented; otherwise maintenance window fixes code/tests. |
-| Source run polls a simulation for a long time after 429/`Retry-After` | Platform pacing or bounded poll recovery | Watch `Recent Jobs`; if `run_errors.jsonl` shows `SIMULATION_POLL_TIMEOUT`, retry later or run a smaller/different batch. |
+| Repeated `Continue workflow` gives the same unexplained state | Workflow contract gap | Do not manually recover it; hand it to the maintenance window. |
+| Source run polls a simulation for a long time after 429/`Retry-After` | Platform pacing or bounded poll recovery | Wait for the displayed retry time, then click `Continue workflow`. |
 | `failed` status | Code/data/platform failure | Stop clicking; inspect diagnostics and hand to maintenance window. |
 | Login/API/network error | External state | Fix credentials, platform login, proxy, or retry after platform recovery. |
 | Need candidate approval or submit confirmation | Human decision | User must choose; do not automate submission. |
@@ -225,16 +160,3 @@ Bug response:
 3. Implement the minimal fix.
 4. Run focused tests and non-live verification.
 5. Update this manual if the click path changes.
-
-## Current Power Pool Run Recovery
-
-For run `20260811T111506000000-481c3452`:
-
-1. Refresh/restart Console so it includes the latest buttons.
-2. Generate a bounded source Scout/Seed run through the workflow runner.
-3. Copy no files manually.
-4. Import the source run through `Import Scout/Seed artifacts`.
-5. Click `Resume workflow`.
-6. Click `Continue workflow`.
-
-If any step is unavailable in the Console, that is a maintenance task.
