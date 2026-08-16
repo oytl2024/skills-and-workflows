@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 from wqb.cli import default_orchestrator_paths
 from wqb.orchestrator import WorkflowOrchestrator
+from wqb.source_bridge import SourceBridgeDecision
 from wqb.workflow_auto_continue import auto_continue_workflow
 
 
@@ -18,6 +19,27 @@ def write_candidate_file(path: Path) -> None:
         writer = csv.DictWriter(file, fieldnames=["alpha_id", "expression_hash"])
         writer.writeheader()
         writer.writerow({"alpha_id": "a1", "expression_hash": "h1"})
+
+
+def write_source_metadata(source: Path) -> None:
+    """Input: source run directory. Output: none. Write metadata matching the default workflow fixture."""
+    source.mkdir(parents=True, exist_ok=True)
+    (source / "run_meta.jsonl").write_text(
+        json.dumps(
+            {
+                "data_fields_path": (
+                    "/data-fields?instrumentType=EQUITY&region=USA&delay=1&universe=TOP3000"
+                    "&dataset.id=fundamental3&search=cash_field"
+                ),
+                "field_search": "cash_field",
+                "exact_field_id": "cash_field",
+                "dataset_id": "fundamental3",
+                "workflow_stage": "scout",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def write_start_artifacts(root: Path) -> None:
@@ -129,6 +151,68 @@ class WorkflowAutoContinueTests(unittest.TestCase):
         self.assertEqual(result["status"], "none")
         self.assertEqual(result["next_action"], "workflow-start")
 
+    def test_auto_continue_does_not_complete_in_flight_without_live_authorization(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source1"
+            source.mkdir()
+            orchestrator = Mock()
+            orchestrator.status.return_value = {
+                "active": True,
+                "status": "paused",
+                "current_stage": "scout_seed",
+                "pause_reason": "missing candidates.csv",
+                "run_dir": str(Path(tmp) / "active"),
+            }
+            runner = Mock(side_effect=AssertionError("live recovery must not run"))
+            decision = SourceBridgeDecision(
+                "complete_in_flight", "submitted simulation needs recovery", "source1", str(source)
+            )
+            with patch("wqb.workflow_auto_continue.WorkflowOrchestrator", return_value=orchestrator), patch(
+                "wqb.workflow_auto_continue.inspect_scout_seed_source_bridge", return_value=decision
+            ):
+                result = auto_continue_workflow(
+                    Mock(),
+                    {},
+                    "2026-08-16T00:00:00+00:00",
+                    enable_live_api=False,
+                    complete_in_flight_runner=runner,
+                )
+
+        runner.assert_not_called()
+        self.assertEqual(result["next_action"], "enable-live-api-required")
+        self.assertIn("authorization", result["message"].lower())
+
+    def test_auto_continue_does_not_retry_planned_without_live_authorization(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source1"
+            source.mkdir()
+            orchestrator = Mock()
+            orchestrator.status.return_value = {
+                "active": True,
+                "status": "paused",
+                "current_stage": "scout_seed",
+                "pause_reason": "missing candidates.csv",
+                "run_dir": str(Path(tmp) / "active"),
+            }
+            runner = Mock(side_effect=AssertionError("live recovery must not run"))
+            decision = SourceBridgeDecision(
+                "retry_planned", "planned source candidates remain", "source1", str(source)
+            )
+            with patch("wqb.workflow_auto_continue.WorkflowOrchestrator", return_value=orchestrator), patch(
+                "wqb.workflow_auto_continue.inspect_scout_seed_source_bridge", return_value=decision
+            ):
+                result = auto_continue_workflow(
+                    Mock(),
+                    {},
+                    "2026-08-16T00:00:00+00:00",
+                    enable_live_api=False,
+                    retry_planned_runner=runner,
+                )
+
+        runner.assert_not_called()
+        self.assertEqual(result["next_action"], "enable-live-api-required")
+        self.assertIn("authorization", result["message"].lower())
+
     def test_auto_continue_imports_valid_source_candidates_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -139,6 +223,7 @@ class WorkflowAutoContinueTests(unittest.TestCase):
             orchestrator.continue_once("2026-08-12T00:01:00+00:00")
             orchestrator.continue_once("2026-08-12T00:02:00+00:00")
             source = paths.run_root / "source1"
+            write_source_metadata(source)
             write_candidate_file(source / "candidates.csv")
             orchestrator.continue_once("2026-08-12T00:03:00+00:00")
 
@@ -160,7 +245,7 @@ class WorkflowAutoContinueTests(unittest.TestCase):
             orchestrator.continue_once("2026-08-12T00:01:00+00:00")
             orchestrator.continue_once("2026-08-12T00:02:00+00:00")
             source = paths.run_root / "source1"
-            source.mkdir()
+            write_source_metadata(source)
             (source / "rate_limit_state.json").write_text('{"status":"cooldown","retry_at":"2099-01-01T00:00:00+00:00"}', encoding="utf-8")
             orchestrator.continue_once("2026-08-12T00:03:00+00:00")
 
@@ -168,6 +253,37 @@ class WorkflowAutoContinueTests(unittest.TestCase):
 
         self.assertEqual(result["next_action"], "rate-limit-wait")
         self.assertEqual(result["source_bridge"]["action"], "rate_limit_wait")
+
+    def test_auto_continue_exposes_maintenance_blocker_at_rate_limit_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_start_artifacts(root)
+            paths = default_orchestrator_paths(
+                {"run_root": str(root / "runs"), "knowledge_root": str(root / "knowledge")}
+            )
+            orchestrator = WorkflowOrchestrator(paths)
+            orchestrator.start("Power Pool", "option-1", "2026-08-12T00:00:00+00:00")
+            orchestrator.continue_once("2026-08-12T00:01:00+00:00")
+            orchestrator.continue_once("2026-08-12T00:02:00+00:00")
+            source = paths.run_root / "source1"
+            write_source_metadata(source)
+            (source / "rate_limit_state.json").write_text(
+                json.dumps(
+                    {
+                        "status": "cooldown",
+                        "retry_at": "2099-01-01T00:00:00+00:00",
+                        "consecutive_429_count": 3,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            orchestrator.continue_once("2026-08-12T00:03:00+00:00")
+
+            result = auto_continue_workflow(paths, {}, "2026-08-12T00:04:00+00:00")
+
+        self.assertEqual(result["next_action"], "maintenance-blocker")
+        self.assertEqual(result["source_bridge"]["action"], "maintenance_blocker")
+        self.assertIn("rate limit", result["source_bridge"]["reason"])
 
     def test_auto_continue_starts_bounded_source_batch_when_live_enabled(self):
         calls = []
@@ -202,6 +318,9 @@ class WorkflowAutoContinueTests(unittest.TestCase):
         self.assertEqual(result["next_action"], "workflow-auto-continue")
         self.assertEqual(result["source_bridge"]["action"], "start_source_batch")
         self.assertEqual(calls[0][0]["max_alphas_per_round"], 30)
+        self.assertEqual(calls[0][0]["region"], "USA")
+        self.assertEqual(calls[0][0]["delay"], 1)
+        self.assertEqual(calls[0][0]["universe"], "TOP3000")
         self.assertEqual(calls[0][1]["field_search"], "buzz_intensity_score_15")
 
 

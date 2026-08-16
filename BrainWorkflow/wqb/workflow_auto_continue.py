@@ -46,6 +46,17 @@ def auto_continue_workflow(
                 "next_action": "rate-limit-wait",
                 "message": "Platform cooldown is active; Continue will not contact the platform yet.",
             }
+        if decision.action in {
+            "complete_in_flight",
+            "retry_planned",
+            "start_source_batch",
+        } and not enable_live_api:
+            return {
+                **status,
+                "source_bridge": decision_dict,
+                "next_action": "enable-live-api-required",
+                "message": "Live API authorization is required before source recovery can contact the platform.",
+            }
         if decision.action == "complete_in_flight" and complete_in_flight_runner is not None:
             lock = acquire_source_run_lock(decision.source_run_dir, "complete-in-flight", now)
             if lock.get("status") != "acquired":
@@ -66,14 +77,21 @@ def auto_continue_workflow(
             return {**status, "source_bridge": decision_dict, "source_recovery": recovery, "next_action": "workflow-auto-continue"}
         if decision.action in {"complete_in_flight", "retry_planned"}:
             return {**status, "source_bridge": decision_dict, "next_action": decision.action, "message": "Source recovery runner is not configured."}
-        if decision.action == "start_source_batch" and not enable_live_api:
-            return {**status, "source_bridge": decision_dict, "next_action": "enable-live-api-required", "message": "Live API authorization is required before starting a source batch."}
         if decision.action == "start_source_batch" and source_batch_runner is not None:
             run_dir = str(status["run_dir"])
             lock = acquire_source_run_lock(run_dir, "start-source-batch", now)
             if lock.get("status") != "acquired":
                 return {**status, "source_bridge": decision_dict, "next_action": "source-lock-wait", "source_lock": lock}
-            source_config = {**config, "max_alphas_per_round": int((decision.metadata or {}).get("max_alphas_per_round", 30))}
+            metadata = decision.metadata or {}
+            source_config = {
+                **config,
+                **{
+                    key: metadata[key]
+                    for key in ("instrument_type", "region", "delay", "universe")
+                    if key in metadata
+                },
+                "max_alphas_per_round": int(metadata.get("max_alphas_per_round", 30)),
+            }
             try:
                 recovery = source_batch_runner(source_config, decision.metadata or {})
             finally:

@@ -87,7 +87,7 @@ def cap_simulation_count(stage: str, requested_count: int) -> int:
 
 
 def stage_budget_summary() -> dict[str, int]:
-    """Input: none. Output: stage cap mapping. Expose immutable simulation caps for UI and docs."""
+    """Input: none. Output: mutable defensive copy of stage caps. Expose simulation budgets to UI and docs."""
     return dict(STAGE_MAX_SIMULATIONS)
 
 

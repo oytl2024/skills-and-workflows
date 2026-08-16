@@ -13,7 +13,14 @@ import webbrowser
 
 from wqb.console_context import record_console_job_context
 from wqb.console_jobs import build_cli_command as build_raw_cli_command
-from wqb.console_jobs import create_job, finish_job, run_job, start_job_async
+from wqb.console_jobs import (
+    ConsoleJob,
+    create_job,
+    finish_job,
+    load_job_history,
+    run_job,
+    start_job_async,
+)
 from wqb.console_proposals import create_proposal_from_form
 from wqb.console_state import ConsolePaths, default_console_paths, load_console_state
 from wqb.data_ledger import DataLedgerRecord, data_ledger_path_for_knowledge
@@ -44,6 +51,7 @@ ASYNC_CONSOLE_ACTIONS = {
     "compile-research-records",
     "delivery-gate",
     "plan-research-options",
+    "workflow-auto-continue",
 }
 
 CONSOLE_STATE_CACHE_TTL_SECONDS = 15.0
@@ -318,24 +326,30 @@ def render_dashboard(state: dict[str, Any]) -> str:
 {_render_scope_controls(scopes)}
 <button>Start workflow</button>
 </form>
-"""
+""" if not active.get("exists") else ""
     workflow_progress = f"""
 <p>Active run: <code>{escape(str(active.get('run_id', 'none')))}</code></p>
 <form method="post" action="/actions/run">
 <input type="hidden" name="action" value="workflow-auto-continue">
+<label><input type="checkbox" name="enable_live_api"> Enable live source recovery</label>
 <button>Continue workflow</button>
 </form>
 <form method="post" action="/actions/run">
 <input type="hidden" name="action" value="workflow-stop">
 <button>Stop workflow</button>
 </form>
-"""
+""" if active.get("exists") else ""
+    decision_controls = (
+        f"<h3>Research Start</h3>{research_start_form}"
+        if research_start_form
+        else f"<h3>Workflow Progress</h3>{workflow_progress}"
+    )
     body = f"""
 <div class="control-center">
 <section class="wide hero"><h2>Objective and Gate Summary</h2><div data-runtime-fragment='objective'>{fragments["objective"]}</div></section>
 <section class="timeline-panel"><h2>Runtime Timeline</h2><div data-runtime-fragment='timeline'>{fragments["timeline"]}</div></section>
 <section class="current-work"><h2>Current Work</h2><div data-runtime-fragment='current_work'>{fragments["current_work"]}</div></section>
-<section class="wide"><h2>Decisions and Approvals</h2><h3>Research Start</h3>{research_start_form}<h3>Workflow Progress</h3>{workflow_progress}</section>
+<section class="wide"><h2>Decisions and Approvals</h2>{decision_controls}</section>
 <section class="wide"><h2>Recent Jobs</h2><div data-runtime-fragment='recent_jobs'>{fragments["recent_jobs"]}</div></section>
 </div>
 <script>
@@ -650,6 +664,15 @@ def build_action_command(action: str, paths: ConsolePaths, form: dict[str, Any] 
 def run_console_action(paths: ConsolePaths, form: dict[str, Any]) -> Any:
     """Input: console paths and action form. Output: ConsoleJob. Run or refuse one durable console action."""
     action = str(form.get("action", ""))
+    if action == "workflow-auto-continue":
+        for row in load_job_history(paths.job_root, paths.knowledge_root):
+            if row.get("action") != action or row.get("status") not in {
+                "running",
+                "detached",
+            }:
+                continue
+            fields = ConsoleJob.__dataclass_fields__
+            return ConsoleJob(**{key: row[key] for key in fields if key in row})
     try:
         command = build_action_command(action, paths, form)
     except Exception as error:

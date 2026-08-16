@@ -212,7 +212,14 @@ class ConsoleTimelineTests(unittest.TestCase):
             with self.subTest(action=action):
                 state = {
                     **base_state,
-                    "jobs": [{"job_id": "auto-continue", "action": "workflow-auto-continue", "status": "running"}],
+                    "jobs": [
+                        {
+                            "job_id": "auto-continue",
+                            "action": "workflow-auto-continue",
+                            "status": "running",
+                            "summary_path": "runs/console_jobs/auto-continue/summary.md",
+                        }
+                    ],
                     "source_bridge": {
                         "action": action,
                         "reason": f"{action} reason",
@@ -227,4 +234,8 @@ class ConsoleTimelineTests(unittest.TestCase):
                 self.assertEqual(current["status"], status)
                 self.assertIn(f"{action} reason", current["details"])
                 self.assertIn("Source run: source-1", current["details"])
-                self.assertEqual(current["evidence_paths"], ["runs/source-1"])
+                self.assertIn("Job ID: auto-continue", current["details"])
+                self.assertEqual(
+                    current["evidence_paths"],
+                    ["runs/source-1", "runs/console_jobs/auto-continue/summary.md"],
+                )

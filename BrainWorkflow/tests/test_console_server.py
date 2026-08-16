@@ -1,5 +1,6 @@
 import json
 from http.client import HTTPConnection
+import os
 import sys
 import tempfile
 import threading
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from wqb.console_server import build_action_command, create_console_proposal, make_console_server, render_dashboard, render_proposals, render_runtime_fragments, run_console_action, update_console_proposal_decision
+from wqb.console_jobs import create_job
 from wqb.console_state import ConsolePaths, load_console_state
 from wqb.data_ledger_compile import compile_data_ledger_from_raw
 from wqb.knowledge_clean_compile import apply_obsolete_active_cleanup
@@ -168,7 +170,7 @@ class ConsoleServerTests(unittest.TestCase):
         html = render_dashboard(state)
 
         self.assertIn("Research Start", html)
-        self.assertIn("Workflow Progress", html)
+        self.assertNotIn("Workflow Progress", html)
         self.assertIn("Power Pool", html)
         self.assertNotIn("Knowledge Maintenance", html)
         self.assertNotIn('value="readiness-check"', html)
@@ -270,6 +272,20 @@ class ConsoleServerTests(unittest.TestCase):
 
         self.assertNotIn('name="confirm_submit"', html)
         self.assertNotIn('value="workflow-submit"', html)
+
+    def test_dashboard_renders_start_only_without_active_workflow(self):
+        inactive = render_dashboard({"active_workflow": {"exists": False}, "jobs": []})
+        active = render_dashboard(
+            {"active_workflow": {"exists": True, "run_id": "run-1"}, "jobs": []}
+        )
+
+        self.assertIn('value="workflow-start-from-option"', inactive)
+        self.assertNotIn('value="workflow-auto-continue"', inactive)
+        self.assertNotIn('value="workflow-stop"', inactive)
+        self.assertNotIn('value="workflow-start-from-option"', active)
+        self.assertIn('value="workflow-auto-continue"', active)
+        self.assertIn('value="workflow-stop"', active)
+        self.assertIn('name="enable_live_api"', active)
 
     def test_workflow_import_scout_seed_artifacts_action_builds_command(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -889,6 +905,68 @@ class ConsoleServerTests(unittest.TestCase):
 
         self.assertEqual(completed.status, "running")
         start_async.assert_called_once()
+
+    def test_run_console_action_starts_workflow_auto_continue_async(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            with patch("wqb.console_server.start_job_async") as start_async, patch(
+                "wqb.console_server.run_job"
+            ) as run_sync:
+                start_async.side_effect = lambda job, **_: job.__class__(
+                    **{**job.__dict__, "status": "running", "pid": 123}
+                )
+                run_sync.side_effect = lambda job: job.__class__(
+                    **{**job.__dict__, "status": "completed", "exit_code": 0}
+                )
+                started = run_console_action(paths, {"action": "workflow-auto-continue"})
+
+        self.assertEqual(started.status, "running")
+        start_async.assert_called_once()
+        run_sync.assert_not_called()
+
+    def test_run_console_action_reuses_active_auto_continue_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            existing = create_job(
+                paths.job_root,
+                "workflow-auto-continue",
+                [sys.executable, "-m", "wqb.cli", "workflow-auto-continue"],
+                paths.workflow_root,
+            )
+            job_path = Path(existing.job_dir) / "job.json"
+            payload = json.loads(job_path.read_text(encoding="utf-8"))
+            payload.update({"status": "running", "pid": os.getpid(), "started_at": payload["created_at"]})
+            job_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            with patch("wqb.console_server.start_job_async") as start_async:
+                reused = run_console_action(paths, {"action": "workflow-auto-continue"})
+            job_records = list(paths.job_root.glob("*/job.json"))
+
+        self.assertEqual(reused.job_id, existing.job_id)
+        self.assertEqual(reused.status, "running")
+        self.assertEqual(len(job_records), 1)
+        start_async.assert_not_called()
+
+    def test_run_console_action_reuses_detached_auto_continue_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            existing = create_job(
+                paths.job_root,
+                "workflow-auto-continue",
+                [sys.executable, "-m", "wqb.cli", "workflow-auto-continue"],
+                paths.workflow_root,
+            )
+            job_path = Path(existing.job_dir) / "job.json"
+            payload = json.loads(job_path.read_text(encoding="utf-8"))
+            payload.update({"status": "detached", "pid": 999999, "started_at": payload["created_at"]})
+            job_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            with patch("wqb.console_server.start_job_async") as start_async:
+                reused = run_console_action(paths, {"action": "workflow-auto-continue"})
+
+        self.assertEqual(reused.job_id, existing.job_id)
+        self.assertEqual(reused.status, "detached")
+        start_async.assert_not_called()
 
     def test_run_console_action_starts_all_long_maintenance_actions_async_and_records_terminal_context(self):
         actions = ("compile-data-ledger", "compile-research-records", "compile-knowledge", "delivery-gate", "bootstrap-knowledge", "plan-research-options")

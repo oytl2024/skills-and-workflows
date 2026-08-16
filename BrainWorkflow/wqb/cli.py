@@ -53,7 +53,12 @@ from wqb.optimizer import actions_for_check_summary
 from wqb.orchestrator import OrchestratorPaths, WorkflowOrchestrator
 from wqb.principle_model import OptionCard, ScoreBreakdown, SourceEvidence
 from wqb.recorder import RunRecorder
-from wqb.rate_limit_state import cooldown_is_active, read_rate_limit_state, record_rate_limit
+from wqb.rate_limit_state import (
+    cooldown_is_active,
+    read_rate_limit_state,
+    record_rate_limit,
+    reset_rate_limit,
+)
 from wqb.research_planner import plan_research_options as build_research_option_rows
 from wqb.research_scheduler import build_research_schedule, research_schedule_to_dict, write_research_schedule
 from wqb.research_workflow import build_parallel_stage_plan, cap_simulation_count, precheck_expression
@@ -2583,6 +2588,7 @@ def submit_candidate_payloads(
                     )
                     return summaries
                 continue
+            reset_rate_limit(recorder.run_dir, f"{stage_prefix}_multi_submit", now)
             for item in chunk_metadata:
                 recorder.append_jsonl("simulation_events.jsonl", {"event": "SUBMITTED", "progress_url": progress_url, **item})
             if defer_poll:
@@ -2672,6 +2678,7 @@ def submit_candidate_payloads(
                 )
                 break
             continue
+        reset_rate_limit(recorder.run_dir, f"{stage_prefix}_serial_submit", now)
         recorder.append_jsonl("simulation_events.jsonl", {"event": "SUBMITTED", "progress_url": progress_url, **item})
         if defer_poll:
             continue
@@ -2887,6 +2894,12 @@ def complete_in_flight_simulations(client, recorder: RunRecorder) -> list[str]:
 
     if candidate_rows:
         recorder.write_candidates(candidate_rows)
+    if completed_alpha_ids:
+        reset_rate_limit(
+            recorder.run_dir,
+            "complete_in_flight",
+            datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        )
     return completed_alpha_ids
 
 
@@ -3799,9 +3812,9 @@ def main() -> None:
                 config,
                 now,
                 enable_live_api=args.enable_live_api,
-                source_batch_runner=source_batch_runner,
-                complete_in_flight_runner=complete_runner,
-                retry_planned_runner=retry_runner,
+                source_batch_runner=source_batch_runner if args.enable_live_api else None,
+                complete_in_flight_runner=complete_runner if args.enable_live_api else None,
+                retry_planned_runner=retry_runner if args.enable_live_api else None,
             )
         elif args.command == "workflow-status":
             result = orchestrator.status()

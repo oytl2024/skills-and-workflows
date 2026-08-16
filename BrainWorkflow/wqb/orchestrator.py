@@ -31,6 +31,7 @@ from wqb.research_record import (
     sync_research_record_to_raw,
     write_research_record,
 )
+from wqb.source_bridge import SOURCE_BINDING_RELATIVE_PATH
 from wqb.workflow_events import append_workflow_event, read_workflow_events
 from wqb.workflow_stage_adapters import (
     POST_SCHEDULE_STAGES,
@@ -292,6 +293,16 @@ class WorkflowOrchestrator:
         source_run_id = str(decision.get("source_run_id", ""))
         if action != "import_existing":
             raise ValueError("source bridge decision is not an import decision")
+        discovery = self._active_discovery()
+        if discovery.state is None:
+            raise ValueError("active workflow state is required for source bridge import")
+        binding_path = Path(discovery.state.run_dir) / SOURCE_BINDING_RELATIVE_PATH
+        try:
+            binding = json.loads(binding_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raise ValueError("durable source run binding is required for source bridge import") from None
+        if not isinstance(binding, dict) or str(binding.get("source_run_id", "")) != source_run_id:
+            raise ValueError("source bridge decision must match the bound source run")
         return self.import_scout_seed_artifacts(source_run_id, imported_at)
 
     def _import_scout_seed_artifacts_unlocked(

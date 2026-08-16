@@ -431,6 +431,22 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.command, "workflow-auto-continue")
         self.assertTrue(args.enable_live_api)
 
+    def test_workflow_auto_continue_cli_does_not_inject_live_runners_without_authorization(self):
+        config = {"run_root": "runs", "knowledge_root": "knowledge"}
+        with patch("sys.argv", ["wqb", "workflow-auto-continue"]), patch(
+            "wqb.cli.load_config", return_value=config
+        ), patch(
+            "wqb.workflow_auto_continue.auto_continue_workflow",
+            return_value={"status": "paused"},
+        ) as dispatcher, redirect_stdout(io.StringIO()):
+            main()
+
+        kwargs = dispatcher.call_args.kwargs
+        self.assertFalse(kwargs["enable_live_api"])
+        self.assertIsNone(kwargs["source_batch_runner"])
+        self.assertIsNone(kwargs["complete_in_flight_runner"])
+        self.assertIsNone(kwargs["retry_planned_runner"])
+
     def test_compile_knowledge_dispatches_maintenance_pipeline(self):
         output = io.StringIO()
         with patch("sys.argv", ["wqb", "compile-knowledge", "--knowledge-root", "knowledge", "--apply-cleanup", "--max-case-reports", "7"]), patch(
@@ -1969,6 +1985,17 @@ class CliTests(unittest.TestCase):
                     "operator_replacements": {},
                 },
             )
+            (run_dir / "rate_limit_state.json").write_text(
+                json.dumps(
+                    {
+                        "status": "cooldown",
+                        "attempt_count": 3,
+                        "consecutive_429_count": 3,
+                        "retry_at": "2026-08-12T00:00:00+00:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             completed = complete_in_flight_simulations(FakeClient(), recorder)
 
@@ -1981,6 +2008,9 @@ class CliTests(unittest.TestCase):
             self.assertEqual(alpha_record["expression"], "rank(sentiment_a)")
             self.assertEqual(alpha_record["field_search"], "sentiment")
             self.assertTrue((run_dir / "candidates.csv").exists())
+            reset = json.loads((run_dir / "rate_limit_state.json").read_text(encoding="utf-8"))
+            self.assertEqual(reset["status"], "ready")
+            self.assertEqual(reset["consecutive_429_count"], 0)
         finally:
             cleanup_run_dir(run_dir)
 

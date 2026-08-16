@@ -48,7 +48,7 @@ If the browser does not open, keep the PowerShell window open and paste the URL 
 2. Check **Objective and Gate Summary**.
 3. In **Decisions and Approvals**, select one research option card.
 4. Click `Start workflow`.
-5. Click `Continue workflow` whenever the Console shows active work, a deterministic next step, source recovery, or a retry time that has elapsed.
+5. Click `Continue workflow` whenever the Console shows active work or a deterministic next step. For source recovery that contacts the platform, explicitly select `Enable live source recovery` before continuing.
 6. Read **Current Work** and **Runtime Timeline** after each action. Source bridge status, cooldown status, and source-run locks are shown there.
 7. When candidate approval appears, review the evidence and record the human decision.
 8. Use `Stop workflow` only when you want to abort the active workflow non-destructively.
@@ -65,8 +65,8 @@ The normal Console path uses one primary advancement control:
 | State | User action | System behavior |
 | --- | --- | --- |
 | No active workflow | Select one option card, then click `Start workflow` | Creates a durable Orchestrator run. |
-| Active workflow | Click `Continue workflow` | Runs the next safe deterministic step or recovery step. |
-| Rate limited | Click `Continue workflow` after the displayed retry time | Resumes the persisted planned queue; it does not discard candidates. |
+| Active workflow | Click `Continue workflow` | Runs the next safe deterministic step. Live source runners remain disabled unless explicitly authorized. |
+| Rate limited | After the displayed retry time, select `Enable live source recovery` and click `Continue workflow` | Resumes the persisted planned queue; it does not discard candidates. |
 | Waiting for user | Review the approval shown by the Console | Automatic progress stops until the human decision is recorded. |
 | User wants to stop | Click `Stop workflow` | Aborts the active workflow non-destructively and preserves evidence. |
 
@@ -79,6 +79,10 @@ capped at 8 simulations. When Scout/Seed needs source artifacts, the Console
 uses the source bridge to choose a safe recovery path. Click `Continue workflow`
 and read **Current Work** and **Runtime Timeline**; do not type a source run ID,
 copy files, or manually import artifacts during normal operation.
+
+The bridge validates source field, dataset, Scout stage, and selected scope before
+binding a source run. The first compatible source selection is persisted under
+the active workflow and later recovery cannot switch to a newer sibling run.
 
 If the Console records a maintenance blocker, use the maintenance-only source
 recovery commands in `docs/operations/operating_guide.md`. Invalid artifacts,
@@ -94,6 +98,7 @@ Expected behavior:
 - If the bound is exceeded, the source run records a recoverable `SIMULATION_POLL_TIMEOUT` error in `run_errors.jsonl`.
 - The submitted simulation remains visible as in-flight through `simulation_events.jsonl`.
 - After the displayed retry time, `Continue workflow` resumes the persisted planned queue without losing candidates.
+- Three consecutive 429 responses stop automatic recovery and expose a maintenance blocker. Successful platform progress resets the consecutive counter.
 
 If the browser spinner runs but **Recent Jobs** and `run_errors.jsonl` do not change, treat it as a maintenance bug. The correct fix is a tested workflow/observability repair, not repeated clicking.
 

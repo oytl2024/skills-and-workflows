@@ -192,13 +192,61 @@ def _acquire_source_run_lock_locked(
     probe = process_alive or default_process_is_alive
     existing = read_source_run_lock(root)
     current = _parse_time(now)
+    if existing.get("status") == "invalid":
+        return {
+            **existing,
+            "status": "invalid",
+            "reason": "malformed_lock",
+            "path": str(path),
+        }
     if existing.get("status") == "running":
         existing_pid = existing.get("pid")
         expires_at = str(existing.get("expires_at", ""))
-        alive = isinstance(existing_pid, int) and probe(existing_pid)
-        expired = bool(expires_at) and current >= _parse_time(expires_at)
-        if alive and not expired:
-            return {"status": "locked", "active_action": existing.get("action", ""), "pid": existing_pid, "path": str(path)}
+        if not isinstance(existing_pid, int):
+            return {
+                "status": "invalid",
+                "reason": "invalid_owner_pid",
+                "path": str(path),
+            }
+        try:
+            _parse_time(expires_at)
+        except (TypeError, ValueError):
+            return {
+                "status": "invalid",
+                "reason": "invalid_expires_at",
+                "path": str(path),
+            }
+        if not str(existing.get("action", "")).strip() or not str(
+            existing.get("owner_id", "")
+        ).strip():
+            return {
+                "status": "invalid",
+                "reason": "malformed_lock",
+                "path": str(path),
+            }
+        try:
+            alive = bool(probe(existing_pid))
+        except Exception:
+            return {
+                "status": "locked",
+                "reason": "owner_process_unknown",
+                "active_action": existing.get("action", ""),
+                "pid": existing_pid,
+                "path": str(path),
+            }
+        if alive:
+            return {
+                "status": "locked",
+                "active_action": existing.get("action", ""),
+                "pid": existing_pid,
+                "path": str(path),
+            }
+    elif existing.get("status") not in {"none", "released"}:
+        return {
+            "status": "invalid",
+            "reason": "malformed_lock",
+            "path": str(path),
+        }
     lock = {
         "status": "running",
         "run_id": root.name,
@@ -233,6 +281,13 @@ def release_source_run_lock(
     guard, guard_owner = guard_state
     try:
         current = read_source_run_lock(root)
+        if current.get("status") == "invalid":
+            return {
+                **current,
+                "status": "invalid",
+                "reason": "malformed_lock",
+                "path": str(path),
+            }
         if current.get("status") == "running":
             if not owner_id:
                 return {**current, "status": "ownership_required", "path": str(path)}
@@ -241,6 +296,13 @@ def release_source_run_lock(
             owner_matches = current.get("owner_id") == str(owner_id)
             if not (action_matches and pid_matches and owner_matches):
                 return {**current, "status": "ownership_mismatch", "path": str(path)}
+        if current.get("status") not in {"none", "running", "released"}:
+            return {
+                **current,
+                "status": "invalid",
+                "reason": "malformed_lock",
+                "path": str(path),
+            }
         released = {**current, "status": "released", "released_at": now, "released_by": str(action)}
         path.write_text(json.dumps(released, ensure_ascii=False, indent=2), encoding="utf-8")
         return released

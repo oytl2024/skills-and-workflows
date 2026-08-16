@@ -63,7 +63,8 @@ python -m wqb.cli workflow-continue --knowledge-root 'C:\Users\oytl\Desktop\pypr
 
 Scout source batches use a cap of 30 simulations. Seed refinement uses a cap of
 8 simulations. In normal Console operation, `Continue workflow` owns stage
-advance, cooldown recovery, and source-bridge recovery.
+advance and source-bridge dispatch. Any source runner that authenticates or calls
+the platform requires the explicit `Enable live source recovery` checkbox.
 
 ## Maintenance-Only Recovery Commands
 
@@ -258,6 +259,8 @@ python -m wqb.cli launch-console --knowledge-root 'C:\Users\oytl\Desktop\pyproje
 Safety rules:
 
 - Platform option refresh requires the `enable_live_api` checkbox.
+- Console source recovery is a durable asynchronous job, reuses an existing running or detached auto-continue job, and requires explicit live-source authorization before platform calls.
+- Source recovery stays bound to the first schedule/scope-compatible source run; exhausted planned queues and the consecutive-429 threshold become maintenance blockers.
 - Workflow start refuses to run from the console when required compiled knowledge is stale or missing; run knowledge maintenance first.
 - Submit actions are not auto-triggered by the first console version.
 

@@ -141,6 +141,12 @@ def select_current_work(state: dict[str, Any], timeline: list[dict[str, Any]]) -
         source_run_id = str(source_bridge.get("source_run_id", ""))
         details = [str(source_bridge.get("reason", "")), f"Source run: {source_run_id}"]
         evidence_paths = list(source_bridge.get("evidence_paths", []))
+        auto_continue_job = _running_job_for_action(state, "workflow-auto-continue")
+        if auto_continue_job is not None:
+            details.append(f"Job ID: {auto_continue_job.get('job_id', '')}")
+            summary_path = str(auto_continue_job.get("summary_path", ""))
+            if summary_path:
+                evidence_paths.append(summary_path)
         source_work = {
             "rate_limit_wait": ("Rate limited", "waiting", "Continue workflow after retry time"),
             "import_existing": ("Import existing source", "paused", "Continue workflow to import source artifacts"),

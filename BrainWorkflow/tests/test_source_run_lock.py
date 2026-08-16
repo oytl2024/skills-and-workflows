@@ -39,6 +39,75 @@ class SourceRunLockTests(unittest.TestCase):
         self.assertEqual(second["status"], "acquired")
         self.assertEqual(loaded["action"], "complete-in-flight")
 
+    def test_malformed_lock_is_preserved_and_blocks_acquisition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock_path = root / "source_run_lock.json"
+            lock_path.write_text("{not-json", encoding="utf-8")
+
+            result = acquire_source_run_lock(
+                root,
+                "retry-planned",
+                "2026-08-12T00:00:00+00:00",
+                pid=123,
+            )
+            preserved = lock_path.read_text(encoding="utf-8")
+
+        self.assertEqual(result["status"], "invalid")
+        self.assertEqual(result["reason"], "malformed_lock")
+        self.assertEqual(preserved, "{not-json")
+
+    def test_invalid_expires_at_is_preserved_and_blocks_acquisition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock_path = root / "source_run_lock.json"
+            existing = {
+                "status": "running",
+                "action": "retry-planned",
+                "pid": 999,
+                "owner_id": "owner-1",
+                "expires_at": "not-a-time",
+            }
+            lock_path.write_text(json.dumps(existing), encoding="utf-8")
+
+            result = acquire_source_run_lock(
+                root,
+                "complete-in-flight",
+                "2026-08-12T02:00:00+00:00",
+                pid=123,
+                process_alive=lambda pid: False,
+            )
+            preserved = json.loads(lock_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result["status"], "invalid")
+        self.assertEqual(result["reason"], "invalid_expires_at")
+        self.assertEqual(preserved, existing)
+
+    def test_expired_lock_with_live_owner_is_not_reclaimed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = acquire_source_run_lock(
+                root,
+                "retry-planned",
+                "2026-08-12T00:00:00+00:00",
+                ttl_seconds=60,
+                pid=999,
+                process_alive=lambda pid: True,
+            )
+            second = acquire_source_run_lock(
+                root,
+                "complete-in-flight",
+                "2026-08-12T02:00:00+00:00",
+                ttl_seconds=60,
+                pid=123,
+                process_alive=lambda pid: True,
+            )
+            loaded = read_source_run_lock(root)
+
+        self.assertEqual(second["status"], "locked")
+        self.assertEqual(loaded["owner_id"], first["owner_id"])
+        self.assertEqual(loaded["action"], "retry-planned")
+
     def test_release_marks_lock_released(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -1201,6 +1201,21 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             source_run = root / "runs" / "source-stage1"
             source_run.mkdir(parents=True)
             self.persist_hard_pass_artifacts(source_run)
+            other_source = root / "runs" / "source-other"
+            other_source.mkdir(parents=True)
+            self.persist_hard_pass_artifacts(other_source)
+            binding = Path(started["run_dir"]) / "stages" / "scout_seed" / "source_bridge_binding.json"
+            binding.parent.mkdir(parents=True, exist_ok=True)
+            binding.write_text(
+                json.dumps({"source_run_id": "source-stage1", "source_run_dir": str(source_run)}),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "bound source run"):
+                orchestrator.import_scout_seed_bridge_decision(
+                    {"action": "import_existing", "source_run_id": "source-other"},
+                    "2026-07-12T00:03:30Z",
+                )
 
             imported = orchestrator.import_scout_seed_bridge_decision(
                 {"action": "import_existing", "source_run_id": "source-stage1"},

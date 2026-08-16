@@ -19,6 +19,71 @@ def write_candidates(path: Path) -> None:
         writer.writerow({"alpha_id": "a1", "expression_hash": "h1"})
 
 
+def write_active_metadata(
+    active: Path,
+    field_id: str = "cash_field",
+    dataset_id: str = "fundamental3",
+    region: str = "USA",
+    delay: int = 1,
+    universe: str = "TOP3000",
+) -> None:
+    """Input: active run and expected source values. Output: none. Write workflow schedule and selected scope."""
+    active.mkdir(parents=True, exist_ok=True)
+    (active / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": active.name,
+                "selected_scope": {
+                    "instrument_type": "EQUITY",
+                    "region": region,
+                    "delay": delay,
+                    "universe": universe,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    schedule = active / "stages" / "schedule" / "research_schedule.json"
+    schedule.parent.mkdir(parents=True, exist_ok=True)
+    schedule.write_text(
+        json.dumps(
+            {
+                "template_matches": [
+                    {
+                        "field_id": field_id,
+                        "dataset_id": dataset_id,
+                        "template_id": "matrix_ts_zscore_rank",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def write_source_metadata(
+    source: Path,
+    field_id: str = "cash_field",
+    dataset_id: str = "fundamental3",
+    region: str = "USA",
+    delay: int = 1,
+    universe: str = "TOP3000",
+) -> None:
+    """Input: source run and provenance values. Output: none. Write source metadata used for compatibility checks."""
+    source.mkdir(parents=True, exist_ok=True)
+    meta = {
+        "data_fields_path": (
+            f"/data-fields?instrumentType=EQUITY&region={region}&delay={delay}"
+            f"&universe={universe}&dataset.id={dataset_id}&search={field_id}"
+        ),
+        "field_search": field_id,
+        "exact_field_id": field_id,
+        "dataset_id": dataset_id,
+        "workflow_stage": "scout",
+    }
+    (source / "run_meta.jsonl").write_text(json.dumps(meta) + "\n", encoding="utf-8")
+
+
 class SourceBridgeTests(unittest.TestCase):
     def test_active_run_needs_candidates_only_for_scout_seed_pause(self):
         summary = {
@@ -38,7 +103,8 @@ class SourceBridgeTests(unittest.TestCase):
             runs = Path(tmp)
             active = runs / "active"
             source = runs / "source1"
-            active.mkdir()
+            write_active_metadata(active)
+            write_source_metadata(source)
             write_candidates(source / "candidates.csv")
 
             decision = inspect_scout_seed_source_bridge(
@@ -53,8 +119,8 @@ class SourceBridgeTests(unittest.TestCase):
             runs = Path(tmp)
             active = runs / "active"
             source = runs / "source1"
-            active.mkdir()
-            source.mkdir()
+            write_active_metadata(active)
+            write_source_metadata(source)
             (source / "rate_limit_state.json").write_text(
                 json.dumps(
                     {"status": "cooldown", "retry_at": "2099-01-01T00:00:00+00:00"}
@@ -74,8 +140,8 @@ class SourceBridgeTests(unittest.TestCase):
             runs = Path(tmp)
             active = runs / "active"
             source = runs / "source1"
-            active.mkdir()
-            source.mkdir()
+            write_active_metadata(active)
+            write_source_metadata(source)
             (source / "simulation_events.jsonl").write_text(
                 "\n".join(
                     json.dumps(row)
@@ -113,8 +179,8 @@ class SourceBridgeTests(unittest.TestCase):
             runs = Path(tmp)
             active = runs / "active"
             source = runs / "source1"
-            active.mkdir()
-            source.mkdir()
+            write_active_metadata(active)
+            write_source_metadata(source)
             (source / "simulation_events.jsonl").write_text(
                 "\n".join(
                     json.dumps(row)
@@ -152,8 +218,8 @@ class SourceBridgeTests(unittest.TestCase):
             runs = Path(tmp)
             active = runs / "active"
             source = runs / "source1"
-            active.mkdir()
-            source.mkdir()
+            write_active_metadata(active)
+            write_source_metadata(source)
             (source / "candidates.csv").write_text(
                 "alpha_id,not_expression_hash\na1,h1\n", encoding="utf-8"
             )
@@ -170,8 +236,8 @@ class SourceBridgeTests(unittest.TestCase):
             runs = Path(tmp)
             active = runs / "active"
             source = runs / "source1"
-            active.mkdir()
-            source.mkdir()
+            write_active_metadata(active)
+            write_source_metadata(source)
             (source / "candidates.csv").write_text(
                 "alpha_id,expression_hash\n,\n", encoding="utf-8"
             )
@@ -188,9 +254,12 @@ class SourceBridgeTests(unittest.TestCase):
             runs = Path(tmp)
             active = runs / "active"
             source = runs / "source1"
-            active.mkdir()
-            source.mkdir()
-            (source / "planned_candidates.jsonl").write_text("{}\n", encoding="utf-8")
+            write_active_metadata(active)
+            write_source_metadata(source)
+            (source / "planned_candidates.jsonl").write_text(
+                json.dumps({"expression_hash": "h1", "expression": "rank(cash_field)"}) + "\n",
+                encoding="utf-8",
+            )
 
             decision = inspect_scout_seed_source_bridge(
                 runs, active, "2026-08-12T00:00:00+00:00"
@@ -211,25 +280,154 @@ class SourceBridgeTests(unittest.TestCase):
 
         self.assertEqual(decision.action, "maintenance_blocker")
 
+    def test_bridge_excludes_wrong_field_and_wrong_scope_source_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            active = runs / "active"
+            write_active_metadata(active)
+            wrong_field = runs / "wrong-field"
+            wrong_scope = runs / "wrong-scope"
+            write_source_metadata(wrong_field, field_id="other_field")
+            write_candidates(wrong_field / "candidates.csv")
+            write_source_metadata(wrong_scope, region="EUR", universe="TOP2500")
+            write_candidates(wrong_scope / "candidates.csv")
+
+            decision = inspect_scout_seed_source_bridge(
+                runs, active, "2026-08-12T00:00:00+00:00"
+            )
+
+        self.assertEqual(decision.action, "start_source_batch")
+        self.assertEqual(decision.source_run_id, "")
+
+    def test_bridge_persists_first_source_binding_and_does_not_switch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            active = runs / "active"
+            first = runs / "source1"
+            newer = runs / "source2"
+            write_active_metadata(active)
+            write_source_metadata(first)
+            write_candidates(first / "candidates.csv")
+
+            selected = inspect_scout_seed_source_bridge(
+                runs, active, "2026-08-12T00:00:00+00:00"
+            )
+            write_source_metadata(newer)
+            write_candidates(newer / "candidates.csv")
+            stable = inspect_scout_seed_source_bridge(
+                runs, active, "2026-08-12T00:01:00+00:00"
+            )
+            binding = json.loads(
+                (active / "stages" / "scout_seed" / "source_bridge_binding.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            events = (active / "workflow_events.jsonl").read_text(encoding="utf-8")
+
+        self.assertEqual(selected.source_run_id, "source1")
+        self.assertEqual(stable.source_run_id, "source1")
+        self.assertEqual(binding["source_run_id"], "source1")
+        self.assertIn("source_run_bound", events)
+
+    def test_bridge_classifies_exhausted_planned_queue_as_maintenance_blocker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            active = runs / "active"
+            source = runs / "source1"
+            write_active_metadata(active)
+            write_source_metadata(source)
+            planned = {"expression_hash": "h1", "expression": "rank(cash_field)"}
+            (source / "planned_candidates.jsonl").write_text(
+                json.dumps(planned) + "\n", encoding="utf-8"
+            )
+            (source / "simulation_events.jsonl").write_text(
+                "\n".join(
+                    (
+                        json.dumps({"event": "SUBMITTED", **planned, "progress_url": "/simulations/1"}),
+                        json.dumps({"event": "ERROR", **planned, "progress_url": "/simulations/1"}),
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            decision = inspect_scout_seed_source_bridge(
+                runs, active, "2026-08-12T00:00:00+00:00"
+            )
+
+        self.assertEqual(decision.action, "maintenance_blocker")
+        self.assertEqual(decision.source_run_id, "source1")
+        self.assertIn("exhausted", decision.reason)
+
+    def test_bridge_prefers_recoverable_source_over_exhausted_sibling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            active = runs / "active"
+            recoverable = runs / "recoverable"
+            exhausted = runs / "exhausted"
+            write_active_metadata(active)
+            write_source_metadata(recoverable)
+            recoverable_planned = {
+                "expression_hash": "recoverable-hash",
+                "expression": "rank(cash_field)",
+            }
+            (recoverable / "planned_candidates.jsonl").write_text(
+                json.dumps(recoverable_planned) + "\n", encoding="utf-8"
+            )
+            write_source_metadata(exhausted)
+            exhausted_planned = {
+                "expression_hash": "exhausted-hash",
+                "expression": "rank(cash_field + 1)",
+            }
+            (exhausted / "planned_candidates.jsonl").write_text(
+                json.dumps(exhausted_planned) + "\n", encoding="utf-8"
+            )
+            (exhausted / "simulation_events.jsonl").write_text(
+                json.dumps({"event": "ERROR", **exhausted_planned}) + "\n",
+                encoding="utf-8",
+            )
+
+            decision = inspect_scout_seed_source_bridge(
+                runs, active, "2026-08-12T00:00:00+00:00"
+            )
+
+        self.assertEqual(decision.action, "retry_planned")
+        self.assertEqual(decision.source_run_id, "recoverable")
+
+    def test_bridge_blocks_recovery_at_consecutive_rate_limit_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            active = runs / "active"
+            source = runs / "source1"
+            write_active_metadata(active)
+            write_source_metadata(source)
+            (source / "rate_limit_state.json").write_text(
+                json.dumps(
+                    {
+                        "status": "cooldown",
+                        "retry_at": "2099-01-01T00:00:00+00:00",
+                        "consecutive_429_count": 3,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            decision = inspect_scout_seed_source_bridge(
+                runs, active, "2026-08-12T00:00:00+00:00"
+            )
+
+        self.assertEqual(decision.action, "maintenance_blocker")
+        self.assertEqual(decision.source_run_id, "source1")
+        self.assertIn("rate limit", decision.reason)
+
     def test_bridge_builds_source_batch_metadata_from_schedule(self):
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
             active = runs / "active"
-            schedule = active / "stages" / "schedule" / "research_schedule.json"
-            schedule.parent.mkdir(parents=True)
-            schedule.write_text(
-                json.dumps(
-                    {
-                        "template_matches": [
-                            {
-                                "field_id": "buzz_intensity_score_15",
-                                "dataset_id": "analyst_buzz",
-                                "template_id": "vector_event_count_surprise",
-                            }
-                        ]
-                    }
-                ),
-                encoding="utf-8",
+            write_active_metadata(
+                active,
+                field_id="buzz_intensity_score_15",
+                dataset_id="analyst_buzz",
             )
 
             decision = inspect_scout_seed_source_bridge(
@@ -240,5 +438,8 @@ class SourceBridgeTests(unittest.TestCase):
         self.assertEqual(decision.metadata["field_search"], "buzz_intensity_score_15")
         self.assertEqual(decision.metadata["exact_field_id"], "buzz_intensity_score_15")
         self.assertEqual(decision.metadata["dataset_id"], "analyst_buzz")
+        self.assertEqual(decision.metadata["region"], "USA")
+        self.assertEqual(decision.metadata["delay"], 1)
+        self.assertEqual(decision.metadata["universe"], "TOP3000")
         self.assertEqual(decision.metadata["workflow_stage"], "scout")
         self.assertEqual(decision.metadata["max_alphas_per_round"], 30)
