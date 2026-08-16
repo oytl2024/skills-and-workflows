@@ -56,6 +56,7 @@ ASYNC_CONSOLE_ACTIONS = {
 
 CONSOLE_STATE_CACHE_TTL_SECONDS = 15.0
 CONSOLE_REFRESH_INTERVAL_MS = 15000
+AUTO_CONTINUE_JOB_LOCK = threading.Lock()
 
 
 def _fallback_option_id(index: int) -> str:
@@ -661,18 +662,21 @@ def build_action_command(action: str, paths: ConsolePaths, form: dict[str, Any] 
     return build_raw_cli_command(action, paths, normalized)
 
 
-def run_console_action(paths: ConsolePaths, form: dict[str, Any]) -> Any:
-    """Input: console paths and action form. Output: ConsoleJob. Run or refuse one durable console action."""
-    action = str(form.get("action", ""))
-    if action == "workflow-auto-continue":
-        for row in load_job_history(paths.job_root, paths.knowledge_root):
-            if row.get("action") != action or row.get("status") not in {
-                "running",
-                "detached",
-            }:
-                continue
-            fields = ConsoleJob.__dataclass_fields__
-            return ConsoleJob(**{key: row[key] for key in fields if key in row})
+def _active_auto_continue_job(paths: ConsolePaths) -> ConsoleJob | None:
+    """Input: Console paths. Output: active ConsoleJob or none. Load the current durable auto-continue job."""
+    for row in load_job_history(paths.job_root, paths.knowledge_root):
+        if row.get("action") != "workflow-auto-continue" or row.get("status") not in {
+            "running",
+            "detached",
+        }:
+            continue
+        fields = ConsoleJob.__dataclass_fields__
+        return ConsoleJob(**{key: row[key] for key in fields if key in row})
+    return None
+
+
+def _run_console_action_unlocked(paths: ConsolePaths, form: dict[str, Any], action: str) -> Any:
+    """Input: Console paths, form, and action. Output: ConsoleJob. Create and run one Console action without duplicate checks."""
     try:
         command = build_action_command(action, paths, form)
     except Exception as error:
@@ -690,6 +694,18 @@ def run_console_action(paths: ConsolePaths, form: dict[str, Any]) -> Any:
         completed = finish_job(job, "failed", exit_code=1, error=str(error))
     record_console_job_context(paths, completed, next_command="python -m wqb.cli workflow-status")
     return completed
+
+
+def run_console_action(paths: ConsolePaths, form: dict[str, Any]) -> Any:
+    """Input: console paths and action form. Output: ConsoleJob. Run or refuse one durable console action."""
+    action = str(form.get("action", ""))
+    if action == "workflow-auto-continue":
+        with AUTO_CONTINUE_JOB_LOCK:
+            active = _active_auto_continue_job(paths)
+            if active is not None:
+                return active
+            return _run_console_action_unlocked(paths, form, action)
+    return _run_console_action_unlocked(paths, form, action)
 
 
 def create_console_proposal(paths: ConsolePaths, form: dict[str, Any]) -> Any:

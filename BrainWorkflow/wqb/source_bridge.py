@@ -235,9 +235,9 @@ def _source_scope(metadata: dict[str, Any]) -> dict[str, Any]:
 def _source_is_compatible(source: Path, expected: dict[str, Any]) -> bool:
     """Input: source directory and active expectations. Output: bool. Require matching field, dataset, stage, and scope provenance."""
     metadata = _latest_source_metadata(source)
-    source_field = str(
-        metadata.get("exact_field_id", metadata.get("field_search", ""))
-    ).strip()
+    source_field = str(metadata.get("exact_field_id", "")).strip()
+    if not source_field:
+        source_field = str(metadata.get("field_search", "")).strip()
     expected_field = str(expected.get("exact_field_id", "")).strip()
     if not metadata or not expected_field or source_field != expected_field:
         return False

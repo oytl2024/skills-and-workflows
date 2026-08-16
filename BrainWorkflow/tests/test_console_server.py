@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from wqb.console_server import build_action_command, create_console_proposal, make_console_server, render_dashboard, render_proposals, render_runtime_fragments, run_console_action, update_console_proposal_decision
-from wqb.console_jobs import create_job
+from wqb.console_jobs import create_job, load_job_history
 from wqb.console_state import ConsolePaths, load_console_state
 from wqb.data_ledger_compile import compile_data_ledger_from_raw
 from wqb.knowledge_clean_compile import apply_obsolete_active_cleanup
@@ -923,6 +923,71 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertEqual(started.status, "running")
         start_async.assert_called_once()
         run_sync.assert_not_called()
+
+    def test_run_console_action_serializes_concurrent_auto_continue_creation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            history_barrier = threading.Barrier(2)
+            start_barrier = threading.Barrier(3)
+            call_lock = threading.Lock()
+            call_count = 0
+            results = []
+            errors = []
+
+            def synchronized_history(*args, **kwargs):
+                nonlocal call_count
+                with call_lock:
+                    call_count += 1
+                    call_number = call_count
+                if call_number <= 2 and not history_barrier.broken:
+                    try:
+                        history_barrier.wait(timeout=0.25)
+                    except threading.BrokenBarrierError:
+                        return []
+                    return []
+                return load_job_history(*args, **kwargs)
+
+            def invoke_auto_continue():
+                try:
+                    start_barrier.wait(timeout=2)
+                    results.append(
+                        run_console_action(paths, {"action": "workflow-auto-continue"})
+                    )
+                except Exception as error:
+                    errors.append(error)
+
+            def persist_running_job(job, **_):
+                job_path = Path(job.job_dir) / "job.json"
+                payload = json.loads(job_path.read_text(encoding="utf-8"))
+                payload.update(
+                    {
+                        "status": "running",
+                        "pid": os.getpid(),
+                        "started_at": payload["created_at"],
+                    }
+                )
+                job_path.write_text(json.dumps(payload), encoding="utf-8")
+                return job.__class__(**{**job.__dict__, "status": "running", "pid": os.getpid()})
+
+            with patch("wqb.console_server.build_action_command", return_value=[sys.executable, "-c", "pass"]), patch(
+                "wqb.console_server.load_job_history", side_effect=synchronized_history
+            ), patch(
+                "wqb.console_server.start_job_async", side_effect=persist_running_job
+            ) as start_async:
+                threads = [threading.Thread(target=invoke_auto_continue) for _ in range(2)]
+                for thread in threads:
+                    thread.start()
+                start_barrier.wait(timeout=2)
+                for thread in threads:
+                    thread.join(timeout=2)
+            job_records = list(paths.job_root.glob("*/job.json"))
+
+        self.assertFalse(errors)
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(len(results), 2)
+        self.assertEqual(len({job.job_id for job in results}), 1)
+        self.assertEqual(len(job_records), 1)
+        start_async.assert_called_once()
 
     def test_run_console_action_reuses_active_auto_continue_job(self):
         with tempfile.TemporaryDirectory() as tmp:

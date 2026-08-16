@@ -114,6 +114,26 @@ class SourceBridgeTests(unittest.TestCase):
         self.assertEqual(decision.action, "import_existing")
         self.assertEqual(decision.source_run_id, "source1")
 
+    def test_bridge_uses_field_search_when_source_exact_field_is_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            active = runs / "active"
+            source = runs / "source1"
+            write_active_metadata(active)
+            write_source_metadata(source)
+            write_candidates(source / "candidates.csv")
+            metadata_path = source / "run_meta.jsonl"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["exact_field_id"] = ""
+            metadata_path.write_text(json.dumps(metadata) + "\n", encoding="utf-8")
+
+            decision = inspect_scout_seed_source_bridge(
+                runs, active, "2026-08-12T00:00:00+00:00"
+            )
+
+        self.assertEqual(decision.action, "import_existing")
+        self.assertEqual(decision.source_run_id, "source1")
+
     def test_bridge_waits_when_cooldown_active(self):
         with tempfile.TemporaryDirectory() as tmp:
             runs = Path(tmp)
