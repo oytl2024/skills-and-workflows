@@ -19,6 +19,7 @@ from wqb.benchmark_rules import (
 )
 from wqb.data_ledger_compile import compile_data_ledger_from_raw, latest_capture_dir
 from wqb.knowledge_bootstrap import ACTIVITY_SNAPSHOT
+from wqb.knowledge_age_policy import KNOWLEDGE_MAX_AGE_DAYS
 from wqb.knowledge_compile import compile_research_records
 from wqb.knowledge_contracts import (
     SourceIndexRow,
@@ -42,7 +43,7 @@ from wqb.template_library import (
 
 
 MIGRATION_REPORT_DIR = Path("raw") / "maintenance" / "migration_reports"
-DEFAULT_FRESHNESS_DAYS = 30
+DEFAULT_FRESHNESS_DAYS = KNOWLEDGE_MAX_AGE_DAYS
 RAW_ROOT_MARKDOWN_RE = re.compile(r"^raw_root_(?P<stem>.+)$")
 DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 SENSITIVE_NAME_FRAGMENTS = (
@@ -1177,6 +1178,9 @@ def run_knowledge_vault_migration(
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     """Input: knowledge root and optional timestamp. Output: migration report. Materialize the canonical vault before cleanup."""
+    from wqb.semantic_publication import read_semantic_release
+    if read_semantic_release(Path(knowledge_root))['release_id'] is not None:
+        raise ValueError('active semantic release: legacy migration refused; use compile-semantic-knowledge')
     generated = generated_at or _now()
     paths = ensure_knowledge_dirs(knowledge_root)
     root = paths.root

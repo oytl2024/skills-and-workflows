@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 from itertools import product
 import json
 from pathlib import Path
+import threading
 from typing import Any
 
 from wqb.ai_checkpoints import load_ai_checkpoints
@@ -28,6 +29,12 @@ from wqb.workflow_events import read_workflow_events
 from wqb.workflow_paths import resolve_project_root, resolve_run_root
 from wqb.workflow_state import diagnose_state_consistency, discover_active_workflow
 from wqb.console_timeline import build_timeline_rows, select_current_work
+from wqb.strategy_progress import load_strategy_progress
+
+
+COLD_SUMMARY_CACHE: dict[str, tuple[tuple, dict[str, Any]]] = {}
+COLD_SUMMARY_LOCK = threading.Lock()
+COLD_SUMMARY_CACHE_LIMIT = 8
 
 
 @dataclass(frozen=True)
@@ -254,8 +261,12 @@ def _data_authority_summary_from_rows(rows: list[dict[str, Any]]) -> dict[str, A
 def _semantic_ledger_summary(knowledge_root: Path) -> dict[str, Any]:
     """Input: knowledge root. Output: semantic summary. Count operator, matrix-ready template, and active rule records."""
     try:
-        operators = load_operator_semantics(existing_machine_resource_path(knowledge_root, "operator_ledger"))
-        templates = load_template_library(existing_machine_resource_path(knowledge_root, "template_library"))
+        from wqb.knowledge_compile import read_semantic_rows
+        from wqb.operator_semantics import operator_semantic_record_from_dict
+        from wqb.template_library import template_record_from_dict
+        receipt, operator_rows, template_rows = read_semantic_rows(knowledge_root)
+        operators = [operator_semantic_record_from_dict(row) for row in operator_rows]
+        templates = [template_record_from_dict(row) for row in template_rows]
         rules = load_active_benchmark_rules(knowledge_root, fallback_to_defaults=False)
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         operators, templates, rules = [], [], []
@@ -266,6 +277,22 @@ def _semantic_ledger_summary(knowledge_root: Path) -> dict[str, Any]:
         "active_benchmark_rule_count": len(rules),
         "ready": bool(operators) and matrix_ready > 0 and bool(rules),
     }
+
+
+def _latest_semantic_compile(knowledge_root: Path) -> dict:
+    """Input: vault Path. Output: latest semantic job dict. Expose durable status/errors/notification without model polling."""
+    candidates = list((knowledge_root / 'machine/semantic_jobs').glob('*/command_result.json'))
+    candidates += list((knowledge_root / 'machine/semantic_jobs/requests').glob('*/command_result.json'))
+    if not candidates:
+        return {}
+    path = max(candidates, key=lambda item: item.stat().st_mtime_ns)
+    try:
+        result = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(result, dict) or result.get('status') not in {'running', 'publishing', 'completed', 'blocked', 'cancelled'}:
+            raise ValueError('invalid semantic command receipt')
+        return dict(result, path=str(path), job_id=path.parent.name)
+    except (OSError, ValueError, TypeError):
+        return dict(status='blocked', error='semantic command result unreadable', path=str(path))
 
 
 def _data_ledger_max_age_days(knowledge_root: Path) -> int | None:
@@ -452,8 +479,8 @@ def _research_record_summary(run_dir: Path | None) -> dict[str, Any]:
     return {"exists": True, "path": str(path), **record.__dict__}
 
 
-def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
-    """Input: console paths. Output: JSON-safe state dict. Aggregate dashboard data."""
+def _load_cold_console_state(paths: ConsolePaths) -> dict[str, Any]:
+    """Input: ConsolePaths. Output: dict. Compile knowledge summaries outside the runtime path."""
     proposal_dir = existing_decision_artifact_path(
         paths.knowledge_root,
         "workflow_change_proposals.jsonl",
@@ -465,22 +492,10 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
     data_ledger_rows = _read_jsonl(existing_machine_resource_path(paths.knowledge_root, "data_ledger"))
     proposals = load_workflow_proposals(proposal_dir)
     proposal_counts = Counter(str(row.get("status", "unclassified")) for row in proposals)
-    active_workflow, active_run_dir = _active_workflow_summary(paths.runs_root)
-    source_bridge = {"exists": False}
-    if active_run_dir is not None and active_workflow.get("current_stage") == "scout_seed":
-        from wqb.source_bridge import inspect_scout_seed_source_bridge
-
-        source_bridge = inspect_scout_seed_source_bridge(
-            paths.runs_root,
-            active_run_dir,
-            datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        ).to_dict()
-    workflow_events = [] if active_run_dir is None else [event.__dict__ for event in read_workflow_events(active_run_dir)]
-    approved_queue, queue_diagnostics = _approved_queue_with_diagnostics(paths.runs_root)
     ai_checkpoints = load_ai_checkpoints(checkpoint_dir)
-    base_state = {
-        "readiness": _latest_readiness(paths.runs_root),
+    return {
         "knowledge_maintenance": _latest_knowledge_maintenance(paths.knowledge_root),
+        "semantic_compile": _latest_semantic_compile(paths.knowledge_root),
         "delivery_gate": _latest_delivery_gate(paths.knowledge_root),
         "freshness": _freshness_summary(paths.knowledge_root),
         "knowledge_contracts": evaluate_knowledge_contract_health(paths.knowledge_root),
@@ -495,19 +510,191 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
             )
         ),
         "schedule": _schedule_summary(paths.knowledge_root),
-        "jobs": _job_rows(paths.job_root, paths.knowledge_root),
         "proposals": proposals,
         "proposal_counts": dict(proposal_counts),
         "ai_checkpoints": ai_checkpoints,
         "milestone": _milestone_summary(paths.milestone_path),
+    }
+
+
+def _cold_signature(paths: ConsolePaths) -> tuple:
+    """Input: ConsolePaths. Output: tuple. Track knowledge file metadata and day-sensitive freshness."""
+    tokens = [date.today().isoformat()]
+    candidates = [paths.milestone_path, *paths.knowledge_root.rglob('*')]
+    for path in sorted(candidates):
+        try:
+            stat = path.stat()
+            tokens.append((str(path), stat.st_mtime_ns, stat.st_size))
+        except OSError:
+            continue
+    return tuple(tokens)
+
+
+def load_cold_console_state(paths: ConsolePaths) -> dict[str, Any]:
+    """Input: ConsolePaths. Output: dict. Cache cold summaries until relevant file mtimes change."""
+    key = str(paths.knowledge_root.resolve()) + str(paths.milestone_path.resolve())
+    signature = _cold_signature(paths)
+    with COLD_SUMMARY_LOCK:
+        cached = COLD_SUMMARY_CACHE.get(key)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+        state = _load_cold_console_state(paths)
+        if len(COLD_SUMMARY_CACHE) >= COLD_SUMMARY_CACHE_LIMIT:
+            COLD_SUMMARY_CACHE.pop(next(iter(COLD_SUMMARY_CACHE)))
+        COLD_SUMMARY_CACHE[key] = (signature, state)
+        return state
+
+
+def _source_readiness(paths: ConsolePaths, active: dict[str, Any], decision: Any) -> dict[str, Any]:
+    """Input: ConsolePaths, active dict, SourceBridgeDecision. Output: dict. Share CLI readiness selection."""
+    from wqb.orchestrator import OrchestratorPaths
+    from wqb.workflow_auto_continue import _readiness_blocker_for_status, _readiness_report_paths
+
+    workflow_paths = OrchestratorPaths(paths.project_root, paths.workflow_root, paths.knowledge_root, paths.runs_root)
+    blocker = _readiness_blocker_for_status(workflow_paths, active, decision)
+    if blocker:
+        return {**blocker, 'exists': True}
+    for path in _readiness_report_paths(active, decision):
+        if path.is_file():
+            return {**_read_json(path), 'exists': True, 'path': str(path)}
+    return _latest_readiness(paths.runs_root)
+
+
+def project_start_readiness(paths: ConsolePaths, state: dict[str, Any]) -> None:
+    """Input: Console paths and mutable state dict. Output: none. Separate new Start evidence from active-run readiness."""
+    from wqb.console_start import read_start_request
+
+    request = read_start_request(paths.runs_root)
+    state['start_request'] = request
+    state['start_preparation'] = request
+    scope = (state.get('runtime_control') or {}).get('original_batch_recovery') or {}
+    active = state.get('active_workflow') or {}
+    new_start = not active.get('exists') or active.get('status') == 'complete'
+    if scope.get('authorized'):
+        new_start = scope.get('planned', 0) > 0 and scope.get('remaining') == 0
+    if not new_start:
+        return
+    state['run_readiness'] = state.get('readiness', {})
+    receipt_root = paths.runs_root / 'start_preflight'
+    receipts = sorted(receipt_root.glob('*.json'), key=lambda path: path.stat().st_mtime_ns, reverse=True)
+    receipt = _read_json(receipts[0]) if receipts and not request else {}
+    if request.get('preflight_receipt_path'):
+        bound_path = Path(request['preflight_receipt_path'])
+        if bound_path.resolve().parent == receipt_root.resolve():
+            bound = _read_json(bound_path)
+            if bound.get('scope') == (request.get('selection') or {}).get('scope'):
+                receipt = bound
+    if request.get('status') == 'blocked':
+        receipt = {**receipt, 'blocked': True, 'passed': False,
+                   'scope': (request.get('selection') or {}).get('scope', {}),
+                   'issues': request.get('issues') or [{'code': 'start_preflight_failed',
+                                                       'message': request.get('error', 'Start blocked')}],
+                   'notification': request.get('notification', {})}
+    state['start_preflight'] = receipt
+    # A receipt explains the last attempt, not a renewable authorization.
+    # Every Start still runs strict scoped readiness before creating a mission.
+    state['readiness'] = {**receipt, 'exists': bool(receipt), 'passed': False,
+                          'context': 'new-mission-preflight',
+                          'last_preflight_passed': receipt.get('passed', False)}
+
+
+def load_runtime_state(paths: ConsolePaths) -> dict[str, Any]:
+    """Input: ConsolePaths. Output: dict. Project local runtime evidence without scanning knowledge ledgers."""
+    from wqb.source_bridge import SourceBridgeDecision, inspect_scout_seed_source_bridge
+
+    active_workflow, active_run_dir = _active_workflow_summary(paths.runs_root)
+    source_bridge = {'exists': False}
+    decision = None
+    runtime_control = {}
+    source_dir = None
+    if active_run_dir is not None:
+        binding = _read_json(active_run_dir / 'stages/scout_seed/source_bridge_binding.json')
+        if binding.get('source_run_dir'):
+            source_dir = Path(binding['source_run_dir'])
+            decision = SourceBridgeDecision('bound', '', source_dir.name, str(source_dir))
+        if active_workflow.get('current_stage') == 'scout_seed':
+            bridge_decision = inspect_scout_seed_source_bridge(
+                paths.runs_root, active_run_dir, datetime.now(timezone.utc).isoformat()
+            )
+            source_bridge = bridge_decision.to_dict()
+            if decision is None:
+                decision = bridge_decision
+                if decision.source_run_dir:
+                    source_dir = Path(decision.source_run_dir)
+        try:
+            from wqb.runtime_control import read_runtime_control, has_runtime_authority
+        except ImportError:
+            runtime_control = {'status': 'unavailable', 'desired_state': 'paused'}
+        else:
+            runtime_control = read_runtime_control(active_run_dir)
+            if runtime_control.get('original_batch_scope_id') and has_runtime_authority(active_run_dir):
+                from wqb.original_batch_recovery import read_original_batch, _inventory
+                scope = read_original_batch(active_run_dir)
+                plan, _, checked = _inventory(Path(scope['source_run_dir']), require_reconciled=False)
+                runtime_control['original_batch_recovery'] = {
+                    'authorized': True, 'scope_id': scope['scope_id'], 'planned': len(plan),
+                    'remaining': sum(row.get('expression_hash') not in checked for row in plan),
+                    'checked': len(checked)}
+            if not has_runtime_authority(active_run_dir):
+                runtime_control = {**runtime_control, 'legacy_authority_required': True,
+                                   'status': 'blocked', 'reason': 'runtime authority required; legacy run needs reconciliation'}
+            from wqb.recovery_cases import read_current_recovery_case
+            if runtime_control.get('recovery_case'):
+                runtime_control['recovery_case'] = read_current_recovery_case(active_run_dir)
+            from wqb.runtime_boundaries import project_runtime_boundary
+            active_workflow = project_runtime_boundary(active_workflow, runtime_control)
+    workflow_events = [] if active_run_dir is None else [event.__dict__ for event in read_workflow_events(active_run_dir)]
+    approved_queue, queue_diagnostics = _approved_queue_with_diagnostics(paths.runs_root)
+    base_state = {
+        'semantic_compile': _latest_semantic_compile(paths.knowledge_root),
+        'research_rounds': _read_json(active_run_dir / 'research_rounds.json') if active_run_dir else {},
+        'research_handoff': _read_json(active_run_dir / 'runtime/research_handoff.json') if active_run_dir else {},
+        'readiness': _source_readiness(paths, active_workflow, decision),
+        'runtime_control': runtime_control,
+        'strategy_progress': load_strategy_progress(source_dir),
+        'jobs': _job_rows(paths.job_root, paths.knowledge_root),
         "active_workflow": active_workflow,
         "source_bridge": source_bridge,
         "workflow_events": workflow_events,
         "approved_queue": approved_queue,
         "queue_diagnostics": queue_diagnostics,
         "research_record": _research_record_summary(active_run_dir),
+        "run_ai_checkpoints": load_ai_checkpoints(active_run_dir / "stages" / "ai") if active_run_dir is not None else [],
     }
+    if active_run_dir is not None:
+        repair = _read_json(active_run_dir / 'stages/repair/repair_execution.json')
+        base_state['repair_progress'] = [{'parent_alpha_id': a.get('parent_alpha_id'),
+            'phase': a.get('phase', a.get('status')), 'next_poll_at': a.get('next_poll_at'),
+            'hypothesis': a.get('plan', {}).get('decision', {}).get('hypothesis', 'Frozen legacy plan'),
+            'ai_status': a.get('plan', {}).get('status', 'not_ai_generated')}
+            for a in repair.get('attempts', [])]
+        decisions = []
+        for receipt_path in sorted((active_run_dir / 'runtime/repair_decisions').glob('*.json')):
+            if receipt_path.name.endswith('.input.json'):
+                continue
+            decision = _read_json(receipt_path)
+            decisions.append({'checkpoint_type': 'Repair execution decision', 'status': decision.get('status'),
+                              'reason': decision.get('decision', {}).get('hypothesis', decision.get('reason', ''))})
+        base_state['run_ai_checkpoints'].extend(decisions[-8:])
+    project_start_readiness(paths, base_state)
     timeline = build_timeline_rows(base_state)
     base_state["timeline"] = timeline
     base_state["current_work"] = select_current_work(base_state, timeline)
+    if active_workflow.get('current_stage') == 'repair':
+        base_state['current_work'].setdefault('details', []).extend(
+            f"{row['parent_alpha_id']}: {row['phase']}; AI={row['ai_status']}; next={row['next_poll_at'] or 'ready'}; {row['hypothesis']}"
+            for row in base_state.get('repair_progress', []))
     return base_state
+
+
+def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
+    """Input: ConsolePaths. Output: dict. Combine cached knowledge and current local runtime evidence."""
+    state = {**load_cold_console_state(paths), **load_runtime_state(paths)}
+    state["ai_checkpoints"] = [*state["run_ai_checkpoints"], *state["ai_checkpoints"]]
+    state['timeline'] = build_timeline_rows(state)
+    state['current_work'] = select_current_work(state, state['timeline'])
+    if (state.get('active_workflow') or {}).get('current_stage') == 'repair':
+        state['current_work'].setdefault('details', []).extend(
+            f"{row['parent_alpha_id']}: {row['phase']}; AI={row['ai_status']}; next={row['next_poll_at'] or 'ready'}; {row['hypothesis']}"
+            for row in state.get('repair_progress', []))
+    return state

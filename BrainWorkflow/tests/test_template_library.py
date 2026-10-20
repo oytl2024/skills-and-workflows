@@ -73,6 +73,26 @@ def complete_matrix_row() -> dict[str, object]:
 
 
 class TemplateLibraryTest(unittest.TestCase):
+    def test_new_semantics_roundtrip_and_legacy_identity(self):
+        """Input: TestCase. Output: None. Roundtrip semantic fields without changing legacy identity."""
+        from tests.test_semantic_contracts import semantic_fields
+        row = dict(complete_matrix_row(), **semantic_fields(), binding_version=2,
+                   hypothesis_id="underreaction", hypothesis_version=3)
+        actual = template_record_to_dict(template_record_from_dict(row))
+        for key in semantic_fields() | dict(binding_version=2, hypothesis_id="", hypothesis_version=3):
+            self.assertEqual(actual.get(key), row[key], key)
+        legacy = complete_matrix_row()
+        record = template_record_from_dict(legacy)
+        self.assertEqual(record.template_id, legacy["template_id"])
+        self.assertEqual(record.skeleton, legacy["skeleton"])
+        self.assertEqual(getattr(record, "semantic_status", None), "legacy/unreviewed")
+        self.assertEqual(getattr(record, "binding_version", None), 1)
+
+    def test_new_template_fields_reject_unknown_nested_fields(self):
+        """Input: TestCase. Output: None. Reject unknown fields in named input slots."""
+        with self.assertRaises(ValueError):
+            template_record_from_dict(dict(complete_matrix_row(), input_slots=[dict(name="signal", unknown=True)]))
+
     def test_matrix_ready_requires_every_spec_b_dimension(self):
         complete = complete_matrix_row()
         required_dimensions = [

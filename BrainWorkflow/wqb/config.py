@@ -1,4 +1,6 @@
 from pathlib import Path
+from copy import deepcopy
+import json
 from typing import Any
 
 import yaml
@@ -26,6 +28,31 @@ DEFAULT_CONFIG = {
 
 REQUIRED_CONFIG_KEYS = ["region", "universe", "delay"]
 ON_OFF_CONFIG_KEYS = ["pasteurization", "nan_handling"]
+
+
+def read_research_policy(defaults_path: str | Path, local_path: str | Path | None = None,
+                         *, override: dict | None = None) -> dict | None:
+    """Input: existing JSON config paths and optional explicit dict. Output: detached opt-in policy or None; default off."""
+    from wqb.hypothesis_selection import paired_scout_enabled
+    policy = None
+    for path in (defaults_path, local_path):
+        if path is None:
+            continue
+        target = resolve_config_path(path)
+        if not target.exists():
+            continue
+        data = json.loads(target.read_text(encoding='utf-8'))
+        if not isinstance(data, dict):
+            raise ValueError('workflow configuration must be an object')
+        if 'research_policy' in data:
+            policy = data['research_policy']
+            if policy is None:
+                raise ValueError('research_policy must be an object')
+            paired_scout_enabled(policy)
+    if override is not None:
+        paired_scout_enabled(override)
+        policy = override
+    return deepcopy(policy) if paired_scout_enabled(policy) else None
 
 
 def resolve_config_path(path: str | Path) -> Path:

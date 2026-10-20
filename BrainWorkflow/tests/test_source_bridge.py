@@ -49,11 +49,22 @@ def write_active_metadata(
     schedule.write_text(
         json.dumps(
             {
+                "selected_data": [
+                    {
+                        "field_id": field_id,
+                        "dataset_id": dataset_id,
+                        "source_quality": "platform_raw_capture",
+                        "coverage_status": "measured_raw",
+                        "source_updated_at": "2026-08-12",
+                        "source_paths": ["raw/platform/data_fields/2026-08-12/data_fields.jsonl"],
+                    }
+                ],
                 "template_matches": [
                     {
                         "field_id": field_id,
                         "dataset_id": dataset_id,
                         "template_id": "matrix_ts_zscore_rank",
+                        "skeleton": "rank(ts_zscore({field}, 20))",
                     }
                 ]
             }
@@ -86,6 +97,21 @@ def write_source_metadata(
 
 
 class SourceBridgeTests(unittest.TestCase):
+    def test_new_round_does_not_rebind_excluded_source(self):
+        """Input: local round fixture. Output: assertions. Prevent completed source reuse across rounds."""
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            active, source = runs / 'active', runs / 'source1'
+            write_active_metadata(active)
+            write_source_metadata(source)
+            write_candidates(source / 'candidates.csv')
+            path = active / 'stages/schedule/research_schedule.json'
+            schedule = json.loads(path.read_text(encoding='utf-8'))
+            schedule['excluded_source_run_ids'] = ['source1']
+            path.write_text(json.dumps(schedule), encoding='utf-8')
+            decision = inspect_scout_seed_source_bridge(runs, active, '2026-10-11T00:00:00Z')
+            self.assertNotEqual(decision.source_run_id, 'source1')
+
     def test_active_run_needs_candidates_only_for_scout_seed_pause(self):
         summary = {
             "active": True,
@@ -155,6 +181,9 @@ class SourceBridgeTests(unittest.TestCase):
 
         self.assertEqual(decision.action, "rate_limit_wait")
         self.assertEqual(decision.source_run_id, "source1")
+        self.assertEqual(decision.metadata["retry_at"], "2099-01-01T00:00:00+00:00")
+        self.assertEqual(decision.metadata["next_check_at"], "2099-01-01T00:00:00+00:00")
+        self.assertFalse(decision.metadata["cooldown_expired"])
 
     def test_bridge_detects_pending_submission_after_checked_submission(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -288,6 +317,25 @@ class SourceBridgeTests(unittest.TestCase):
 
         self.assertEqual(decision.action, "retry_planned")
         self.assertEqual(decision.source_run_id, "source1")
+
+    def test_bridge_blocks_uncertain_submission_instead_of_retrying(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            active = runs / "active"
+            source = runs / "source1"
+            write_active_metadata(active)
+            write_source_metadata(source)
+            item = {"expression_hash": "h1", "expression": "rank(cash_field)"}
+            (source / "planned_candidates.jsonl").write_text(json.dumps(item) + "\n", encoding="utf-8")
+            (source / "simulation_events.jsonl").write_text(
+                json.dumps({"event": "SUBMISSION_STARTED", "attempt_id": "attempt-1", **item}) + "\n",
+                encoding="utf-8",
+            )
+
+            decision = inspect_scout_seed_source_bridge(runs, active, "2026-08-12T00:00:00+00:00")
+
+        self.assertEqual(decision.action, "maintenance_blocker")
+        self.assertIn("uncertain", decision.reason)
 
     def test_bridge_reports_maintenance_blocker_without_schedule_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -440,6 +488,76 @@ class SourceBridgeTests(unittest.TestCase):
         self.assertEqual(decision.action, "maintenance_blocker")
         self.assertEqual(decision.source_run_id, "source1")
         self.assertIn("rate limit", decision.reason)
+
+    def test_bridge_explains_expired_cooldown_at_rate_limit_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            active = runs / "active"
+            source = runs / "source1"
+            write_active_metadata(active)
+            write_source_metadata(source)
+            (source / "rate_limit_state.json").write_text(
+                json.dumps(
+                    {
+                        "status": "cooldown",
+                        "retry_at": "2026-08-16T07:11:30+00:00",
+                        "consecutive_429_count": 3,
+                        "max_consecutive_429": 3,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            decision = inspect_scout_seed_source_bridge(
+                runs, active, "2026-08-16T08:00:00+00:00"
+            )
+
+        self.assertEqual(decision.action, "maintenance_blocker")
+        self.assertIn("threshold", decision.reason)
+        self.assertEqual(decision.metadata["retry_at"], "2026-08-16T07:11:30+00:00")
+        self.assertTrue(decision.metadata["cooldown_expired"])
+        self.assertNotIn("next_check_at", decision.metadata)
+        self.assertEqual(decision.metadata["consecutive_429_count"], 3)
+        self.assertTrue(decision.metadata["threshold_reached"])
+        self.assertFalse(decision.metadata["recovery_eligible"])
+        self.assertTrue(decision.metadata["operator_acknowledgement_required"])
+        self.assertIn("operator acknowledgement", decision.metadata["operator_message"])
+
+    def test_bridge_requires_acknowledgement_when_retry_would_hit_rate_limit_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            active = runs / "active"
+            source = runs / "source1"
+            write_active_metadata(active)
+            write_source_metadata(source)
+            (source / "rate_limit_state.json").write_text(
+                json.dumps(
+                    {
+                        "status": "cooldown",
+                        "retry_at": "2026-08-16T07:11:30+00:00",
+                        "consecutive_429_count": 2,
+                        "max_consecutive_429": 3,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (source / "planned_candidates.jsonl").write_text(
+                json.dumps({"expression_hash": "h1", "expression": "rank(cash_field)"}) + "\n",
+                encoding="utf-8",
+            )
+
+            decision = inspect_scout_seed_source_bridge(
+                runs, active, "2026-08-16T08:00:00+00:00"
+            )
+
+        self.assertEqual(decision.action, "maintenance_blocker")
+        self.assertIn("near rate limit threshold", decision.reason)
+        self.assertTrue(decision.metadata["cooldown_expired"])
+        self.assertEqual(decision.metadata["retry_at"], "2026-08-16T07:11:30+00:00")
+        self.assertTrue(decision.metadata["near_threshold"])
+        self.assertFalse(decision.metadata["recovery_eligible"])
+        self.assertTrue(decision.metadata["operator_acknowledgement_required"])
+        self.assertIn("one 429 away", decision.metadata["operator_message"])
 
     def test_bridge_builds_source_batch_metadata_from_schedule(self):
         with tempfile.TemporaryDirectory() as tmp:

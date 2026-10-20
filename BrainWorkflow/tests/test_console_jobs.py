@@ -4,8 +4,9 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from wqb.console_jobs import build_cli_command, create_job, load_job_history, reconcile_job_dict, run_job, start_job_async
+from wqb.console_jobs import build_cli_command, create_job, load_job_history, reconcile_job_dict, run_job, start_job_async, timeout_for_job, _finalize_process_result
 from wqb.console_state import ConsolePaths
 
 
@@ -39,6 +40,42 @@ def wait_for_terminal_payload(job_dir: str | Path, timeout_seconds: float = 5) -
 
 
 class ConsoleJobsTests(unittest.TestCase):
+    def test_job_record_is_never_overwritten_in_place(self):
+        original = Path.write_text
+
+        def reject_direct_write(path, *args, **kwargs):
+            if path.name == "job.json":
+                raise AssertionError("Readers can observe an empty job record")
+            return original(path, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(Path, "write_text", reject_direct_write):
+                job = create_job(Path(tmp), "test", [], Path(tmp))
+            payload = json.loads((Path(job.job_dir) / "job.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["status"], "created")
+
+    def test_zero_exit_preserves_blocked_runtime_business_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            run = Path(tmp) / 'active'
+            run.mkdir()
+            (run / 'runtime_status.json').write_text(json.dumps({'status': 'blocked',
+                'reason': 'readiness-blocked'}), encoding='utf-8')
+            job = create_job(paths.job_root, 'workflow-auto-continue', [], paths.workflow_root,
+                             {'run_dir': str(run)})
+            result = _finalize_process_result(job, 0)
+            self.assertEqual(result.status, 'blocked')
+            self.assertIn('readiness-blocked', result.status_message)
+
+    def test_workflow_worker_outlives_default_one_hour_job_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            worker = create_job(paths.job_root, 'workflow-auto-continue', [], paths.workflow_root, {})
+            routine = create_job(paths.job_root, 'compile-knowledge', [], paths.workflow_root, {})
+            self.assertGreaterEqual(timeout_for_job(worker, 3600), 21660)
+            self.assertEqual(timeout_for_job(routine, 3600), 3600)
+            self.assertEqual(timeout_for_job(worker, 1), 1)
+
     def test_create_and_run_job_persists_outputs_and_history(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -145,13 +182,22 @@ class ConsoleJobsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = make_paths(Path(tmp))
 
-            auto_continue = build_cli_command("workflow-auto-continue", paths, {"enable_live_api": True})
+            auto_continue = build_cli_command("workflow-auto-continue", paths, {"enable_live_api": True, "expected_runtime_revision": "rendered-revision"})
             stop = build_cli_command("workflow-stop", paths, {})
+            acknowledge = build_cli_command(
+                "workflow-acknowledge-source-rate-limit",
+                paths,
+                {"reason": "operator confirmed platform recovery"},
+            )
 
-        self.assertIn("workflow-auto-continue", auto_continue)
-        self.assertIn("--enable-live-api", auto_continue)
-        self.assertIn("workflow-abort", stop)
-        self.assertIn("user stopped from console", stop)
+        self.assertIn("workflow-run", auto_continue)
+        self.assertNotIn("--enable-live-api", auto_continue)
+        self.assertEqual(auto_continue[auto_continue.index("--expected-runtime-revision") + 1], "rendered-revision")
+        self.assertIn("workflow-pause", stop)
+        self.assertIn("workflow-acknowledge-source-rate-limit", acknowledge)
+        self.assertIn("--reason", acknowledge)
+        self.assertIn("operator confirmed platform recovery", acknowledge)
+        self.assertNotIn("--enable-live-api", acknowledge)
 
     def test_workflow_start_command_carries_structured_selected_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -159,12 +205,13 @@ class ConsoleJobsTests(unittest.TestCase):
             command = build_cli_command(
                 "workflow-start",
                 paths,
-                {"objective": "Power Pool", "selected_option_id": "option-1", "selected_region": "USA", "selected_delay": 1, "selected_universe": "TOP3000"},
+                {"objective": "Power Pool", "selected_option_id": "option-1", "selected_region": "USA", "selected_delay": 1, "selected_universe": "TOP3000", "enable_live_api": True},
             )
 
         self.assertEqual(command[command.index("--selected-region") + 1], "USA")
         self.assertEqual(command[command.index("--selected-delay") + 1], "1")
         self.assertEqual(command[command.index("--selected-universe") + 1], "TOP3000")
+        self.assertIn("--enable-live-api", command)
 
     def test_job_json_contains_context_for_recovery(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -346,6 +393,21 @@ class AsyncConsoleJobsTests(unittest.TestCase):
 
         self.assertEqual(reconciled["status"], "completed")
         self.assertEqual(reconciled["exit_code"], 0)
+
+    def test_reconcile_terminal_capture_does_not_recount_raw_data(self):
+        row = {
+            "job_id": "job-capture-complete",
+            "status": "completed",
+            "action": "capture-platform-data-fields",
+            "exit_code": 0,
+            "progress": {"data_field_rows": 42},
+        }
+
+        with patch("wqb.console_jobs.probe_data_capture_progress", side_effect=AssertionError("unexpected recount")):
+            reconciled = reconcile_job_dict(row, Path("knowledge"))
+
+        self.assertEqual(reconciled["status"], "completed")
+        self.assertEqual(reconciled["progress"]["data_field_rows"], 42)
 
 
 if __name__ == "__main__":

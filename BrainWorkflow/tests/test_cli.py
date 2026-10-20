@@ -432,13 +432,13 @@ class CliTests(unittest.TestCase):
         self.assertTrue(args.enable_live_api)
 
     def test_workflow_auto_continue_cli_does_not_inject_live_runners_without_authorization(self):
-        config = {"run_root": "runs", "knowledge_root": "knowledge"}
+        config = {"run_root": "runs", "knowledge_root": "knowledge", "active_workflow_run_dir": "runs/active"}
         with patch("sys.argv", ["wqb", "workflow-auto-continue"]), patch(
             "wqb.cli.load_config", return_value=config
         ), patch(
             "wqb.workflow_auto_continue.auto_continue_workflow",
             return_value={"status": "paused"},
-        ) as dispatcher, redirect_stdout(io.StringIO()):
+        ) as dispatcher, patch('wqb.cli.WorkflowOrchestrator.status', return_value={'active': False}), redirect_stdout(io.StringIO()):
             main()
 
         kwargs = dispatcher.call_args.kwargs
@@ -446,6 +446,38 @@ class CliTests(unittest.TestCase):
         self.assertIsNone(kwargs["source_batch_runner"])
         self.assertIsNone(kwargs["complete_in_flight_runner"])
         self.assertIsNone(kwargs["retry_planned_runner"])
+
+    def test_workflow_auto_continue_cli_live_source_runner_uses_submit_throttle(self):
+        config = {"run_root": "runs", "knowledge_root": "knowledge", "active_workflow_run_dir": "runs/active"}
+
+        def dispatch(*args, **kwargs):
+            runner = kwargs["source_batch_runner"]
+            self.assertIsNotNone(runner)
+            return runner(
+                config,
+                {
+                    "field_search": "buzz",
+                    "dataset_id": "ai_equity_alpha",
+                    "template_mode": "economic",
+                    "workflow_stage": "scout",
+                    "exact_field_id": "buzz_metric",
+                    "submit_mode": "multi",
+                },
+            )
+
+        with patch("sys.argv", ["wqb", "workflow-auto-continue", "--enable-live-api"]), patch(
+            "wqb.cli.load_config", return_value=config
+        ), patch(
+            "wqb.workflow_auto_continue.auto_continue_workflow",
+            side_effect=dispatch,
+        ), patch(
+            "wqb.cli.field_batch",
+            return_value={"status": "pending_recovery"},
+        ) as batch, patch('wqb.research_planning.prepare_source_plan', return_value={}) as planning, patch('wqb.cli.WorkflowOrchestrator.status', return_value={'active': False}), redirect_stdout(io.StringIO()):
+            main()
+
+        self.assertEqual(batch.call_args.kwargs["multi_chunk_sleep_seconds"], 30.0)
+        self.assertEqual(planning.call_args.args[0], Path('runs/active'))
 
     def test_compile_knowledge_dispatches_maintenance_pipeline(self):
         output = io.StringIO()
@@ -1140,6 +1172,11 @@ class CliTests(unittest.TestCase):
                             "fitness": 0.42,
                             "returns": 0.025,
                             "turnover": 0.22,
+                            "checks": [
+                                {"name": "LOW_SHARPE", "result": "FAIL"},
+                                {"name": "LOW_FITNESS", "result": "FAIL"},
+                                {"name": "LOW_2Y_SHARPE", "result": "FAIL"},
+                            ],
                         }
                     }
                 if path == "/alphas/3q7OQaog/check":
@@ -1497,11 +1534,11 @@ class CliTests(unittest.TestCase):
                 if path.startswith("/users/self/alphas"):
                     return {"results": [{"id": "a1"}, {"id": "a2"}]}
                 if path == "/alphas/a1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.1, "turnover": 0.2, "returns": 0.05}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.1, "turnover": 0.2, "returns": 0.05, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/a1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 if path == "/alphas/a2":
-                    return {"is": {"sharpe": 0.96, "fitness": 0.54, "returns": 0.2, "turnover": 0.63}}
+                    return {"is": {"sharpe": 0.96, "fitness": 0.54, "returns": 0.2, "turnover": 0.63, "checks": [{"name": "LOW_SHARPE", "result": "FAIL"}, {"name": "LOW_FITNESS", "result": "FAIL"}]}}
                 if path == "/alphas/a2/check":
                     return {
                         "is": {
@@ -1538,7 +1575,7 @@ class CliTests(unittest.TestCase):
                 if path.startswith("/users/self/alphas"):
                     return {"results": [{"id": "a1"}]}
                 if path == "/alphas/a1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.18}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.18, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/a1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(path)
@@ -1581,7 +1618,7 @@ class CliTests(unittest.TestCase):
                 if path.startswith("/users/self/alphas"):
                     return {"results": [{"id": "a1"}, {"id": "a2"}, {"id": "a3"}]}
                 if path == "/alphas/a1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/a1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 if path == "/alphas/a2":
@@ -1629,7 +1666,7 @@ class CliTests(unittest.TestCase):
                         "regular": {"code": "rank(close)"},
                     }
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -1680,7 +1717,7 @@ class CliTests(unittest.TestCase):
                         "regular": {"code": "group_normalize(rank(close), industry)"},
                     }
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -1727,7 +1764,7 @@ class CliTests(unittest.TestCase):
                         "regular": {"code": "rank(close)"},
                     }
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -1856,11 +1893,11 @@ class CliTests(unittest.TestCase):
                         "regular": {"code": "rank(close)"},
                     }
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 if path == "/alphas/new2":
-                    return {"is": {"sharpe": 0.7, "fitness": 0.4, "turnover": 0.2}}
+                    return {"is": {"sharpe": 0.7, "fitness": 0.4, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "FAIL"}, {"name": "LOW_FITNESS", "result": "FAIL"}]}}
                 if path == "/alphas/new2/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "FAIL"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -1964,7 +2001,7 @@ class CliTests(unittest.TestCase):
 
             def get_json(self, path):
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -2037,7 +2074,7 @@ class CliTests(unittest.TestCase):
                         "regular": {"code": "rank(close)"},
                     }
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 if path == "/alphas/new2":
@@ -2103,7 +2140,7 @@ class CliTests(unittest.TestCase):
                         "regular": {"code": "rank(close)"},
                     }
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -2201,7 +2238,7 @@ class CliTests(unittest.TestCase):
                         "regular": {"code": "rank(close)"},
                     }
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -2254,7 +2291,7 @@ class CliTests(unittest.TestCase):
                 if path == "/alphas/base1":
                     return {"settings": {"region": "USA", "decay": 20}}
                 if path in {"/alphas/new1", "/alphas/new2"}:
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path in {"/alphas/new1/check", "/alphas/new2/check"}:
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -2291,7 +2328,7 @@ class CliTests(unittest.TestCase):
             self.assertIsInstance(client.posts[0][1], list)
             self.assertEqual([payload["regular"] for payload in client.posts[0][1]], ["rank(open)", "rank(close)"])
             events = recorder.read_jsonl("simulation_events.jsonl")
-            self.assertEqual([event["event"] for event in events], ["SUBMITTED", "SUBMITTED", "CHECKED", "CHECKED"])
+            self.assertEqual([event["event"] for event in events], ["SUBMISSION_STARTED", "SUBMISSION_STARTED", "SUBMITTED", "SUBMITTED", "CHECKED", "CHECKED"])
             self.assertEqual([event["tag"] for event in events[:2]], ["first", "second"])
         finally:
             cleanup_run_dir(run_dir)
@@ -2363,7 +2400,7 @@ class CliTests(unittest.TestCase):
                         "regular": {"code": "rank(close)"},
                     }
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -2422,7 +2459,7 @@ class CliTests(unittest.TestCase):
                 if path == "/alphas/base1":
                     return {"settings": {"region": "USA", "decay": 20}}
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -2480,7 +2517,7 @@ class CliTests(unittest.TestCase):
                 if path == "/alphas/base1":
                     return {"settings": {"region": "USA", "decay": 20, "neutralization": "SUBINDUSTRY"}}
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -2706,6 +2743,55 @@ class CliTests(unittest.TestCase):
         finally:
             cleanup_run_dir(run_dir)
 
+    def test_submit_candidate_payloads_accepts_custom_multi_chunk_size(self):
+        class FakeResponse:
+            def __init__(self, headers=None):
+                self.headers = headers or {}
+
+            def raise_for_status(self):
+                return None
+
+        class FakeClient:
+            def __init__(self):
+                self.posts = []
+
+            def post_json(self, path, payload):
+                self.posts.append((path, payload))
+                return FakeResponse(headers={"Location": f"/simulations/multi{len(self.posts)}"})
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+            payloads = [{"type": "REGULAR", "regular": f"rank(field_{idx})", "settings": {}} for idx in range(5)]
+            metadata = [{"expression_hash": f"h{idx}", "expression": f"rank(field_{idx})"} for idx in range(5)]
+            sleep_calls = []
+
+            summaries = submit_candidate_payloads(
+                FakeClient(),
+                recorder,
+                payloads,
+                metadata,
+                submit_mode="multi",
+                stage_prefix="unit",
+                defer_poll=True,
+                multi_chunk_size=2,
+                multi_chunk_sleep_seconds=3.0,
+                sleep_func=sleep_calls.append,
+            )
+
+            submitted = [event for event in recorder.read_jsonl("simulation_events.jsonl") if event.get("event") == "SUBMITTED"]
+            self.assertEqual(summaries, [])
+            self.assertEqual([event["progress_url"] for event in submitted], [
+                "/simulations/multi1",
+                "/simulations/multi1",
+                "/simulations/multi2",
+                "/simulations/multi2",
+                "/simulations/multi3",
+            ])
+            self.assertEqual(sleep_calls, [3.0, 3.0])
+        finally:
+            cleanup_run_dir(run_dir)
+
     def test_submit_candidate_payloads_does_not_fallback_after_multi_rate_limit(self):
         class FakeResponse:
             def __init__(self, headers=None):
@@ -2742,19 +2828,22 @@ class CliTests(unittest.TestCase):
             ]
             client = FakeClient()
 
-            with patch("wqb.cli.FIELD_BATCH_MULTI_CHUNK_SIZE", 1):
-                summaries = submit_candidate_payloads(
-                    client,
-                    recorder,
-                    payloads,
-                    metadata,
-                    submit_mode="multi",
-                    stage_prefix="unit",
-                    defer_poll=True,
-                )
+            summaries = submit_candidate_payloads(
+                client,
+                recorder,
+                payloads,
+                metadata,
+                submit_mode="multi",
+                stage_prefix="unit",
+                defer_poll=True,
+                multi_chunk_size=1,
+            )
 
             self.assertEqual(summaries, [])
-            self.assertEqual(recorder.read_jsonl("simulation_events.jsonl"), [])
+            self.assertEqual(
+                [row["event"] for row in recorder.read_jsonl("simulation_events.jsonl")],
+                ["SUBMISSION_STARTED", "SUBMISSION_REJECTED", "SUBMISSION_STARTED", "SUBMISSION_REJECTED"],
+            )
             self.assertEqual(client.paths, ["/simulations", "/simulations"])
             self.assertEqual((run_dir / "rate_limit_state.json").exists(), True)
         finally:
@@ -2835,7 +2924,7 @@ class CliTests(unittest.TestCase):
                         ]
                     }
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -2886,7 +2975,7 @@ class CliTests(unittest.TestCase):
                         ]
                     }
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -2954,7 +3043,7 @@ class CliTests(unittest.TestCase):
                         ]
                     }
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -3023,7 +3112,7 @@ class CliTests(unittest.TestCase):
                         ]
                     }
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -3100,7 +3189,7 @@ class CliTests(unittest.TestCase):
                         ]
                     }
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -3379,7 +3468,7 @@ class CliTests(unittest.TestCase):
                 if path.startswith("/data-fields"):
                     raise AssertionError("field API should not be called when field cache is supplied")
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -3462,7 +3551,7 @@ class CliTests(unittest.TestCase):
         class FakeClient:
             def get_json(self, path):
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -3584,13 +3673,13 @@ class CliTests(unittest.TestCase):
                 human_idea="Test simple data-field signal.",
             )
 
-            self.assertEqual(len(client.posts), 30)
+            self.assertEqual(len(client.posts), 2)
             meta = recorder.read_jsonl("run_meta.jsonl")[0]
             self.assertEqual(meta["workflow_stage"], "scout")
             self.assertEqual(meta["human_idea"], "Test simple data-field signal.")
             self.assertEqual(meta["requested_max_alphas"], 2)
-            self.assertEqual(meta["effective_max_alphas"], 30)
-            self.assertEqual(meta["candidate_generation_limit"], 90)
+            self.assertEqual(meta["effective_max_alphas"], 2)
+            self.assertEqual(meta["candidate_generation_limit"], 6)
         finally:
             cleanup_run_dir(run_dir)
 
@@ -3717,8 +3806,9 @@ class CliTests(unittest.TestCase):
             self.assertIsInstance(client.posts[0][1], list)
             self.assertEqual(len(client.posts[0][1]), 2)
             submitted = recorder.read_jsonl("simulation_events.jsonl")
-            self.assertEqual([item["event"] for item in submitted[:2]], ["SUBMITTED", "SUBMITTED"])
-            self.assertEqual({item["progress_url"] for item in submitted[:2]}, {"/simulations/multi1"})
+            accepted = [item for item in submitted if item["event"] == "SUBMITTED"]
+            self.assertEqual(len(accepted), 2)
+            self.assertEqual({item["progress_url"] for item in accepted}, {"/simulations/multi1"})
             self.assertEqual(len(recorder.read_jsonl("all_alphas.jsonl")), 2)
         finally:
             cleanup_run_dir(run_dir)
@@ -3984,7 +4074,7 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(summaries, [])
             events = recorder.read_jsonl("simulation_events.jsonl")
-            self.assertEqual(len(events), 6)
+            self.assertEqual(len([row for row in events if row["event"] == "SUBMITTED"]), 6)
             self.assertEqual(len(recorder.read_jsonl("all_alphas.jsonl")), 0)
             self.assertEqual(summarize_run_dir(run_dir)["in_flight_count"], 6)
         finally:
@@ -4241,6 +4331,55 @@ class CliTests(unittest.TestCase):
         finally:
             cleanup_run_dir(run_dir)
 
+    def test_retry_planned_candidates_uses_six_shared_batches_for_30_candidates(self):
+        class FakeResponse:
+            def __init__(self, headers=None):
+                self.headers = headers or {}
+
+            def raise_for_status(self):
+                return None
+
+        class FakeClient:
+            def __init__(self):
+                self.posts = []
+
+            def post_json(self, path, payload):
+                self.posts.append((path, payload))
+                return FakeResponse(headers={"Location": f"/simulations/retry{len(self.posts)}"})
+
+            def request(self, method, path):
+                raise AssertionError("deferred retry should not request simulation progress")
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+            config = load_config("configs/stage1_usa_d1.yaml", overrides={"run_root": str(TESTS_DIR)})
+            for index in range(30):
+                recorder.append_jsonl(
+                    "planned_candidates.jsonl",
+                    {"expression": f"rank(field_{index})", "expression_hash": f"hash_{index}"},
+                )
+            sleep_calls = []
+
+            client = FakeClient()
+            summaries = retry_planned_candidates(
+                client,
+                recorder,
+                config,
+                submit_mode="multi",
+                defer_poll=True,
+                sleep_func=sleep_calls.append,
+            )
+
+            self.assertEqual(summaries, [])
+            submitted = [event for event in recorder.read_jsonl("simulation_events.jsonl") if event.get("event") == "SUBMITTED"]
+            self.assertEqual(len(submitted), 30)
+            self.assertEqual([len(payload) for _, payload in client.posts], [5] * 6)
+            self.assertEqual(sleep_calls, [30.0] * 5)
+            self.assertEqual(summarize_run_dir(run_dir)["in_flight_count"], 30)
+        finally:
+            cleanup_run_dir(run_dir)
+
     def test_retry_planned_serial_stops_after_rate_limit(self):
         class FakeClient:
             def __init__(self):
@@ -4273,10 +4412,60 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(summaries, [])
             self.assertEqual(len(client.posts), 1)
-            self.assertEqual(len(recorder.read_jsonl("simulation_events.jsonl")), 0)
+            self.assertEqual(
+                [row["event"] for row in recorder.read_jsonl("simulation_events.jsonl")],
+                ["SUBMISSION_STARTED", "SUBMISSION_REJECTED"],
+            )
             errors = recorder.read_jsonl("run_errors.jsonl")
             self.assertEqual(errors[0]["status_code"], 429)
             self.assertTrue((run_dir / "rate_limit_state.json").exists())
+        finally:
+            cleanup_run_dir(run_dir)
+
+    def test_unknown_simulation_submit_cannot_be_retried(self):
+        class UnknownClient:
+            def post_json(self, path, payload):
+                raise RuntimeError("simulation submission outcome unknown")
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+            item = {"expression_hash": "h1", "expression": "rank(field_a)"}
+            recorder.append_jsonl("planned_candidates.jsonl", item)
+            with self.assertRaisesRegex(RuntimeError, "outcome unknown"):
+                submit_candidate_payloads(
+                    UnknownClient(), recorder, [{"regular": item["expression"]}], [item],
+                    submit_mode="serial", stage_prefix="unit", defer_poll=True,
+                )
+            self.assertEqual(
+                [row["event"] for row in recorder.read_jsonl("simulation_events.jsonl")],
+                ["SUBMISSION_STARTED"],
+            )
+            with self.assertRaisesRegex(RuntimeError, "requires platform reconciliation"):
+                retry_planned_candidates(UnknownClient(), recorder, {}, submit_mode="serial")
+        finally:
+            cleanup_run_dir(run_dir)
+
+    def test_pause_before_post_closes_attempt_without_uncertain_blocker(self):
+        from wqb.runtime_control import RuntimePaused
+        from wqb.submission_attempts import uncertain_submission_hashes
+
+        class PausedClient:
+            def post_json(self, path, payload):
+                raise RuntimePaused("paused before POST")
+
+        run_dir = make_run_dir()
+        try:
+            recorder = RunRecorder(run_dir)
+            item = {"expression_hash": "h1", "expression": "rank(field_a)"}
+            with self.assertRaises(RuntimePaused):
+                submit_candidate_payloads(
+                    PausedClient(), recorder, [{"regular": item["expression"]}], [item],
+                    submit_mode="serial", stage_prefix="unit", defer_poll=True,
+                )
+            events = recorder.read_jsonl("simulation_events.jsonl")
+            self.assertEqual([row["event"] for row in events], ["SUBMISSION_STARTED", "SUBMISSION_REJECTED"])
+            self.assertEqual(uncertain_submission_hashes(events), set())
         finally:
             cleanup_run_dir(run_dir)
 
@@ -4449,11 +4638,11 @@ class CliTests(unittest.TestCase):
 
             def get_json(self, path):
                 if path == "/alphas/new1":
-                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2}}
+                    return {"is": {"sharpe": 1.7, "fitness": 1.2, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "PASS"}, {"name": "LOW_FITNESS", "result": "PASS"}]}}
                 if path == "/alphas/new1/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}}
                 if path == "/alphas/new2":
-                    return {"is": {"sharpe": 0.7, "fitness": 0.4, "turnover": 0.2}}
+                    return {"is": {"sharpe": 0.7, "fitness": 0.4, "turnover": 0.2, "checks": [{"name": "LOW_SHARPE", "result": "FAIL"}, {"name": "LOW_FITNESS", "result": "FAIL"}]}}
                 if path == "/alphas/new2/check":
                     return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "FAIL"}]}}
                 raise AssertionError(f"unexpected path: {path}")
@@ -4504,6 +4693,51 @@ class WorkflowOrchestratorCliTests(unittest.TestCase):
 
         self.assertEqual(args.command, "workflow-start")
         self.assertEqual(args.objective, "Power Pool")
+
+    def test_workflow_start_persists_live_permission_before_auto_resume(self):
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run-1"
+            argv = ["wqb", "workflow-start", "--objective", "Power Pool",
+                    "--selected-option-id", "option-1", "--enable-live-api",
+                    "--knowledge-root", str(Path(tmp) / "knowledge"), "--run-dir", str(Path(tmp) / "runs")]
+            with patch("sys.argv", argv), patch("wqb.cli.WorkflowOrchestrator") as orchestrator:
+                orchestrator.return_value.start.return_value = {"run_dir": str(run), "status": "running"}
+                with patch("wqb.runtime_control.request_runtime_state", return_value={"request_revision": "start-revision"}) as persist, redirect_stdout(output):
+                    main()
+
+        persist.assert_called_once_with(str(run), "paused", enable_live_api=True)
+        self.assertEqual(json.loads(output.getvalue())["runtime_request_revision"], "start-revision")
+
+    def test_workflow_start_forwards_explicit_policy_to_new_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / 'workflow.json'
+            config.write_text(json.dumps(dict(research_policy=dict(paired_scout=True))), encoding='utf-8')
+            argv = ['wqb', 'workflow-start', '--objective', 'Power Pool', '--selected-option-id', 'option-1',
+                    '--workflow-defaults', str(config), '--knowledge-root', str(root / 'knowledge'),
+                    '--run-dir', str(root / 'runs')]
+            with patch('sys.argv', argv), patch('wqb.cli.WorkflowOrchestrator') as orchestrator, redirect_stdout(io.StringIO()):
+                orchestrator.return_value.start.return_value = dict(status='blocked')
+                main()
+            self.assertEqual(orchestrator.return_value.start.call_args.kwargs['research_policy'], dict(paired_scout=True))
+
+    def test_workflow_run_rejects_delayed_resume_revision_before_dispatch(self):
+        from wqb.runtime_control import read_runtime_control, request_runtime_state
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run-1"
+            original = request_runtime_state(run, "paused", enable_live_api=True)
+            latest = request_runtime_state(run, "paused")
+            argv = ["wqb", "workflow-run", "--expected-runtime-revision", original["request_revision"],
+                    "--knowledge-root", str(Path(tmp) / "knowledge"), "--run-dir", str(Path(tmp) / "runs")]
+            with patch("sys.argv", argv), patch("wqb.cli.WorkflowOrchestrator") as orchestrator:
+                orchestrator.return_value.status.return_value = {"active": True, "run_dir": str(run)}
+                with self.assertRaisesRegex(ValueError, "stale runtime intent"):
+                    main()
+
+            self.assertEqual(read_runtime_control(run)["request_revision"], latest["request_revision"])
+            self.assertEqual(read_runtime_control(run)["desired_state"], "paused")
 
     def test_workflow_status_dispatches_orchestrator(self):
         from wqb.cli import main
@@ -4618,6 +4852,133 @@ class WorkflowOrchestratorCliTests(unittest.TestCase):
         self.assertEqual(payload["next_action"], "maintenance-blocker")
         self.assertEqual(payload["source_bridge"]["action"], "maintenance_blocker")
         self.assertIn("rate limit", payload["source_bridge"]["reason"])
+        bridge.assert_called_once()
+
+    def test_workflow_status_readiness_blocker_overrides_source_retry(self):
+        from wqb.cli import main
+        from wqb.source_bridge import SourceBridgeDecision
+
+        output = io.StringIO()
+        raw_status = {
+            "active": True,
+            "status": "paused",
+            "current_stage": "scout_seed",
+            "next_action": "workflow-resume",
+            "pause_reason": "local artifacts required before plan-only stage completion: candidates.csv",
+            "run_dir": "runs/active",
+        }
+        decision = SourceBridgeDecision(
+            "retry_planned",
+            "planned source candidates remain",
+            "source1",
+            "runs/source1",
+            ["runs/source1/planned_candidates.jsonl"],
+        )
+        readiness_blocker = {
+            "blocked": True,
+            "passed": False,
+            "codes": ["stale_scope_data"],
+            "path": "runs/source1/readiness_report.json",
+            "issues": [
+                {
+                    "level": "block",
+                    "code": "stale_scope_data",
+                    "message": "Compatible data ledger records for USA D1 TOP3000 are stale.",
+                    "action": "Refresh platform raw data fields for this exact scope before research.",
+                }
+            ],
+        }
+        with patch("sys.argv", ["wqb", "workflow-status"]), patch(
+            "wqb.cli.load_config",
+            return_value={"run_root": "runs", "knowledge_root": "knowledge"},
+        ), patch("wqb.cli.WorkflowOrchestrator") as orchestrator_cls, patch(
+            "wqb.workflow_auto_continue.inspect_scout_seed_source_bridge",
+            return_value=decision,
+        ), patch(
+            "wqb.workflow_auto_continue._readiness_blocker_for_status",
+            return_value=readiness_blocker,
+            create=True,
+        ), redirect_stdout(output):
+            orchestrator_cls.return_value.status.return_value = raw_status
+            main()
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["next_action"], "readiness-blocked")
+        self.assertEqual(payload["readiness_blocker"]["codes"], ["stale_scope_data"])
+        self.assertIn("stale", payload["readiness_blocker"]["issues"][0]["message"])
+        self.assertEqual(payload["source_bridge"]["action"], "retry_planned")
+
+    def test_workflow_acknowledge_source_rate_limit_resets_bound_source_without_live_api(self):
+        from wqb.cli import main
+        from wqb.source_bridge import SourceBridgeDecision
+
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "workflow.yaml"
+            run_root = root / "runs"
+            active_run = run_root / "active"
+            source_run = run_root / "source1"
+            knowledge_root = root / "knowledge"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "region: USA",
+                        "universe: TOP3000",
+                        "delay: 1",
+                        f"run_root: {run_root.as_posix()}",
+                        f"knowledge_root: {knowledge_root.as_posix()}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            raw_status = {
+                "active": True,
+                "status": "paused",
+                "current_stage": "scout_seed",
+                "next_action": "workflow-resume",
+                "pause_reason": "local artifacts required before plan-only stage completion: candidates.csv",
+                "run_dir": str(active_run),
+            }
+            decision = SourceBridgeDecision(
+                "maintenance_blocker",
+                "rate limit threshold still blocks retry",
+                "source1",
+                str(source_run),
+                [str(source_run / "rate_limit_state.json")],
+                {
+                    "consecutive_429_count": 3,
+                    "max_consecutive_429": 3,
+                    "operator_acknowledgement_required": True,
+                },
+            )
+            with patch(
+                "sys.argv",
+                [
+                    "wqb",
+                    "workflow-acknowledge-source-rate-limit",
+                    "--config",
+                    str(config_path),
+                    "--now",
+                    "2026-08-16T09:30:00+00:00",
+                    "--reason",
+                    "operator confirmed platform recovery",
+                ],
+            ), patch("wqb.cli.WorkflowOrchestrator") as orchestrator_cls, patch(
+                "wqb.source_bridge.inspect_scout_seed_source_bridge",
+                return_value=decision,
+            ) as bridge, redirect_stdout(output):
+                orchestrator_cls.return_value.status.return_value = raw_status
+                main()
+            persisted = json.loads((source_run / "rate_limit_state.json").read_text(encoding="utf-8"))
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["status"], "acknowledged")
+        self.assertEqual(payload["source_run_id"], "source1")
+        self.assertEqual(payload["rate_limit_state"]["consecutive_429_count"], 0)
+        self.assertEqual(payload["rate_limit_state"]["acknowledged_reason"], "operator confirmed platform recovery")
+        self.assertEqual(payload["rate_limit_state"]["reset_reason"], "operator_acknowledged_rate_limit_recovery")
+        self.assertEqual(persisted["acknowledged_reason"], "operator confirmed platform recovery")
         bridge.assert_called_once()
 
     def test_workflow_continue_dispatches_orchestrator(self):

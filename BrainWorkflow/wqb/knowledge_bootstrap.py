@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from wqb.benchmark_rules import BENCHMARK_RULES_PATH
+from wqb.knowledge_age_policy import KNOWLEDGE_MAX_AGE_DAYS
 from wqb.data_ledger import load_data_ledger, write_data_ledger_markdown
 from wqb.knowledge_contracts import (
     RAW_REQUIRED_FIELDS,
@@ -222,22 +223,22 @@ def _manifest_rows(generated_at: str, initialized_names: set[str]) -> list[dict[
     """Input: timestamp and initialized names. Output: manifest rows. Build canonical bootstrap manifest rows."""
     day = generated_at[:10]
     return [
-        _scaffold_manifest_row("data_ledger", DATA_LEDGER_JSONL, 1, day, initialized_names),
-        _scaffold_manifest_row("template_library", TEMPLATE_LIBRARY_JSONL, 7, day, initialized_names),
+        _scaffold_manifest_row("data_ledger", DATA_LEDGER_JSONL, KNOWLEDGE_MAX_AGE_DAYS, day, initialized_names),
+        _scaffold_manifest_row("template_library", TEMPLATE_LIBRARY_JSONL, KNOWLEDGE_MAX_AGE_DAYS, day, initialized_names),
         {
             "name": "benchmark_rules",
             "path": BENCHMARK_RULES_PATH.as_posix(),
             "updated_at": NON_REFRESHED_BASELINE_DATE,
-            "max_age_days": 7,
+            "max_age_days": KNOWLEDGE_MAX_AGE_DAYS,
             "status": "not_refreshed",
             "source_note": "Bootstrap does not create or refresh benchmark rules.",
         },
-        _scaffold_manifest_row("activity_snapshot", ACTIVITY_SNAPSHOT, 1, day, initialized_names),
+        _scaffold_manifest_row("activity_snapshot", ACTIVITY_SNAPSHOT, KNOWLEDGE_MAX_AGE_DAYS, day, initialized_names),
         {
             "name": "operator_catalog",
             "path": OPERATOR_LEDGER.as_posix(),
             "updated_at": NON_REFRESHED_BASELINE_DATE,
-            "max_age_days": 30,
+            "max_age_days": KNOWLEDGE_MAX_AGE_DAYS,
             "status": "not_refreshed",
             "source_note": "Bootstrap does not create or refresh the official operator catalog.",
         },
@@ -245,7 +246,7 @@ def _manifest_rows(generated_at: str, initialized_names: set[str]) -> list[dict[
             "name": "research_option_cards",
             "path": "machine/decisions/research_option_cards.jsonl",
             "updated_at": NON_REFRESHED_BASELINE_DATE,
-            "max_age_days": 7,
+            "max_age_days": KNOWLEDGE_MAX_AGE_DAYS,
             "status": "not_refreshed",
             "source_note": "Bootstrap does not create or refresh research option cards.",
         },

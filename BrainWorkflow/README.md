@@ -2,9 +2,11 @@
 
 BrainWorkflow is a maintainable WorldQuant BRAIN research workflow for alpha discovery, simulation, check triage, repair, and knowledge-base iteration.
 
+The structured-hypothesis V2 deployment, activation boundary and current coverage are described in [V2 rollout](docs/operations/v2-rollout.md). The shared default remains off; local activation does not resume existing runs.
+
 The project is intentionally principle-led:
 
-1. Refresh current platform rules, activities, Power Pool boards, themes, competitions, and account state.
+1. Refresh platform rules, activities, Power Pool boards, themes, competitions, and account state during separately requested knowledge maintenance; routine research reuses verified local resources.
 2. Score current opportunities against long-term consultant incentives and alpha-pool quality principles.
 3. Present option cards to the user.
 4. Create a concrete execution plan only after the user chooses an option.

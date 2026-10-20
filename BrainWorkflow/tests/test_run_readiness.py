@@ -302,15 +302,14 @@ class RunReadinessTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def test_discovery_batch_smaller_than_30_blocks_research(self):
+    def test_positive_partial_batch_is_not_blocked_by_size(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.create_minimal_artifacts(root)
 
             report = evaluate_run_readiness(root, mode="research", batch_size=12, today_value="2026-07-10")
 
-        self.assertFalse(report.passed)
-        self.assertIn("batch_size_too_small", {issue.code for issue in report.issues})
+        self.assertNotIn("batch_size_too_small", {issue.code for issue in report.issues})
 
     def test_live_api_requires_explicit_enablement_for_research(self):
         with tempfile.TemporaryDirectory() as tmp:

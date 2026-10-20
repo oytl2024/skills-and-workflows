@@ -13,6 +13,7 @@ htmlcov/
 *.key
 credentials.*
 secrets.*
+configs/workflow_local.json
 
 # WorldQuant BRAIN run artifacts and raw platform snapshots.
 runs/
@@ -27,3 +28,10 @@ knowledge/
 # Local editor state.
 .vscode/
 .idea/
+management/.signboard-state/
+management/.signboard-smoke-*/
+management/signboard-window.png
+
+# Local historical handoffs can contain private platform context; keep them off GitHub.
+docs/archive/project-recovery/*.md
+!docs/archive/project-recovery/README.md

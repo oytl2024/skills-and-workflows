@@ -1,5 +1,7 @@
 import csv
 import json
+import os
+import shutil
 import tempfile
 import unittest
 from datetime import date
@@ -10,6 +12,21 @@ from wqb.cli import default_orchestrator_paths
 from wqb.orchestrator import WorkflowOrchestrator
 from wqb.source_bridge import SourceBridgeDecision
 from wqb.workflow_auto_continue import auto_continue_workflow
+
+
+def fixed_test_root(name: str) -> Path:
+    """Input: root name string. Output: Path. Create a writable non-tempfile test root under the test directory."""
+    root = Path.cwd() / "tests" / f"_tmp_{name}"
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir(parents=True)
+    return root
+
+
+def remove_fixed_test_root(root: Path) -> None:
+    """Input: test root path. Output: none. Remove a fixed test root created under the test directory."""
+    if root.exists():
+        shutil.rmtree(root)
 
 
 def write_candidate_file(path: Path) -> None:
@@ -104,6 +121,26 @@ def write_start_artifacts(root: Path) -> None:
 
 
 class WorkflowAutoContinueTests(unittest.TestCase):
+    def test_created_workflow_advances_without_manual_continue(self):
+        with patch('wqb.workflow_auto_continue.WorkflowOrchestrator') as factory, \
+             patch('wqb.workflow_auto_continue._readiness_blocker_for_status', return_value=None):
+            engine = factory.return_value
+            engine.status.return_value = {'active': True, 'status': 'created', 'current_stage': 'objective_selected'}
+            engine.continue_once.return_value = {'status': 'running'}
+            result = auto_continue_workflow(Mock(), {}, '2026-09-23T00:00:00Z')
+        self.assertEqual(result, {'status': 'running'})
+        engine.continue_once.assert_called_once()
+
+    def test_candidate_gate_automatically_requests_but_never_grants_approval(self):
+        with patch('wqb.workflow_auto_continue.WorkflowOrchestrator') as factory, \
+             patch('wqb.workflow_auto_continue._readiness_blocker_for_status', return_value=None):
+            engine = factory.return_value
+            engine.status.return_value = {'active': True, 'status': 'paused', 'current_stage': 'candidate_gate'}
+            engine.request_candidate_approval_from_checked_results.return_value = {'status': 'waiting_for_user'}
+            result = auto_continue_workflow(Mock(), {}, '2026-09-23T00:00:00Z')
+        self.assertEqual(result['status'], 'waiting_for_user')
+        engine.request_candidate_approval_from_checked_results.assert_called_once()
+
     def test_auto_continue_stops_at_user_approval_without_calling_runners(self):
         status = {
             "active": True,
@@ -213,6 +250,115 @@ class WorkflowAutoContinueTests(unittest.TestCase):
         self.assertEqual(result["next_action"], "enable-live-api-required")
         self.assertIn("authorization", result["message"].lower())
 
+    def test_auto_continue_readiness_blocker_stops_old_live_retry_post(self):
+        orchestrator = Mock()
+        orchestrator.status.return_value = {
+            "active": True,
+            "status": "paused",
+            "current_stage": "scout_seed",
+            "pause_reason": "missing candidates.csv",
+            "run_dir": "runs/active",
+        }
+        decision = SourceBridgeDecision(
+            "retry_planned",
+            "planned source candidates remain",
+            "source1",
+            "runs/source1",
+            ["runs/source1/planned_candidates.jsonl"],
+        )
+        blocker = {
+            "blocked": True,
+            "passed": False,
+            "codes": ["stale_scope_data"],
+            "path": "runs/source1/readiness_report.json",
+            "issues": [
+                {
+                    "level": "block",
+                    "code": "stale_scope_data",
+                    "message": "Compatible data ledger records for USA D1 TOP3000 are stale.",
+                    "action": "Refresh platform raw data fields for this exact scope before research.",
+                }
+            ],
+        }
+        runner = Mock(side_effect=AssertionError("readiness blocker must stop live retry before runner"))
+        with patch("wqb.workflow_auto_continue.WorkflowOrchestrator", return_value=orchestrator), patch(
+            "wqb.workflow_auto_continue.inspect_scout_seed_source_bridge",
+            return_value=decision,
+        ), patch(
+            "wqb.workflow_auto_continue._readiness_blocker_for_status",
+            return_value=blocker,
+        ):
+            result = auto_continue_workflow(
+                Mock(),
+                {},
+                "2026-09-02T06:15:00+00:00",
+                enable_live_api=True,
+                retry_planned_runner=runner,
+            )
+
+        runner.assert_not_called()
+        self.assertEqual(result["next_action"], "readiness-blocked")
+        self.assertEqual(result["readiness_blocker"]["codes"], ["stale_scope_data"])
+        self.assertIn("Readiness is blocked", result["message"])
+
+    def test_status_readiness_blocker_uses_bound_source_report_not_unrelated_newer_report(self):
+        from wqb.workflow_auto_continue import decorate_workflow_status_with_source_bridge
+
+        root = fixed_test_root("workflow_auto_continue_bound_readiness")
+        try:
+            runs = root / "runs"
+            active = runs / "active"
+            bound = runs / "bound-source"
+            unrelated = runs / "unrelated-newer"
+            bound.mkdir(parents=True)
+            unrelated.mkdir(parents=True)
+            (bound / "readiness_report.json").write_text(
+                json.dumps({"passed": True, "blocked": False, "issues": []}),
+                encoding="utf-8",
+            )
+            (unrelated / "readiness_report.json").write_text(
+                json.dumps(
+                    {
+                        "passed": False,
+                        "blocked": True,
+                        "issues": [
+                            {
+                                "level": "block",
+                                "code": "stale_scope_data",
+                                "message": "Unrelated scope is stale.",
+                                "action": "Refresh an unrelated scope.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            os.utime(bound / "readiness_report.json", (1000, 1000))
+            os.utime(unrelated / "readiness_report.json", (2000, 2000))
+            paths = default_orchestrator_paths({"run_root": str(runs), "knowledge_root": str(root / "knowledge")})
+            status = {
+                "active": True,
+                "status": "paused",
+                "current_stage": "scout_seed",
+                "pause_reason": "missing candidates.csv",
+                "run_dir": str(active),
+            }
+            decision = SourceBridgeDecision(
+                "retry_planned",
+                "planned source candidates remain",
+                "bound-source",
+                str(bound),
+                [str(bound / "planned_candidates.jsonl")],
+            )
+            with patch("wqb.workflow_auto_continue.inspect_scout_seed_source_bridge", return_value=decision):
+                result = decorate_workflow_status_with_source_bridge(paths, status, "2026-09-02T06:40:00+00:00")
+        finally:
+            remove_fixed_test_root(root)
+
+        self.assertEqual(result["next_action"], "workflow-auto-continue")
+        self.assertNotIn("readiness_blocker", result)
+        self.assertEqual(result["source_bridge"]["source_run_id"], "bound-source")
+
     def test_auto_continue_imports_valid_source_candidates_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -284,6 +430,44 @@ class WorkflowAutoContinueTests(unittest.TestCase):
         self.assertEqual(result["next_action"], "maintenance-blocker")
         self.assertEqual(result["source_bridge"]["action"], "maintenance_blocker")
         self.assertIn("rate limit", result["source_bridge"]["reason"])
+        self.assertIn("next_check_at", result["source_bridge"]["metadata"])
+
+    def test_auto_continue_blocks_start_source_batch_without_local_construction_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            active = Path(tmp) / "active"
+            active.mkdir()
+            orchestrator = Mock()
+            orchestrator.status.return_value = {
+                "active": True,
+                "status": "paused",
+                "current_stage": "scout_seed",
+                "pause_reason": "missing candidates.csv",
+                "run_dir": str(active),
+            }
+            runner = Mock(side_effect=AssertionError("source batch must not run without local provenance"))
+            decision = SourceBridgeDecision(
+                "start_source_batch",
+                "no recoverable source run exists",
+                "",
+                "",
+                [str(active / "stages" / "schedule" / "research_schedule.json")],
+                {"field_search": "buzz_field", "dataset_id": "ai_equity_alpha"},
+            )
+            with patch("wqb.workflow_auto_continue.WorkflowOrchestrator", return_value=orchestrator), patch(
+                "wqb.workflow_auto_continue.inspect_scout_seed_source_bridge", return_value=decision
+            ):
+                result = auto_continue_workflow(
+                    Mock(),
+                    {},
+                    "2026-08-16T08:00:00+00:00",
+                    enable_live_api=True,
+                    source_batch_runner=runner,
+                )
+
+        runner.assert_not_called()
+        self.assertEqual(result["next_action"], "maintenance-blocker")
+        self.assertEqual(result["source_bridge"]["action"], "maintenance_blocker")
+        self.assertIn("local construction provenance", result["source_bridge"]["reason"])
 
     def test_auto_continue_starts_bounded_source_batch_when_live_enabled(self):
         calls = []
@@ -302,7 +486,28 @@ class WorkflowAutoContinueTests(unittest.TestCase):
             orchestrator.continue_once("2026-08-12T00:02:00+00:00")
             schedule = next(paths.run_root.glob("*/stages/schedule/research_schedule.json"))
             schedule.write_text(
-                '{"template_matches":[{"field_id":"buzz_intensity_score_15","dataset_id":"analyst_buzz","template_id":"vector_event_count_surprise"}]}',
+                json.dumps(
+                    {
+                        "selected_data": [
+                            {
+                                "field_id": "buzz_intensity_score_15",
+                                "dataset_id": "analyst_buzz",
+                                "source_quality": "platform_raw_capture",
+                                "coverage_status": "measured_raw",
+                                "source_paths": ["raw/platform/data_fields/2026-08-12/data_fields.jsonl"],
+                                "source_updated_at": "2026-08-12",
+                            }
+                        ],
+                        "template_matches": [
+                            {
+                                "field_id": "buzz_intensity_score_15",
+                                "dataset_id": "analyst_buzz",
+                                "template_id": "vector_event_count_surprise",
+                                "skeleton": "rank(ts_delta(vec_count({field}), 1))",
+                            }
+                        ],
+                    }
+                ),
                 encoding="utf-8",
             )
             orchestrator.continue_once("2026-08-12T00:03:00+00:00")

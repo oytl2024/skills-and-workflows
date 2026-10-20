@@ -4,8 +4,14 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 from typing import Any
+import threading
 
 from wqb.knowledge_paths import existing_machine_resource_path
+
+
+CATALOG_CACHE_LIMIT = 2
+CATALOG_CACHE: dict = {}
+CATALOG_CACHE_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -24,6 +30,13 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     """Input: JSONL path. Output: object rows. Read machine ledger rows safely."""
     if not path.exists():
         return []
+    stat = path.stat()
+    key = str(path.resolve())
+    signature = (stat.st_mtime_ns, stat.st_size)
+    with CATALOG_CACHE_LOCK:
+        cached = CATALOG_CACHE.get(key)
+        if cached and cached[0] == signature:
+            return cached[1]
     rows: list[dict[str, Any]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
@@ -34,6 +47,10 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
             continue
         if isinstance(row, dict):
             rows.append(row)
+    with CATALOG_CACHE_LOCK:
+        if len(CATALOG_CACHE) >= CATALOG_CACHE_LIMIT and key not in CATALOG_CACHE:
+            CATALOG_CACHE.pop(next(iter(CATALOG_CACHE)))
+        CATALOG_CACHE[key] = (signature, rows)
     return rows
 
 

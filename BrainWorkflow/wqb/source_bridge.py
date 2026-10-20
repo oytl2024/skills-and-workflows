@@ -2,24 +2,27 @@ from __future__ import annotations
 
 import csv
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from wqb.rate_limit_state import (
+    bounded_retry_is_authorized,
+    MAX_CONSECUTIVE_429,
     cooldown_is_active,
     rate_limit_requires_maintenance,
     read_rate_limit_state,
 )
 from wqb.research_workflow import stage_budget_summary
+from wqb.stage_outcomes import research_outcome
+from wqb.submission_attempts import uncertain_submission_hashes
 from wqb.workflow_events import append_workflow_event
 from wqb.workflow_stage_adapters import import_scout_seed_artifacts
 
 
 SOURCE_BINDING_RELATIVE_PATH = Path("stages") / "scout_seed" / "source_bridge_binding.json"
-
-
 @dataclass(frozen=True)
 class SourceBridgeDecision:
     """Input: source bridge fields. Output: immutable decision. Explain the next source recovery action."""
@@ -45,7 +48,8 @@ def active_run_needs_scout_seed_candidates(summary: dict[str, Any]) -> bool:
         bool(summary.get("active"))
         and str(summary.get("status", "")) == "paused"
         and str(summary.get("current_stage", "")) == "scout_seed"
-        and "candidates.csv" in str(summary.get("pause_reason", ""))
+        and any(marker in str(summary.get("pause_reason", ""))
+                for marker in ("candidates.csv", "checked research results"))
     )
 
 
@@ -149,6 +153,71 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _parse_time(value: str) -> datetime | None:
+    """Input: timestamp string. Output: UTC datetime or none. Parse durable workflow times conservatively."""
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _format_time(value: datetime) -> str:
+    """Input: datetime. Output: ISO timestamp. Normalize source-bridge metadata times."""
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _rate_limit_metadata(state: dict[str, Any], now: str) -> dict[str, Any]:
+    """Input: rate-limit state and now. Output: enriched metadata. Explain cooldown and retry visibility."""
+    if not state or state.get("status") in {"none", ""}:
+        return {}
+    metadata = dict(state)
+    now_dt = _parse_time(now)
+    retry_at = str(state.get("retry_at", ""))
+    retry_dt = _parse_time(retry_at) if retry_at else None
+    active = bool(retry_dt and now_dt and now_dt < retry_dt)
+    expired = bool(retry_dt and now_dt and now_dt >= retry_dt)
+    threshold_reached = rate_limit_requires_maintenance(state, now)
+    authorized = bounded_retry_is_authorized(state, now)
+    try:
+        consecutive = int(state.get("consecutive_429_count", 0) or 0)
+    except (TypeError, ValueError, OverflowError):
+        consecutive = 0
+    try:
+        maximum = int(state.get("max_consecutive_429", MAX_CONSECUTIVE_429) or MAX_CONSECUTIVE_429)
+    except (TypeError, ValueError, OverflowError):
+        maximum = MAX_CONSECUTIVE_429
+    near_threshold = bool(not authorized and not threshold_reached and maximum > 1 and consecutive >= maximum - 1)
+    metadata["bounded_retry_authorized"] = authorized
+    metadata["cooldown_active"] = active
+    metadata["cooldown_expired"] = expired
+    metadata["threshold_reached"] = threshold_reached
+    metadata["near_threshold"] = near_threshold
+    metadata["recovery_eligible"] = bool(not active and not threshold_reached and not near_threshold)
+    metadata["evidence_timestamp"] = now
+    if active:
+        metadata["next_check_at"] = retry_at
+    elif threshold_reached:
+        metadata["operator_acknowledgement_required"] = True
+        metadata["operator_message"] = (
+            "Cooldown has ended, but the 429 threshold still requires operator acknowledgement "
+            "before retrying existing planned source work."
+        )
+        metadata.pop("next_check_at", None)
+    elif near_threshold:
+        metadata["operator_acknowledgement_required"] = True
+        metadata["operator_message"] = (
+            "This source run is one 429 away from the maintenance threshold; operator acknowledgement "
+            "is required before retrying existing planned source work."
+        )
+        metadata.pop("next_check_at", None)
+    elif expired:
+        metadata["next_check_at"] = now
+    return metadata
+
+
 def _selected_scope(active_run_dir: Path) -> dict[str, Any]:
     """Input: active workflow directory. Output: normalized scope dict. Read the workflow-owned selected scope."""
     manifest = _read_json(active_run_dir / "run_manifest.json")
@@ -182,23 +251,127 @@ def _source_batch_metadata(active_run_dir: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     matches = schedule.get("template_matches", [])
+    snapshot = _read_json(active_run_dir / 'run_manifest.json').get('start_snapshot', {})
+    if snapshot.get('hypothesis_binding_version') == 2:
+        return _hypothesis_source_metadata(active_run_dir, snapshot, schedule)
     if not isinstance(matches, list) or not matches or not isinstance(matches[0], dict):
         return {}
     first = matches[0]
     field_id = str(first.get("field_id", "")).strip()
+    dataset_id = str(first.get("dataset_id", "")).strip()
+    selected_rows = schedule.get("selected_data", [])
+    if not isinstance(selected_rows, list):
+        selected_rows = []
+    selected_data = [
+        item
+        for item in selected_rows
+        if isinstance(item, dict)
+        and str(item.get("field_id", "")).strip() == field_id
+        and str(item.get("dataset_id", "")).strip() == dataset_id
+    ]
+    data_row = selected_data[0] if selected_data else {}
+    field_source = (
+        "knowledge"
+        if data_row.get("source_quality") == "platform_raw_capture"
+        and data_row.get("coverage_status") == "measured_raw"
+        else "missing"
+    )
+    template_source = "schedule_template_library" if first.get("template_id") and first.get("skeleton") else "missing"
+    operator_source = "schedule_template_operators" if first.get("skeleton") else "missing"
+    local_blockers: list[str] = []
+    if field_source == "missing":
+        local_blockers.append("local_field_provenance_missing")
+    if template_source == "missing":
+        local_blockers.append("local_template_provenance_missing")
+    if operator_source == "missing":
+        local_blockers.append("local_operator_provenance_missing")
     scope = _selected_scope(active_run_dir)
     stage = "scout"
     budgets = stage_budget_summary()
     return {
         "field_search": field_id,
         "exact_field_id": field_id,
-        "dataset_id": str(first.get("dataset_id", "")).strip(),
+        "dataset_id": dataset_id,
         "template_mode": "economic",
+        "research_round_id": schedule.get("research_round_id", "round-0001"),
         "workflow_stage": stage,
         "submit_mode": "multi",
-        "max_alphas_per_round": int(budgets[stage]),
+        "max_alphas_per_round": max(0, min(int(schedule.get('batch_size', budgets[stage])), int(budgets[stage]))),
+        "field_source": field_source,
+        "operator_source": operator_source,
+        "template_source": template_source,
+        "source_provenance": [
+            {
+                "field_id": data_row.get("field_id", ""),
+                "dataset_id": data_row.get("dataset_id", ""),
+                "source_quality": data_row.get("source_quality", ""),
+                "coverage_status": data_row.get("coverage_status", ""),
+                "source_updated_at": data_row.get("source_updated_at", ""),
+                "source_paths": list(data_row.get("source_paths", []))
+                if isinstance(data_row.get("source_paths"), list)
+                else [],
+            }
+        ]
+        if data_row
+        else [],
+        "template_provenance": {
+            "template_id": first.get("template_id", ""),
+            "skeleton": first.get("skeleton", ""),
+            "hypothesis": first.get("hypothesis", ""),
+        },
+        "allow_live_fallback": False,
+        "local_construction_ready": not local_blockers,
+        "local_construction_blockers": local_blockers,
         **scope,
     }
+
+
+def _hypothesis_source_metadata(run: Path, snapshot: dict, schedule: dict) -> dict:
+    """Input: run Path, frozen snapshot/schedule dicts. Output: v2 metadata dict. Audit every slot without single-field fallback."""
+    from wqb.hypothesis_selection import validate_hypothesis_match
+    refs, bindings, blockers = [], [], []
+    matches = schedule.get('template_matches', [])
+    allowed = schedule.get('hypothesis_allowed_refs')
+    keys = ('template_id', 'hypothesis_id', 'hypothesis_version')
+    for match in matches:
+        ref = {key: match.get(key) for key in keys}
+        if 'binding_id' in match:
+            ref['binding_id'] = match['binding_id']
+        if allowed is not None and ref not in allowed:
+            continue
+        try:
+            bound = validate_hypothesis_match(snapshot, match)
+        except (ValueError, TypeError, KeyError) as exc:
+            blockers.append('frozen_hypothesis_binding_invalid: ' + str(exc))
+            continue
+        refs.append(ref)
+        bindings.append({**ref, **bound})
+    if not refs:
+        blockers.append('no_executable_frozen_hypotheses')
+    fields = {(row['dataset_id'], row['field_id']) for binding in bindings for row in binding['bindings'].values()}
+    provenance = [dict(row) for row in snapshot.get('data_ledger_rows', [])
+                  if (row.get('dataset_id'), row.get('field_id')) in fields]
+    from wqb.research_planning import hypothesis_authorized_maximum
+    maximum = min(int(schedule.get('batch_size', 30)), 30)
+    try:
+        maximum = hypothesis_authorized_maximum(run, maximum)
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError) as exc:
+        blockers.append('research_budget_accounting_required: ' + str(exc))
+        maximum = 0
+    return dict(hypothesis_binding_version=2, hypothesis_allowed_refs=refs,
+                hypothesis_schedule_bindings=bindings, hypothesis_snapshot=snapshot,
+                workflow_run_dir=str(run.resolve()),
+                research_round_id=schedule.get('research_round_id', 'round-0001'),
+                workflow_stage='scout', template_mode='economic', submit_mode='multi',
+                max_alphas_per_round=max(0, maximum),
+                scheduled_batch_maximum=max(0, min(int(schedule.get('batch_size', 30)), 30)),
+                field_search='', exact_field_id='', dataset_id='', template_provenance={},
+                field_source='frozen_hypothesis_snapshot', operator_source='frozen_hypothesis_snapshot',
+                template_source='frozen_hypothesis_snapshot', source_provenance=provenance,
+                allow_live_fallback=False, local_construction_ready=not blockers,
+                local_construction_blockers=blockers,
+                **{key: snapshot['selected_scope'].get(key, 'EQUITY' if key == 'instrument_type' else None)
+                   for key in ('instrument_type', 'region', 'delay', 'universe')})
 
 
 def _latest_source_metadata(source: Path) -> dict[str, Any]:
@@ -238,6 +411,46 @@ def _source_scope(metadata: dict[str, Any]) -> dict[str, Any]:
 def _source_is_compatible(source: Path, expected: dict[str, Any]) -> bool:
     """Input: source directory and active expectations. Output: bool. Require matching field, dataset, stage, and scope provenance."""
     metadata = _latest_source_metadata(source)
+    if expected.get('hypothesis_binding_version') == 2:
+        from wqb.hypothesis_selection import select_hypothesis_batch
+        try:
+            if (metadata.get('hypothesis_binding_version') != 2
+                    or metadata.get('research_round_id') != expected['research_round_id']
+                    or metadata.get('workflow_stage') != 'scout'
+                    or _source_scope(metadata) != {key: expected.get(key) for key in (
+                        'instrument_type', 'region', 'delay', 'universe')}):
+                return False
+            receipt_path = Path(metadata['ai_plan_receipt']).resolve()
+            if receipt_path.parent != Path(expected['workflow_run_dir']).resolve() / 'runtime/research_plans':
+                return False
+            receipt = _read_json(receipt_path)
+            rows = metadata['hypothesis_bindings']
+            if (not rows or receipt.get('status') != 'ready'
+                    or any(row not in receipt['config_patch']['hypothesis_bindings'] for row in rows)):
+                return False
+            if receipt['config_patch'].get('hypothesis_snapshot') != expected['hypothesis_snapshot']:
+                return False
+            allowed = expected['hypothesis_allowed_refs']
+            from wqb.hypothesis_selection import binding_group_id
+            if any(not any(all(ref[key] == row[key] for key in ('template_id', 'hypothesis_id', 'hypothesis_version'))
+                           and ('binding_id' not in ref or ref['binding_id'] == binding_group_id(row))
+                           for ref in allowed) for row in rows):
+                return False
+            published_maximum = receipt['config_patch']['max_alphas_per_round']
+            if type(published_maximum) is not int or not 0 < published_maximum <= expected['scheduled_batch_maximum']:
+                return False
+            selected = select_hypothesis_batch(expected['hypothesis_snapshot'], rows, published_maximum)
+            return len(selected['selected']) == len(rows)
+        except (OSError, ValueError, TypeError, KeyError):
+            return False
+    round_id = expected.get('research_round_id', 'round-0001')
+    if round_id != 'round-0001' and metadata.get('research_round_id') != round_id:
+        return False
+    template = expected.get('template_provenance') or {}
+    captured_template = metadata.get('template_provenance') or {}
+    if captured_template and any(captured_template.get(key) != template.get(key)
+                                 for key in ('template_id', 'skeleton', 'hypothesis')):
+        return False
     source_field = str(metadata.get("exact_field_id", "")).strip()
     if not source_field:
         source_field = str(metadata.get("field_search", "")).strip()
@@ -330,6 +543,14 @@ def _persist_binding(
 
 def _decision_for_source(source: Path, now: str) -> SourceBridgeDecision | None:
     """Input: one compatible source and timestamp. Output: recovery decision or none. Classify durable source evidence."""
+    events_path = source / "simulation_events.jsonl"
+    uncertain = uncertain_submission_hashes(_read_jsonl(events_path))
+    if uncertain:
+        return SourceBridgeDecision(
+            "maintenance_blocker", "uncertain simulation submission requires platform reconciliation",
+            source.name, str(source), [str(events_path)],
+            {"uncertain_expression_hashes": sorted(uncertain)},
+        )
     candidate_path = source / "candidates.csv"
     if _candidate_file_valid(source):
         return SourceBridgeDecision(
@@ -347,16 +568,36 @@ def _decision_for_source(source: Path, now: str) -> SourceBridgeDecision | None:
             str(source),
             [str(candidate_path)],
         )
+    try:
+        outcome = research_outcome(source)
+    except (OSError, ValueError):
+        outcome = {"outcome": "missing_results"}
+    events_path = source / "simulation_events.jsonl"
+    _, unresolved = _planned_candidate_state(source)
+    if (outcome["outcome"] in {"repairable_signal", "qualified", "no_signal"}
+            and not _has_in_flight_simulation(events_path)
+            and (outcome["outcome"] != "no_signal" or not unresolved)):
+        return SourceBridgeDecision(
+            "import_research_outcome", "checked source research ready for triage",
+            source.name, str(source), [str(source / "all_alphas.jsonl")],
+            {key: value for key, value in outcome.items() if key != "rows"},
+        )
     cooldown_path = source / "rate_limit_state.json"
     cooldown = read_rate_limit_state(cooldown_path)
-    if rate_limit_requires_maintenance(cooldown):
+    rate_metadata = _rate_limit_metadata(cooldown, now)
+    if rate_limit_requires_maintenance(cooldown, now):
+        retry_at = str(rate_metadata.get("retry_at", ""))
+        expired = bool(rate_metadata.get("cooldown_expired"))
+        threshold_reason = "rate limit threshold still blocks retry"
+        if retry_at and not expired:
+            threshold_reason = "consecutive platform rate limit threshold reached"
         return SourceBridgeDecision(
             "maintenance_blocker",
-            "consecutive platform rate limit threshold reached",
+            threshold_reason,
             source.name,
             str(source),
             [str(cooldown_path)],
-            cooldown,
+            rate_metadata,
         )
     if cooldown_is_active(cooldown, now):
         return SourceBridgeDecision(
@@ -365,7 +606,7 @@ def _decision_for_source(source: Path, now: str) -> SourceBridgeDecision | None:
             source.name,
             str(source),
             [str(cooldown_path)],
-            cooldown,
+            rate_metadata,
         )
     events_path = source / "simulation_events.jsonl"
     if events_path.exists() and _has_in_flight_simulation(events_path):
@@ -379,12 +620,22 @@ def _decision_for_source(source: Path, now: str) -> SourceBridgeDecision | None:
     planned_path = source / "planned_candidates.jsonl"
     has_planned, has_unresolved = _planned_candidate_state(source)
     if has_unresolved:
+        if rate_metadata.get("operator_acknowledgement_required") is True:
+            return SourceBridgeDecision(
+                "maintenance_blocker",
+                "near rate limit threshold requires acknowledgement before retry",
+                source.name,
+                str(source),
+                [str(cooldown_path), str(planned_path)],
+                rate_metadata,
+            )
         return SourceBridgeDecision(
             "retry_planned",
             "planned source candidates remain",
             source.name,
             str(source),
             [str(planned_path)],
+            rate_metadata or None,
         )
     if planned_path.exists() or has_planned:
         return SourceBridgeDecision(
@@ -426,6 +677,9 @@ def inspect_scout_seed_source_bridge(
     active = Path(active_run_dir)
     metadata = _source_batch_metadata(active)
     schedule_path = active / "stages" / "schedule" / "research_schedule.json"
+    excluded = _read_json(schedule_path).get("excluded_source_run_ids", [])
+    if not isinstance(excluded, list) or any(not isinstance(item, str) for item in excluded):
+        return SourceBridgeDecision("maintenance_blocker", "invalid round source exclusion evidence")
     binding_status, binding = _read_binding(active)
     binding_path = _binding_path(active)
     if binding_status == "invalid":
@@ -436,6 +690,8 @@ def inspect_scout_seed_source_bridge(
         )
     if binding_status == "bound":
         source_run_id = str(binding.get("source_run_id", ""))
+        if source_run_id in excluded:
+            return SourceBridgeDecision("maintenance_blocker", "bound source belongs to a completed round")
         source = root / source_run_id
         if not source.is_dir() or source.resolve().parent != root.resolve():
             return SourceBridgeDecision(
@@ -470,11 +726,11 @@ def inspect_scout_seed_source_bridge(
             str(source),
             [str(binding_path), str(source / "run_meta.jsonl")],
         )
-    if metadata.get("field_search") and _selected_scope(active):
+    if (metadata.get("field_search") or metadata.get('hypothesis_binding_version') == 2) and _selected_scope(active):
         sources = [
             source
             for source in _source_runs(root, active)
-            if _source_is_compatible(source, metadata)
+            if source.name not in excluded and _source_is_compatible(source, metadata)
         ]
         decisions = [
             (source, decision)
@@ -484,6 +740,7 @@ def inspect_scout_seed_source_bridge(
         ]
         action_priority = {
             "import_existing": 0,
+            "import_research_outcome": 0,
             "rate_limit_wait": 1,
             "complete_in_flight": 2,
             "retry_planned": 3,
@@ -495,6 +752,15 @@ def inspect_scout_seed_source_bridge(
                 key=lambda item: action_priority.get(item[1].action, 99),
             )
             return _bind_decision(active, source, metadata, decision, now)
+        if metadata.get("local_construction_ready") is False:
+            return SourceBridgeDecision(
+                "maintenance_blocker",
+                "local construction provenance is required before starting source batch",
+                "",
+                "",
+                [str(schedule_path)],
+                metadata,
+            )
         return SourceBridgeDecision(
             "start_source_batch",
             "no recoverable source run exists",
@@ -519,6 +785,6 @@ def import_existing_source_artifacts(
     imported_at: str,
 ) -> dict[str, object]:
     """Input: active run dir, bridge decision, timestamp. Output: import summary. Import valid source candidates once."""
-    if decision.action != "import_existing" or not decision.source_run_dir:
+    if decision.action not in {"import_existing", "import_research_outcome"} or not decision.source_run_dir:
         raise ValueError("source bridge decision is not importable")
     return import_scout_seed_artifacts(active_run_dir, decision.source_run_dir, imported_at)

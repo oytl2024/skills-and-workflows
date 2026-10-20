@@ -39,7 +39,7 @@ from wqb.expression import expression_hash, is_power_pool_complexity_ok, replace
 from wqb.generator import build_settings, generate_seed_candidates, simulation_payload
 from wqb.knowledge import fetch_knowledge_snapshot
 from wqb.knowledge_bootstrap import bootstrap_knowledge, bootstrap_summary_to_dict
-from wqb.knowledge_compile import compile_research_records
+from wqb.knowledge_compile import compile_research_records, compile_semantic_knowledge_command
 from wqb.delivery_gate import run_delivery_gate
 from wqb.delivery_verification import run_delivery_verification
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest, write_freshness_report
@@ -55,6 +55,8 @@ from wqb.orchestrator import OrchestratorPaths, WorkflowOrchestrator
 from wqb.principle_model import OptionCard, ScoreBreakdown, SourceEvidence
 from wqb.recorder import RunRecorder
 from wqb.rate_limit_state import (
+    check_source_retry_authorization,
+    acknowledge_rate_limit_recovery,
     cooldown_is_active,
     read_rate_limit_state,
     record_rate_limit,
@@ -66,18 +68,23 @@ from wqb.research_workflow import build_parallel_stage_plan, cap_simulation_coun
 from wqb.rule_refresh import refresh_incentive_snapshot
 from wqb.run_readiness import evaluate_run_readiness, write_readiness_reports
 from wqb.simulator import extract_alpha_id, poll_simulation, resolve_multisimulation_alpha_ids, submit_multisimulation, submit_simulation
+from wqb.submission_attempts import finish_submission_attempt, start_submission_attempt, uncertain_submission_hashes
 from wqb.subagent_handoff import build_handoff_packets, write_handoff_packets
 from wqb.template_library import load_template_library, load_template_library_from_knowledge
 from wqb.workflow_launcher import create_run_manifest, load_workflow_launch_config, write_run_manifest
 from wqb.workflow_paths import resolve_project_root, resolve_run_root
 from wqb.console_server import run_console
+from wqb.runtime_control import RuntimePaused, cooperative_sleep
+from wqb.simulation_request_policy import CONSERVATIVE_BATCH_CEILING, choose_batch_size
 
 
-FIELD_BATCH_MULTI_CHUNK_SIZE = 5
+FIELD_BATCH_MULTI_CHUNK_SIZE = CONSERVATIVE_BATCH_CEILING
+RETRY_PLANNED_MULTI_CHUNK_SIZE = CONSERVATIVE_BATCH_CEILING
 FIELD_BATCH_API_MAX_RECORDS = 80
 FIELD_BATCH_SEED_FIELD_LIMIT = 40
 FIELD_BATCH_CANDIDATE_BUFFER_MULTIPLIER = 3
 DEFAULT_MULTI_CHUNK_SLEEP_SECONDS = 0.0
+RETRY_PLANNED_MULTI_CHUNK_SLEEP_SECONDS = 30.0
 KNOWLEDGE_ROOT_ENV = "BRAIN_KNOWLEDGE_ROOT"
 
 
@@ -125,11 +132,15 @@ def make_run_dir(config: dict[str, Any]) -> Path:
 
 def build_client(config: dict[str, Any]) -> WQBClient:
     """Input: run config. Output: WQB client. Centralize client construction."""
-    return WQBClient(
+    client = WQBClient(
         timeout_seconds=int(config["request_timeout_seconds"]),
         max_retries=int(config["max_retries"]),
         base_backoff_seconds=int(config["base_backoff_seconds"]),
     )
+    knowledge_root = config.get("knowledge_root")
+    if isinstance(knowledge_root, (str, Path)) and Path(knowledge_root).is_absolute():
+        client.knowledge_root = Path(knowledge_root)
+    return client
 
 
 def plan_research_options(config: dict[str, Any], max_options: int, output_dir: str) -> dict[str, Any]:
@@ -2051,6 +2062,46 @@ def blend_repair_expression(base_expression: str, field_expression: str, weight:
     return f"{assignments};\n{blend}"
 
 
+def _hypothesis_source_selection(config: dict[str, Any]):
+    """Input: consumed v2 config dict. Output: SourceSelection. Validate durable plan and select all frozen fields without live vault reads."""
+    from wqb.knowledge_source_resolver import SourceSelection
+    from wqb.research_planning import ResearchPlanningBlocked
+    from wqb.generator import generate_hypothesis_candidates
+    receipt_path = Path(config.get('ai_plan_receipt', ''))
+    if not receipt_path.is_file():
+        raise ResearchPlanningBlocked('v2 hypothesis plan must be persisted before source generation')
+    saved = json.loads(receipt_path.read_text(encoding='utf-8'))
+    patch = saved.get('config_patch', {})
+    if saved.get('status') != 'ready' or any(patch.get(key) != config.get(key) for key in (
+            'hypothesis_snapshot', 'scheduled_hypotheses', 'hypothesis_bindings', 'max_alphas_per_round')):
+        raise ResearchPlanningBlocked('v2 source config differs from consumed durable plan')
+    import hashlib
+    from wqb.generator import SCHEDULED_DECAYS, SCHEDULED_NEUTRALIZATIONS
+    manifest_path = receipt_path.parent.parent.parent / 'run_manifest.json'
+    if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != saved['identity']['manifest_sha256']:
+        raise ResearchPlanningBlocked('v2 source immutable manifest digest differs from plan')
+    fixed = saved['identity'].get('settings', saved['identity'].get('parent', {}).get('settings'))
+    for row in config['scheduled_hypotheses']:
+        if config.get('hypothesis_execution_kind') == 'paired_scout':
+            if row['settings'] != fixed:
+                raise ResearchPlanningBlocked('paired source settings differ from frozen controls')
+        elif (row['settings'].get('decay') not in SCHEDULED_DECAYS
+                or row['settings'].get('neutralization') not in SCHEDULED_NEUTRALIZATIONS
+                or {key: value for key, value in row['settings'].items() if key not in ('decay', 'neutralization')}
+                != {key: value for key, value in fixed.items() if key not in ('decay', 'neutralization')}):
+            raise ResearchPlanningBlocked('v2 source settings differ from bounded fixed plan')
+    snapshot = config['hypothesis_snapshot']
+    if config.get('hypothesis_execution_kind') == 'paired_scout':
+        from wqb.generator import read_experiment_sidecar
+        if any(patch.get(key) != config.get(key) for key in ('experiment_sidecar_path', 'experiment_sidecar_sha256')):
+            raise ResearchPlanningBlocked('paired source sidecar differs from consumed durable plan')
+        read_experiment_sidecar(str(receipt_path), snapshot)
+    generate_hypothesis_candidates(snapshot, config['scheduled_hypotheses'], config['max_alphas_per_round'])
+    fields = [dict(row, id=row['field_id'], type=row['field_type']) for row in snapshot['data_ledger_rows']]
+    return SourceSelection(fields, 'frozen_hypothesis_snapshot', 'frozen_hypothesis_snapshot',
+                           'frozen_hypothesis_snapshot', snapshot['data_ledger_rows'], [])
+
+
 def run_field_batch(
     client,
     recorder: RunRecorder,
@@ -2068,17 +2119,27 @@ def run_field_batch(
     multi_chunk_sleep_seconds: float = DEFAULT_MULTI_CHUNK_SLEEP_SECONDS,
 ) -> list[Any]:
     """Input: WQB client, recorder, config, field filters, mode. Output: check summaries. Run seed fields."""
-    selection = resolve_source_inputs(
+    v2 = config.get('hypothesis_binding_version') == 2
+    if v2:
+        from wqb.runtime_control import check_submission_allowed
+        check_submission_allowed()
+        if any((field_search, dataset_id, exact_field_id, field_cache_path, field_suffix)):
+            from wqb.research_planning import ResearchPlanningBlocked
+            raise ResearchPlanningBlocked('single-field/cache filters cannot override a frozen multi-slot hypothesis plan')
+    selection = _hypothesis_source_selection(config) if v2 else resolve_source_inputs(
         config.get("knowledge_root", default_knowledge_root()),
         config,
         field_search=field_search,
         dataset_id=dataset_id,
         exact_field_id=exact_field_id,
-        allow_live_fallback=True,
+        allow_live_fallback=bool(config.get("allow_live_source_fallback", True)),
         max_fields=FIELD_BATCH_API_MAX_RECORDS,
     )
     operator_source = selection.operator_source
     template_source = selection.template_source
+    if config.get('scheduled_template') and not v2:
+        template_source = 'knowledge_schedule'
+        operator_source = 'knowledge_operator_ledger'
     knowledge_fields = filter_fields_by_suffix(selection.fields, field_suffix)
     knowledge_field_ids = {str(field.get("id", "")) for field in knowledge_fields}
     if field_cache_path:
@@ -2098,6 +2159,19 @@ def run_field_batch(
             row for row in selection.provenance if str(row.get("field_id", "")) in knowledge_field_ids
         ]
     else:
+        if not bool(config.get("allow_live_source_fallback", True)):
+            recorder.append_jsonl(
+                "run_errors.jsonl",
+                {
+                    "stage": "run_field_batch_local_source_preflight",
+                    "status": "local_source_missing",
+                    "field_search": field_search,
+                    "dataset_id": dataset_id,
+                    "exact_field_id": exact_field_id,
+                    "blockers": selection.blockers,
+                },
+            )
+            return []
         fields = fetch_data_fields(
             client,
             config["instrument_type"],
@@ -2156,16 +2230,25 @@ def run_field_batch(
             "candidate_generation_limit": candidate_generation_limit,
             "seed_field_ids": [str(field.get("id")) for field in seed_fields],
             "regular_peer_missing_ids": regular_peer_missing_ids,
+            "template_provenance": config.get("scheduled_template", {}),
+            "research_round_id": config.get("research_round_id", ""),
+            "ai_plan_receipt": config.get("ai_plan_receipt", ""),
+            **({key: config.get(key) for key in ('hypothesis_binding_version', 'hypothesis_bindings',
+                'hypothesis_execution_kind', 'hypothesis_plan_quality', 'hypothesis_plan_cache_status')} if v2 else {}),
+            **({key: config[key] for key in ('instrument_type', 'region', 'delay', 'universe')} if v2 else {}),
         },
     )
     settings = build_settings(config)
-    candidates = generate_seed_candidates(
-        seed_fields,
-        settings,
-        candidate_generation_limit,
-        generation=0,
-        template_mode=template_mode,
-    )
+    scheduled_template = config.get("scheduled_template")
+    if v2:
+        from wqb.generator import generate_hypothesis_candidates
+        candidates = generate_hypothesis_candidates(config['hypothesis_snapshot'], config['scheduled_hypotheses'], effective_max_alphas)
+    elif scheduled_template:
+        from wqb.generator import generate_scheduled_candidates
+        candidates = generate_scheduled_candidates(seed_fields, settings, scheduled_template, candidate_generation_limit)
+    else:
+        candidates = generate_seed_candidates(
+            seed_fields, settings, candidate_generation_limit, generation=0, template_mode=template_mode)
     filtered_candidates = []
     for candidate in candidates:
         precheck = precheck_expression(candidate.expression, workflow_stage)
@@ -2187,8 +2270,16 @@ def run_field_batch(
     metadata: list[dict[str, Any]] = []
     payloads: list[dict[str, Any]] = []
     seen_expression_hashes = run_root_expression_hashes(config.get("run_root", "runs"))
+    missing_operator_provenance = False
     for candidate in candidates:
-        expr_hash = expression_hash(candidate.expression)
+        if scheduled_template and not v2:
+            provenance = expression_operator_provenance(candidate.expression,
+                config.get('knowledge_root', default_knowledge_root()))
+            if not provenance or any(row.get('source') != 'knowledge_operator_ledger' for row in provenance):
+                missing_operator_provenance = True
+                continue
+        expr_hash = (simulation_identity_hash(candidate.expression, candidate.settings) if scheduled_template or v2
+                     else expression_hash(candidate.expression))
         if expr_hash in seen_expression_hashes:
             recorder.append_jsonl(
                 "duplicate_rejections.jsonl",
@@ -2204,6 +2295,7 @@ def run_field_batch(
             {
                 "expression_hash": expr_hash,
                 "expression": candidate.expression,
+                "settings": candidate.settings,
                 "field_search": field_search,
                 "dataset_id": dataset_id,
                 "field_suffix": field_suffix,
@@ -2211,17 +2303,68 @@ def run_field_batch(
                 "workflow_stage": workflow_stage,
                 "human_idea": human_idea,
                 "operator_source": operator_source,
-                "operator_provenance": expression_operator_provenance(
+                "template_provenance": scheduled_template or {},
+                "research_round_id": config.get("research_round_id", ""),
+                "operator_provenance": [] if v2 else expression_operator_provenance(
                     candidate.expression,
                     config.get("knowledge_root", default_knowledge_root()),
                 ),
             }
         )
+        if v2:
+            from wqb.generator import hypothesis_candidate_metadata
+            binding = next(row for row in config['scheduled_hypotheses'] if row['candidate_id'] == candidate.tags[-1])
+            metadata[-1].update(hypothesis_candidate_metadata(config['hypothesis_snapshot'], binding, config['ai_plan_receipt']))
+            metadata[-1]['hypothesis_plan_quality'] = config.get('hypothesis_plan_quality', {})
         payloads.append(simulation_payload(candidate.settings, candidate.expression))
         if len(metadata) >= effective_max_alphas:
             break
-    for item in metadata:
-        recorder.append_jsonl("planned_candidates.jsonl", item)
+    if (scheduled_template or v2) and not metadata:
+        if missing_operator_provenance:
+            from wqb.research_planning import ResearchPlanningBlocked
+            raise ResearchPlanningBlocked('scheduled operators lack authoritative knowledge provenance')
+        from wqb.research_planning import ResearchVariantsExhausted
+        raise ResearchVariantsExhausted("no valid novel scheduled candidates; no simulations submitted")
+    if scheduled_template or v2:
+        v2_audit = {}
+        if v2:
+            usage = {}
+            for item in metadata:
+                for key in {(row['dataset_id'], row['field_id']) for row in item['bindings'].values()}:
+                    usage[key] = usage.get(key, 0) + 1
+            consumed = json.loads(Path(config['ai_plan_receipt']).read_text(encoding='utf-8')).get('consumption_audit', {})
+            v2_audit = dict(hypothesis_bindings=[item['hypothesis_binding'] for item in metadata],
+                planned_hypothesis_bindings=config['hypothesis_bindings'],
+                hypothesis_plan_consumption=consumed, hypothesis_plan_cache_status=consumed.get('cache_status', 'created'),
+                field_usage_counts=[dict(dataset_id=key[0], field_id=key[1], candidate_count=count)
+                                   for key, count in sorted(usage.items())])
+        recorder.append_jsonl('run_meta.jsonl', {
+            **recorder.read_jsonl('run_meta.jsonl')[-1],
+            'workflow_stage': workflow_stage, 'actual_planned_alphas': len(metadata),
+            'requested_max_alphas': requested_max_alphas, 'effective_max_alphas': effective_max_alphas,
+            'batch_size_policy': 'maximum_not_minimum',
+            **v2_audit,
+        })
+    if scheduled_template or v2:
+        if config.get('hypothesis_execution_kind') == 'paired_scout':
+            from wqb.generator import read_experiment_sidecar
+            from wqb.runtime_control import _write
+            sidecar = read_experiment_sidecar(config['ai_plan_receipt'], config['hypothesis_snapshot'])
+            if len(metadata) != len(config['scheduled_hypotheses']):
+                from wqb.research_planning import ResearchPlanningBlocked
+                raise ResearchPlanningBlocked('paired source cannot hand off a filtered half-pair')
+            _write(recorder.run_dir / 'experiment_sidecar.json', sidecar)
+        recorder.publish_plan(metadata)
+    else:
+        for item in metadata:
+            recorder.append_jsonl("planned_candidates.jsonl", item)
+
+    if v2:
+        return submit_candidate_payloads(
+            client, recorder, payloads, metadata, submit_mode, "run_field_batch",
+            defer_poll=defer_poll, multi_chunk_sleep_seconds=multi_chunk_sleep_seconds,
+            knowledge_root=config.get("knowledge_root", default_knowledge_root()),
+        )
 
     summaries = []
     candidate_rows: list[dict[str, Any]] = []
@@ -2234,14 +2377,22 @@ def run_field_batch(
             return []
         fallback_payloads: list[dict[str, Any]] = []
         fallback_metadata: list[dict[str, Any]] = []
-        for start in range(0, len(payloads), FIELD_BATCH_MULTI_CHUNK_SIZE):
+        chunk_size = choose_batch_size({"requested_size": FIELD_BATCH_MULTI_CHUNK_SIZE}, len(payloads), len(payloads), None)
+        for start in range(0, len(payloads), chunk_size):
             if start > 0 and multi_chunk_sleep_seconds > 0:
-                time.sleep(multi_chunk_sleep_seconds)
-            chunk_payloads = payloads[start : start + FIELD_BATCH_MULTI_CHUNK_SIZE]
-            chunk_metadata = metadata[start : start + FIELD_BATCH_MULTI_CHUNK_SIZE]
+                cooperative_sleep(multi_chunk_sleep_seconds)
+            chunk_payloads = payloads[start : start + chunk_size]
+            chunk_metadata = metadata[start : start + chunk_size]
+            check_source_retry_authorization(recorder.run_dir)
+            attempt_id = start_submission_attempt(recorder, chunk_metadata, "run_field_batch_multi_submit")
             try:
                 progress_url = submit_multisimulation(client, chunk_payloads)
+            except RuntimePaused:
+                finish_submission_attempt(recorder, chunk_metadata, attempt_id, "SUBMISSION_REJECTED")
+                raise
             except requests.exceptions.RequestException as err:
+                if definitive_submission_rejection(err):
+                    finish_submission_attempt(recorder, chunk_metadata, attempt_id, "SUBMISSION_REJECTED")
                 record_recoverable_network_error(
                     recorder,
                     "run_field_batch_multi_submit",
@@ -2259,15 +2410,7 @@ def run_field_batch(
                 if is_http_status_error(err, 429):
                     break
                 continue
-            for item in chunk_metadata:
-                recorder.append_jsonl(
-                    "simulation_events.jsonl",
-                    {
-                        "event": "SUBMITTED",
-                        "progress_url": progress_url,
-                        **item,
-                    },
-                )
+            finish_submission_attempt(recorder, chunk_metadata, attempt_id, "SUBMITTED", progress_url=progress_url)
             if defer_poll:
                 continue
             try:
@@ -2359,9 +2502,16 @@ def run_field_batch(
         metadata = fallback_metadata
 
     for payload, item in zip(payloads, metadata):
+        check_source_retry_authorization(recorder.run_dir)
+        attempt_id = start_submission_attempt(recorder, [item], "run_field_batch_submit")
         try:
             progress_url = submit_simulation(client, payload)
+        except RuntimePaused:
+            finish_submission_attempt(recorder, [item], attempt_id, "SUBMISSION_REJECTED")
+            raise
         except requests.exceptions.RequestException as err:
+            if definitive_submission_rejection(err):
+                finish_submission_attempt(recorder, [item], attempt_id, "SUBMISSION_REJECTED")
             record_recoverable_network_error(
                 recorder,
                 "run_field_batch_submit",
@@ -2371,14 +2521,7 @@ def run_field_batch(
             if is_http_status_error(err, 429):
                 break
             continue
-        recorder.append_jsonl(
-            "simulation_events.jsonl",
-            {
-                "event": "SUBMITTED",
-                "progress_url": progress_url,
-                **item,
-            },
-        )
+        finish_submission_attempt(recorder, [item], attempt_id, "SUBMITTED", progress_url=progress_url)
         try:
             progress = poll_simulation(client, progress_url)
         except requests.exceptions.RequestException as err:
@@ -2492,15 +2635,27 @@ def submitted_or_terminal_hashes(recorder: RunRecorder) -> set[str]:
     return hashes
 
 
+def definitive_submission_rejection(error: requests.exceptions.RequestException) -> bool:
+    """Input: HTTP request error. Output: bool. Classify explicit 4xx responses as non-accepted submissions."""
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    return isinstance(status, int) and 400 <= status < 500
+
+
 def retry_planned_candidates(
     client,
     recorder: RunRecorder,
     config: dict[str, Any],
     submit_mode: str = "multi",
     defer_poll: bool = False,
+    multi_chunk_size: int = RETRY_PLANNED_MULTI_CHUNK_SIZE,
+    multi_chunk_sleep_seconds: float = RETRY_PLANNED_MULTI_CHUNK_SLEEP_SECONDS,
+    sleep_func=cooperative_sleep,
 ) -> list[Any]:
     """Input: WQB client, run recorder, config, submit mode. Output: check summaries. Retry unsubmitted planned items."""
     planned = recorder.read_jsonl("planned_candidates.jsonl")
+    if uncertain_submission_hashes(recorder.read_jsonl("simulation_events.jsonl")):
+        raise RuntimeError("uncertain simulation submission requires platform reconciliation before retry")
     skipped_hashes = submitted_or_terminal_hashes(recorder)
     settings = build_settings(config)
     payloads: list[dict[str, Any]] = []
@@ -2517,7 +2672,12 @@ def retry_planned_candidates(
             )
             continue
         metadata.append(dict(item))
-        payloads.append(simulation_payload(settings, expression))
+        persisted_settings = item.get('settings')
+        if persisted_settings is not None and not isinstance(persisted_settings, dict):
+            raise ValueError('planned candidate settings are malformed')
+        if item.get('template_provenance') and not persisted_settings:
+            raise ValueError('scheduled candidate is missing immutable settings')
+        payloads.append(simulation_payload(persisted_settings or settings, expression))
     return submit_candidate_payloads(
         client,
         recorder,
@@ -2526,6 +2686,9 @@ def retry_planned_candidates(
         submit_mode,
         "retry_planned",
         defer_poll=defer_poll,
+        multi_chunk_size=multi_chunk_size,
+        multi_chunk_sleep_seconds=multi_chunk_sleep_seconds,
+        sleep_func=sleep_func,
         knowledge_root=config.get("knowledge_root", default_knowledge_root()),
     )
 
@@ -2538,8 +2701,9 @@ def submit_candidate_payloads(
     submit_mode: str,
     stage_prefix: str,
     defer_poll: bool = False,
+    multi_chunk_size: int = FIELD_BATCH_MULTI_CHUNK_SIZE,
     multi_chunk_sleep_seconds: float = DEFAULT_MULTI_CHUNK_SLEEP_SECONDS,
-    sleep_func=time.sleep,
+    sleep_func=cooperative_sleep,
     knowledge_root: str | Path | None = None,
 ) -> list[Any]:
     """Input: client, payloads, mode, options, vault root. Output: summaries. Submit and classify with active rules."""
@@ -2547,6 +2711,9 @@ def submit_candidate_payloads(
     candidate_rows: list[dict[str, Any]] = []
     if submit_mode not in {"multi", "serial"}:
         raise ValueError("submit_mode must be 'multi' or 'serial'")
+    if int(multi_chunk_size) <= 0:
+        raise ValueError("multi_chunk_size must be positive")
+    chunk_size = choose_batch_size({"requested_size": int(multi_chunk_size)}, max(1, len(payloads)), max(1, len(payloads)), None)
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     cooldown_state = read_rate_limit_state(recorder.run_dir / "rate_limit_state.json")
     if cooldown_is_active(cooldown_state, now):
@@ -2563,19 +2730,31 @@ def submit_candidate_payloads(
     if submit_mode == "multi":
         fallback_payloads: list[dict[str, Any]] = []
         fallback_metadata: list[dict[str, Any]] = []
-        for start in range(0, len(payloads), FIELD_BATCH_MULTI_CHUNK_SIZE):
-            chunk_payloads = payloads[start : start + FIELD_BATCH_MULTI_CHUNK_SIZE]
-            chunk_metadata = metadata[start : start + FIELD_BATCH_MULTI_CHUNK_SIZE]
+        for start in range(0, len(payloads), chunk_size):
+            chunk_payloads = payloads[start : start + chunk_size]
+            chunk_metadata = metadata[start : start + chunk_size]
             if start > 0 and multi_chunk_sleep_seconds > 0:
                 sleep_func(multi_chunk_sleep_seconds)
+            check_source_retry_authorization(recorder.run_dir)
+            attempt_id = start_submission_attempt(recorder, chunk_metadata, f"{stage_prefix}_multi_submit")
             try:
                 progress_url = submit_multisimulation(client, chunk_payloads)
+            except RuntimePaused:
+                finish_submission_attempt(recorder, chunk_metadata, attempt_id, "SUBMISSION_REJECTED")
+                raise
             except requests.exceptions.RequestException as err:
+                if definitive_submission_rejection(err):
+                    finish_submission_attempt(recorder, chunk_metadata, attempt_id, "SUBMISSION_REJECTED")
                 record_recoverable_network_error(
                     recorder,
                     f"{stage_prefix}_multi_submit",
                     err,
-                    {"payload_count": len(chunk_payloads), "chunk_start": start},
+                    {
+                        "payload_count": len(chunk_payloads),
+                        "chunk_start": start,
+                        "multi_chunk_size": chunk_size,
+                        "multi_chunk_sleep_seconds": multi_chunk_sleep_seconds,
+                    },
                 )
                 if is_http_status_error(err, 400):
                     fallback_payloads.extend(chunk_payloads)
@@ -2589,14 +2768,15 @@ def submit_candidate_payloads(
                             **(chunk_metadata[0] if chunk_metadata else {}),
                             "payload_count": len(chunk_payloads),
                             "chunk_start": start,
+                            "multi_chunk_size": chunk_size,
+                            "multi_chunk_sleep_seconds": multi_chunk_sleep_seconds,
                         },
                         datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
                     )
                     return summaries
                 continue
             reset_rate_limit(recorder.run_dir, f"{stage_prefix}_multi_submit", now)
-            for item in chunk_metadata:
-                recorder.append_jsonl("simulation_events.jsonl", {"event": "SUBMITTED", "progress_url": progress_url, **item})
+            finish_submission_attempt(recorder, chunk_metadata, attempt_id, "SUBMITTED", progress_url=progress_url)
             if defer_poll:
                 continue
             try:
@@ -2670,9 +2850,16 @@ def submit_candidate_payloads(
         payloads = fallback_payloads
         metadata = fallback_metadata
     for payload, item in zip(payloads, metadata):
+        check_source_retry_authorization(recorder.run_dir)
+        attempt_id = start_submission_attempt(recorder, [item], f"{stage_prefix}_submit")
         try:
             progress_url = submit_simulation(client, payload)
+        except RuntimePaused:
+            finish_submission_attempt(recorder, [item], attempt_id, "SUBMISSION_REJECTED")
+            raise
         except requests.exceptions.RequestException as err:
+            if definitive_submission_rejection(err):
+                finish_submission_attempt(recorder, [item], attempt_id, "SUBMISSION_REJECTED")
             record_recoverable_network_error(recorder, f"{stage_prefix}_submit", err, item)
             if is_http_status_error(err, 429):
                 record_rate_limit(
@@ -2685,7 +2872,7 @@ def submit_candidate_payloads(
                 break
             continue
         reset_rate_limit(recorder.run_dir, f"{stage_prefix}_serial_submit", now)
-        recorder.append_jsonl("simulation_events.jsonl", {"event": "SUBMITTED", "progress_url": progress_url, **item})
+        finish_submission_attempt(recorder, [item], attempt_id, "SUBMITTED", progress_url=progress_url)
         if defer_poll:
             continue
         try:
@@ -3570,6 +3757,7 @@ def parse_args() -> argparse.Namespace:
             "launch-console",
             "bootstrap-knowledge",
             "compile-research-records",
+            "compile-semantic-knowledge",
             "compile-knowledge",
             "delivery-verify",
             "delivery-gate",
@@ -3578,7 +3766,10 @@ def parse_args() -> argparse.Namespace:
             "workflow-start",
             "workflow-continue",
             "workflow-auto-continue",
+            "workflow-run",
+            "workflow-pause",
             "workflow-status",
+            "workflow-acknowledge-source-rate-limit",
             "workflow-resume",
             "workflow-abort",
             "workflow-import-scout-seed-artifacts",
@@ -3649,6 +3840,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--readiness-mode", choices=["maintenance", "plan-only", "research", "submit-candidate"], default="plan-only")
     parser.add_argument("--batch-size", type=int, default=30)
     parser.add_argument("--enable-live-api", action="store_true", default=False)
+    parser.add_argument("--ai-executor", choices=["none", "codex"], default="none")
+    parser.add_argument('--max-mechanisms', type=int, default=3)
+    parser.add_argument('--max-conditions-per-mechanism', type=int, default=2)
+    parser.add_argument("--expected-runtime-revision", default=None)
     parser.add_argument("--confirm-submit", action="store_true", default=False)
     parser.add_argument("--today", default="")
     parser.add_argument("--workflow-defaults", default="configs/workflow_defaults.example.json")
@@ -3722,6 +3917,20 @@ def launch_overrides_from_args(args: argparse.Namespace, argv: list[str]) -> dic
 def main() -> None:
     """Input: CLI args. Output: command side effects. Dispatch Stage 1 commands."""
     args = parse_args()
+    if args.command == 'compile-semantic-knowledge':
+        config = load_config(args.config, overrides={})
+        policy = dict(config.get('semantic_policy', {}))
+        for flag, key in (('--max-mechanisms', 'max_mechanisms'), ('--max-conditions-per-mechanism', 'max_conditions_per_mechanism')):
+            if cli_flag_present(sys.argv[1:], flag) or key not in policy:
+                policy[key] = getattr(args, key)
+        policy['executor_argv'] = config.get('semantic_executor_argv') or [sys.executable, '-m', 'wqb.codex_ai_worker', '{input}', '{output}']
+        if 'semantic_source_refs' in config:
+            policy['source_refs'] = config['semantic_source_refs']
+        result = compile_semantic_knowledge_command(Path(args.knowledge_root), policy)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if result['status'] != 'completed':
+            raise SystemExit(2)
+        return
     overrides = config_overrides_from_args(args)
     if args.command == "launch-workflow":
         launch_overrides = launch_overrides_from_args(args, sys.argv[1:])
@@ -3770,6 +3979,9 @@ def main() -> None:
         if args.run_dir:
             workflow_overrides["run_root"] = args.run_dir
         config = load_config(args.config, overrides=workflow_overrides)
+        if args.command == "workflow-run":
+            config["ai_executor"] = args.ai_executor
+            config['managed_research_execution'] = True
         orchestrator_paths = default_orchestrator_paths(config)
         orchestrator = WorkflowOrchestrator(orchestrator_paths)
         now = args.now or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -3784,14 +3996,48 @@ def main() -> None:
                 if all(value not in (None, "") for value in selected_scope_values)
                 else None
             )
-            result = orchestrator.start(args.objective, args.selected_option_id, now, selected_scope=selected_scope)
+            from wqb.config import read_research_policy
+            research_policy = read_research_policy(args.workflow_defaults, args.workflow_local or None,
+                                                   override=config.get('research_policy'))
+            result = orchestrator.start(args.objective, args.selected_option_id, now, selected_scope=selected_scope,
+                                        **({'research_policy': research_policy} if research_policy is not None else {}))
+            if result.get("run_dir"):
+                from wqb.runtime_control import request_runtime_state
+                control = request_runtime_state(result["run_dir"], "paused", enable_live_api=bool(args.enable_live_api))
+                result = {**result, "runtime_request_revision": control["request_revision"]}
         elif args.command == "workflow-continue":
             result = orchestrator.continue_once(now)
-        elif args.command == "workflow-auto-continue":
+        elif args.command == "workflow-pause":
+            from wqb.runtime_control import request_runtime_state
+            status_row = orchestrator.status()
+            if status_row.get("active") and status_row.get("run_dir"):
+                control = request_runtime_state(status_row["run_dir"], "paused")
+                result = {**status_row, "runtime_control": control, "message": "Pause requested; the worker stops before the next submission."}
+            else:
+                result = status_row
+        elif args.command in {"workflow-auto-continue", "workflow-run"}:
             from wqb.workflow_auto_continue import auto_continue_workflow
+
+            if args.command == "workflow-run":
+                from wqb.runtime_control import read_runtime_control, request_runtime_state
+                status_row = orchestrator.status()
+                if not status_row.get("active") or not status_row.get("run_dir"):
+                    print(json.dumps(status_row, ensure_ascii=False, indent=2))
+                    return
+                previous_control = read_runtime_control(status_row["run_dir"])
+                permission = bool(args.enable_live_api or previous_control.get("enable_live_api", False))
+                request_runtime_state(status_row["run_dir"], "running", enable_live_api=permission,
+                                      expected_revision=args.expected_runtime_revision)
+                args.enable_live_api = permission
 
             def source_batch_runner(run_config: dict[str, Any], metadata: dict[str, Any]) -> dict[str, object]:
                 """Input: source config and bridge metadata. Output: source batch summary. Run the approved bounded Scout batch."""
+                from wqb.research_planning import prepare_source_plan
+                run_config = {**run_config, **prepare_source_plan(
+                    Path(run_config['active_workflow_run_dir']), run_config, metadata, now)}
+                multi_chunk_sleep = float(
+                    metadata.get("multi_chunk_sleep_seconds") or RETRY_PLANNED_MULTI_CHUNK_SLEEP_SECONDS
+                )
                 return field_batch(
                     run_config,
                     field_search=str(metadata.get("field_search", "")),
@@ -3800,6 +4046,7 @@ def main() -> None:
                     workflow_stage=str(metadata.get("workflow_stage", "scout")),
                     exact_field_id=str(metadata.get("exact_field_id", "")),
                     submit_mode=str(metadata.get("submit_mode", "multi")),
+                    multi_chunk_sleep_seconds=multi_chunk_sleep,
                 )
 
             def complete_runner(source_run_dir: str) -> dict[str, object]:
@@ -3812,15 +4059,39 @@ def main() -> None:
                 retry_planned(config, source_run_dir, submit_mode=args.submit_mode, defer_poll=args.defer_poll)
                 return summarize_run_dir(source_run_dir, config.get("knowledge_root", default_knowledge_root()))
 
-            result = auto_continue_workflow(
-                orchestrator_paths,
-                config,
-                now,
-                enable_live_api=args.enable_live_api,
-                source_batch_runner=source_batch_runner if args.enable_live_api else None,
-                complete_in_flight_runner=complete_runner if args.enable_live_api else None,
-                retry_planned_runner=retry_runner if args.enable_live_api else None,
-            )
+            def advance_runtime() -> dict[str, Any]:
+                """Input: bound CLI configuration. Output: one-step dict. Re-evaluate current time on each step."""
+                from wqb.repair_runtime import RepairRuntimeExecutor
+
+                tick = datetime.now(timezone.utc).isoformat() if args.command == "workflow-run" else now
+                from wqb.original_batch_recovery import read_original_batch, original_batch_step
+                active_status = orchestrator.status()
+                active_run = Path(active_status['run_dir']) if active_status.get('run_dir') else None
+                if active_run and read_original_batch(active_run):
+                    if args.command != 'workflow-run':
+                        return {**active_status, 'status': 'blocked', 'next_action': 'workflow-run-required',
+                                'message': 'Use Console Resume; original batch recovery requires the managed driver.'}
+                    original_result = original_batch_step(active_run, config, tick)
+                    if original_result.get("next_action") == "original-batch-complete":
+                        from wqb.research_rounds import finish_original_batch_handoff
+                        handoff = finish_original_batch_handoff(active_run, tick)
+                        if handoff.get("status") == "blocked":
+                            return {**original_result, **handoff, "message": handoff.get("stop_reason", "")}
+                    return original_result
+                return auto_continue_workflow(
+                    orchestrator_paths, config, tick,
+                    enable_live_api=args.enable_live_api,
+                    source_batch_runner=source_batch_runner if args.enable_live_api else None,
+                    complete_in_flight_runner=complete_runner if args.enable_live_api else None,
+                    retry_planned_runner=retry_runner if args.enable_live_api else None,
+                    repair_executor=RepairRuntimeExecutor({**config, "allow_parent_settings_recovery": True}, enable_live_api=True) if args.enable_live_api else None,
+                )
+
+            if args.command == "workflow-run":
+                from wqb.workflow_driver import run_workflow_driver
+                result = run_workflow_driver(orchestrator_paths, config, step=advance_runtime)
+            else:
+                result = advance_runtime()
         elif args.command == "workflow-status":
             from wqb.workflow_auto_continue import decorate_workflow_status_with_source_bridge
 
@@ -3829,6 +4100,37 @@ def main() -> None:
                 orchestrator.status(),
                 now,
             )
+            if result.get('run_dir'):
+                from wqb.runtime_boundaries import project_runtime_boundary
+                from wqb.runtime_control import read_runtime_control
+                result = project_runtime_boundary(result, read_runtime_control(result['run_dir']))
+        elif args.command == "workflow-acknowledge-source-rate-limit":
+            from wqb.source_bridge import inspect_scout_seed_source_bridge
+
+            status = orchestrator.status()
+            if not status.get("active"):
+                raise SystemExit("active workflow is required for workflow-acknowledge-source-rate-limit")
+            decision = inspect_scout_seed_source_bridge(
+                orchestrator_paths.run_root,
+                str(status.get("run_dir", "")),
+                now,
+            )
+            if decision.action != "maintenance_blocker":
+                raise SystemExit("source bridge is not in a rate-limit maintenance blocker state")
+            metadata = decision.metadata or {}
+            if metadata.get("operator_acknowledgement_required") is not True:
+                raise SystemExit("source bridge does not require rate-limit recovery acknowledgement")
+            reason = args.reason.strip() or "operator confirmed platform recovery"
+            state = acknowledge_rate_limit_recovery(Path(decision.source_run_dir), reason, now)
+            result = {
+                "status": "acknowledged",
+                "source_run_id": decision.source_run_id,
+                "source_run_dir": decision.source_run_dir,
+                "reason": reason,
+                "rate_limit_state": state,
+                "next_action": "workflow-status",
+                "message": "Local rate-limit threshold acknowledgement recorded. Re-check Console before any live retry.",
+            }
         elif args.command == "workflow-resume":
             result = orchestrator.resume(now)
         elif args.command == "workflow-abort":

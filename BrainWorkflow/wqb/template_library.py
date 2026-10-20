@@ -1,10 +1,14 @@
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 from typing import Any
 
 from wqb.data_ledger import DataLedgerRecord
 from wqb.knowledge_paths import existing_machine_resource_path
+from wqb.semantic_contracts import (
+    EvidenceRef, HypothesisCard, InputSlot, OperatorRole,
+    check_semantic_record_fields, semantic_fields_from_dict, semantic_record_to_dict,
+)
 
 
 FIELD_TYPE_MATCH_BONUS = 3.0
@@ -54,15 +58,25 @@ class TemplateRecord:
     abandon_conditions: list[str] = field(default_factory=list)
     benchmark_rule_ids: list[str] = field(default_factory=list)
     template_family: str = ""
+    semantic_version: int = 1
+    semantic_status: str = "legacy/unreviewed"
+    evidence_refs: list[EvidenceRef] = field(default_factory=list)
+    hypothesis_card: HypothesisCard | None = None
+    input_slots: list[InputSlot] = field(default_factory=list)
+    operator_roles: list[OperatorRole] = field(default_factory=list)
+    binding_version: int = 1
+    hypothesis_id: str = ""
+    hypothesis_version: int = 1
 
 
 def template_record_to_dict(record: TemplateRecord) -> dict[str, Any]:
     """Input: TemplateRecord. Output: dict[str, Any]. Convert template record to JSON-safe data."""
-    return asdict(record)
+    return semantic_record_to_dict(record)
 
 
 def template_record_from_dict(row: dict[str, Any]) -> TemplateRecord:
     """Input: dict row. Output: TemplateRecord. Normalize one JSON-safe template row."""
+    check_semantic_record_fields(row, TemplateRecord)
     return TemplateRecord(
         template_id=str(row.get("template_id", "")),
         hypothesis=str(row.get("hypothesis", "")),
@@ -93,6 +107,7 @@ def template_record_from_dict(row: dict[str, Any]) -> TemplateRecord:
         abandon_conditions=[str(item) for item in row.get("abandon_conditions", []) if str(item)],
         benchmark_rule_ids=[str(item) for item in row.get("benchmark_rule_ids", []) if str(item)],
         template_family=str(row.get("template_family", "")),
+        **semantic_fields_from_dict(row),
     )
 
 

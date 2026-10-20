@@ -24,20 +24,27 @@ from wqb.research_record import (
     empty_research_record,
     load_research_record,
     record_approval,
+    record_alpha_result,
     record_candidate_gate,
     record_manual_submission_status,
     record_queue_update,
+    record_repair_attempts,
     sync_research_record_to_machine,
     sync_research_record_to_raw,
     write_research_record,
 )
 from wqb.source_bridge import SOURCE_BINDING_RELATIVE_PATH
+from wqb.research_rounds import advance_research_round, recover_pending_research_round
+from wqb.stage_outcomes import checked_research_rows
 from wqb.workflow_events import append_workflow_event, read_workflow_events
 from wqb.workflow_stage_adapters import (
     POST_SCHEDULE_STAGES,
+    DEFAULT_REPAIR_MAX_SIMULATIONS,
+    RepairExecutor,
     advance_post_schedule_stage,
     create_start_snapshot,
     import_scout_seed_artifacts as import_scout_seed_artifacts_from_run,
+    research_evidence_blocker,
     schedule_research_stage,
 )
 from wqb.workflow_state import (
@@ -111,9 +118,16 @@ class OrchestratorPaths:
 
 
 class WorkflowOrchestrator:
-    def __init__(self, paths: OrchestratorPaths) -> None:
-        """Input: OrchestratorPaths. Output: instance. Create a workflow controller over durable files."""
+    def __init__(
+        self, paths: OrchestratorPaths, *, repair_executor: RepairExecutor | None = None,
+        discovery_executor=None,
+        repair_max_simulations: int = DEFAULT_REPAIR_MAX_SIMULATIONS,
+    ) -> None:
+        """Input: paths, optional repair callable, int budget. Output: controller over durable files."""
         self.paths = paths
+        self.repair_executor = repair_executor
+        self.discovery_executor = discovery_executor
+        self.repair_max_simulations = repair_max_simulations
 
     def start(
         self,
@@ -121,10 +135,11 @@ class WorkflowOrchestrator:
         selected_option_id: str,
         created_at: str,
         selected_scope: dict[str, object] | None = None,
+        *, research_policy: dict | None = None,
     ) -> dict[str, object]:
-        """Input: objective, option id, timestamp. Output: start summary. Create a formal workflow run."""
+        """Input: objective/option/time strs, optional scope/policy dicts. Output: start dict. Freeze policy before mission creation."""
         with _workflow_mutation_lock(self.paths.run_root):
-            return self._start_unlocked(objective, selected_option_id, created_at, selected_scope)
+            return self._start_unlocked(objective, selected_option_id, created_at, selected_scope, research_policy=research_policy)
 
     def _start_unlocked(
         self,
@@ -132,6 +147,7 @@ class WorkflowOrchestrator:
         selected_option_id: str,
         created_at: str,
         selected_scope: dict[str, object] | None = None,
+        *, research_policy: dict | None = None,
     ) -> dict[str, object]:
         """Input: objective, option id, timestamp. Output: start summary. Create run under mutation lock."""
         self.paths.run_root.mkdir(parents=True, exist_ok=True)
@@ -154,6 +170,7 @@ class WorkflowOrchestrator:
             self.paths.knowledge_root,
             str(selected_option_id),
             selected_scope,
+            **({'research_policy': research_policy} if research_policy is not None else {}),
         )
         manifest["selected_scope"] = dict(snapshot["selected_scope"])
         manifest["start_snapshot"] = snapshot
@@ -173,6 +190,11 @@ class WorkflowOrchestrator:
         state = replace(state, next_action="workflow-continue")
         write_run_state(run_dir / STATE_FILENAME, state)
         append_workflow_event(run_dir, "workflow_created", manifest, created_at)
+        if discovery.state is not None:
+            old = transition_run_state(discovery.state, 'aborted', 'finished original-only scope superseded by explicit new Start')
+            write_run_state(Path(old.run_dir) / STATE_FILENAME, replace(old, updated_at=created_at))
+            append_workflow_event(old.run_dir, 'workflow_aborted',
+                {'reason': 'finished original-only scope superseded', 'new_run_id': run_id}, created_at)
         write_active_run(self.paths.run_root, run_id, run_dir)
         return self._summary(state)
 
@@ -291,7 +313,7 @@ class WorkflowOrchestrator:
         """Input: source bridge decision and timestamp. Output: workflow summary. Import source artifacts selected by the bridge."""
         action = str(decision.get("action", ""))
         source_run_id = str(decision.get("source_run_id", ""))
-        if action != "import_existing":
+        if action not in {"import_existing", "import_research_outcome"}:
             raise ValueError("source bridge decision is not an import decision")
         discovery = self._active_discovery()
         if discovery.state is None:
@@ -394,6 +416,9 @@ class WorkflowOrchestrator:
         state = discovery.state
         if state is None:
             return self._missing_state_summary(discovery)
+        recovered_round = recover_pending_research_round(Path(state.run_dir), now)
+        if recovered_round is not None:
+            return self._summary(load_run_state(Path(state.run_dir) / STATE_FILENAME))
         diagnostics = diagnose_state_consistency(state.run_dir)
         state = self._pause_for_diagnostics(state, diagnostics, now)
         if diagnostics:
@@ -456,7 +481,11 @@ class WorkflowOrchestrator:
         if state.status == "running" and state.current_stage in POST_SCHEDULE_STAGES:
             stage_name = state.current_stage
             try:
-                result = advance_post_schedule_stage(run_dir, stage_name)
+                result = advance_post_schedule_stage(
+                    run_dir, stage_name, repair_executor=self.repair_executor,
+                    discovery_executor=self.discovery_executor,
+                    repair_max_simulations=self.repair_max_simulations,
+                )
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
                 blocker = f"{type(exc).__name__}: {exc}"
                 state = transition_run_state(state, "failed", blocker)
@@ -493,6 +522,27 @@ class WorkflowOrchestrator:
                 )
                 return self._summary(state)
             next_stage = POST_SCHEDULE_STAGES[POST_SCHEDULE_STAGES.index(stage_name) + 1] if stage_name != "repair" else "candidate_gate"
+            if stage_name in {"backtest", "triage", "repair"}:
+                record = self._load_or_create_research_record(state)
+                known = {(row.get("alpha_id"), row.get("expression_hash")) for row in record.backtest}
+                for row in result.get("checked_rows", []):
+                    identity = (row["alpha_id"], row["expression_hash"])
+                    if identity not in known:
+                        record = record_alpha_result(record, row)
+                        known.add(identity)
+                write_research_record(run_dir / "research_record.json", record)
+            if ((stage_name == "triage" and result.get("outcome") == "no_signal")
+                    or (stage_name == "repair" and result.get("next_stage") == "research_record_sync")):
+                round_result = advance_research_round(run_dir, now, result)
+                if round_result["status"] != "not_applicable":
+                    return self._summary(load_run_state(run_dir / STATE_FILENAME))
+            if stage_name == "repair" and result.get("next_stage") == "research_record_sync":
+                next_stage = "research_record_sync"
+                for skipped in ("candidate_gate", "user_approval", "approved_queue"):
+                    state = self._set_stage(
+                        state, skipped, "skipped", now,
+                        evidence_paths=list(result["evidence_paths"]),
+                    )
             evidence_paths = list(state.stages[stage_name].evidence_paths)
             for item in result["evidence_paths"]:
                 if str(item) not in evidence_paths:
@@ -547,6 +597,31 @@ class WorkflowOrchestrator:
         if state.status == "running" and state.current_stage == "research_record_sync":
             return self._sync_research_record_unlocked(now)
         return self._summary(state)
+
+    def request_candidate_approval_from_checked_results(self, now: str) -> dict[str, object]:
+        """Input: timestamp str. Output: approval request summary. Derive checked identities; never approve or submit."""
+        with _workflow_mutation_lock(self.paths.run_root):
+            state = self._active_state()
+            if state is None or state.current_stage != "candidate_gate":
+                raise ValueError("automatic approval request requires candidate_gate")
+            blocker = research_evidence_blocker(Path(state.run_dir))
+            if blocker:
+                raise ValueError(blocker)
+            rows = checked_research_rows(state.run_dir)
+            if not rows:
+                raise ValueError("validated checked research rows are required")
+            alpha_hashes: dict[str, str] = {}
+            for row in rows:
+                previous = alpha_hashes.setdefault(row["alpha_id"], row["expression_hash"])
+                if previous != row["expression_hash"]:
+                    raise ValueError("ambiguous checked alpha identity")
+            candidates = [
+                {"candidate_id": f"{row['alpha_id']}:{row['expression_hash']}",
+                 "platform_alpha_id": row["alpha_id"], "expression_hash": row["expression_hash"],
+                 "version": 1, "source_run_id": state.run_id, "hard_pass": True}
+                for row in rows if row["hard_pass"] is True and not row["failed"] and not row["pending"]
+            ]
+            return self._request_candidate_approval_unlocked(candidates, now)
 
     def request_candidate_approval(
         self, candidates: list[dict[str, object]], now: str
@@ -1077,9 +1152,11 @@ class WorkflowOrchestrator:
     def _load_or_create_research_record(self, state: WorkflowRunState):
         """Input: state. Output: ResearchRecord. Load or create the run research record."""
         path = Path(state.run_dir) / "research_record.json"
-        if path.exists():
-            return load_research_record(path)
-        return empty_research_record(state.run_id, state.objective)
+        record = load_research_record(path) if path.exists() else empty_research_record(state.run_id, state.objective)
+        receipt = Path(state.run_dir) / 'stages/repair/repair_execution.json'
+        if receipt.exists():
+            record = record_repair_attempts(record, json.loads(receipt.read_text(encoding='utf-8')).get('attempts', []))
+        return record
 
     def _active_state(self) -> WorkflowRunState | None:
         """Input: none. Output: active state or none. Recover the current resumable run from durable files."""
@@ -1149,6 +1226,9 @@ class WorkflowOrchestrator:
 
     def _start_is_allowed(self, discovery: WorkflowStateDiscovery) -> bool:
         """Input: active discovery. Output: whether start is safe. Allow only a clean no-active-run result."""
+        if discovery.state is not None and not discovery.diagnostics:
+            from wqb.research_rounds import completed_original_batch
+            return completed_original_batch(Path(discovery.state.run_dir))
         return discovery.state is None and discovery.diagnostics in ([], ["active_run_missing"])
 
     def _new_run_id(self, created_at: str) -> str:

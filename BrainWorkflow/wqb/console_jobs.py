@@ -3,20 +3,53 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import threading
+import time
 from typing import Any, Callable
 from uuid import uuid4
 
 from wqb.console_progress import probe_data_capture_progress, process_is_alive
 from wqb.console_state import ConsolePaths
 from wqb.knowledge_paths import decision_artifacts_root
+from wqb.runtime_control import DEFAULT_MAX_RUNTIME_SECONDS
 
 
 DEFAULT_TIMEOUT_SECONDS = 3600
-TERMINAL_JOB_STATUSES = {"completed", "failed", "refused", "timed_out"}
+WORKFLOW_TIMEOUT_GRACE_SECONDS = 60
+JOB_REPLACE_ATTEMPTS = 3
+JOB_REPLACE_RETRY_SECONDS = 0.02
+TERMINAL_JOB_STATUSES = {"completed", "failed", "refused", "timed_out", "blocked", "paused", "waiting_for_user", 'cancelled'}
+
+
+def cancel_semantic_job(knowledge_root: Path, job_id: str) -> dict:
+    """Input: vault Path/knowledge job ID str. Output: cancellation dict. Persist Stop without changing research intent."""
+    from wqb.runtime_control import _write
+    from wqb.semantic_publication import _safe_path, read_semantic_release
+    from wqb.lockfile import json_lock_transition_guard
+    if not job_id or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for char in job_id):
+        raise ValueError('invalid semantic job ID')
+    job = _safe_path(knowledge_root, 'machine/semantic_jobs/' + job_id)
+    if not job.is_dir() or job.is_symlink() or job.is_junction():
+        raise ValueError('unknown semantic job')
+    with json_lock_transition_guard(job/'publication_guard', 2.0, 0.02, 'semantic publication busy'):
+        path = job/'command_result.json'
+        result = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+        if result.get('status') == 'completed':
+            return dict(cancelled=False, status='completed', reason='publication already completed')
+        intent = job/'publication_intent.json'
+        if intent.exists():
+            result = json.loads(intent.read_text(encoding='utf-8'))
+        if result.get('status') == 'publishing':
+            active = read_semantic_release(knowledge_root)
+            if active['release_id'] == (result.get('release') or {}).get('release_id'):
+                return dict(cancelled=False, status='completed', reason='publication already committed; wiki recovery may remain')
+        control = dict(cancelled=True, updated_at=_now())
+        _write(job / 'control.json', control)
+        return control
 
 
 @dataclass(frozen=True)
@@ -68,10 +101,22 @@ def _duration_seconds(started_at: str, finished_at: str) -> float | None:
 
 
 def _write_job(job: ConsoleJob) -> ConsoleJob:
-    """Input: ConsoleJob. Output: same job. Persist the job record atomically enough for local use."""
+    """Input: ConsoleJob. Output: same job. Atomically publish complete records for concurrent readers."""
     path = Path(job.job_dir) / "job.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(console_job_to_dict(job), ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary = path.with_name(path.name + "." + uuid4().hex + ".tmp")
+    try:
+        temporary.write_text(json.dumps(console_job_to_dict(job), ensure_ascii=False, indent=2), encoding="utf-8")
+        for attempt in range(JOB_REPLACE_ATTEMPTS):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                if attempt == JOB_REPLACE_ATTEMPTS-1:
+                    raise
+                time.sleep(JOB_REPLACE_RETRY_SECONDS)
+    finally:
+        temporary.unlink(missing_ok=True)
     return job
 
 
@@ -171,6 +216,33 @@ def _finalize_process_result(job: ConsoleJob, returncode: int, error: str = "", 
     """Input: running job and return code. Output: terminal job. Persist process result."""
     finished = _now()
     terminal_status = status or ("completed" if returncode == 0 else "failed")
+    runtime_reason = ""
+    if job.action == 'compile-semantic-knowledge' and not status:
+        try:
+            receipt = json.loads(Path(job.stdout_path).read_text(encoding='utf-8'))
+            if not isinstance(receipt, dict):
+                raise ValueError('semantic command result must be an object')
+            if receipt.get('status') in {'completed', 'blocked', 'cancelled'}:
+                terminal_status = receipt['status']
+                runtime_reason = receipt.get('error', '') or json.dumps(receipt.get('rejections', []))
+            else:
+                terminal_status, runtime_reason = 'failed', 'semantic command result missing or invalid'
+        except (OSError, ValueError):
+            terminal_status, runtime_reason = 'failed', 'semantic command result missing or invalid'
+    run_dir = job.metadata.get("run_dir") if isinstance(job.metadata, dict) else None
+    if job.action == "workflow-auto-continue" and returncode == 0 and not status and run_dir:
+        try:
+            runtime = json.loads((Path(run_dir) / "runtime_status.json").read_text(encoding="utf-8"))
+            business_status = str(runtime.get("status", ""))
+            runtime_reason = str(runtime.get("reason", ""))
+            if business_status in {"blocked", "paused", "waiting_for_user"}:
+                terminal_status = business_status
+            elif business_status == "error":
+                terminal_status = "failed"
+            elif business_status not in {"completed", "completed_with_warnings", "aborted"}:
+                terminal_status, runtime_reason = "failed", "runtime result missing or nonterminal"
+        except (OSError, ValueError):
+            terminal_status, runtime_reason = "failed", "runtime result missing or invalid"
     completed = replace(
         job,
         status=terminal_status,
@@ -179,7 +251,7 @@ def _finalize_process_result(job: ConsoleJob, returncode: int, error: str = "", 
         duration_seconds=_duration_seconds(job.started_at, finished),
         exit_code=returncode,
         error=error,
-        status_message=terminal_status,
+        status_message=f"{terminal_status}: {runtime_reason}" if runtime_reason else terminal_status,
     )
     _write_summary(completed)
     return _write_job(completed)
@@ -211,6 +283,19 @@ def watch_job(
         completed = _finalize_process_result(job, int(returncode), f"timed out after {timeout_seconds}s", status="timed_out")
     _notify_completion(on_complete, completed)
     return completed
+
+
+def timeout_for_job(job: ConsoleJob, requested_timeout: int) -> int:
+    """Input: job and requested seconds. Output: int. Keep managed runs alive through their runtime budget."""
+    if job.action == "workflow-auto-continue" and requested_timeout == DEFAULT_TIMEOUT_SECONDS:
+        if job.metadata.get('run_dir'):
+            import math
+            from wqb.runtime_control import read_runtime_control
+            control = read_runtime_control(job.metadata['run_dir'])
+            remaining = float(control.get('max_runtime_seconds', DEFAULT_MAX_RUNTIME_SECONDS)) - float(control.get('elapsed_seconds', 0))
+            return max(1, math.ceil(remaining)) + WORKFLOW_TIMEOUT_GRACE_SECONDS
+        return DEFAULT_MAX_RUNTIME_SECONDS + WORKFLOW_TIMEOUT_GRACE_SECONDS
+    return requested_timeout
 
 
 def start_job_async(
@@ -250,7 +335,7 @@ def start_job_async(
         status_message="running",
     )
     _write_job(running)
-    thread = threading.Thread(target=watch_job, args=(running, process, timeout_seconds, on_complete), daemon=True)
+    thread = threading.Thread(target=watch_job, args=(running, process, timeout_for_job(job, timeout_seconds), on_complete), daemon=True)
     thread.start()
     return running
 
@@ -264,6 +349,9 @@ def _progress_for_action(
     if action == "capture-platform-data-fields" and knowledge_root is not None:
         capture_dir = (metadata or {}).get("capture_dir")
         return "data_capture", probe_data_capture_progress(knowledge_root, capture_dir=capture_dir)
+    if action == 'compile-semantic-knowledge' and knowledge_root is not None:
+        from wqb.console_state import _latest_semantic_compile
+        return 'semantic_compile', _latest_semantic_compile(Path(knowledge_root))
     return "", {}
 
 
@@ -271,6 +359,8 @@ def reconcile_job_dict(row: dict[str, Any], knowledge_root: str | Path | None = 
     """Input: persisted job row and knowledge root. Output: reconciled row. Refresh running job state for the Console."""
     result = dict(row)
     status = str(result.get("status", ""))
+    if status in TERMINAL_JOB_STATUSES:
+        return result
     action = str(result.get("action", ""))
     metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
     progress_kind, progress = _progress_for_action(action, knowledge_root, metadata)
@@ -278,8 +368,6 @@ def reconcile_job_dict(row: dict[str, Any], knowledge_root: str | Path | None = 
         result["progress_kind"] = progress_kind
         result["progress"] = progress
         result["last_progress_at"] = str(progress.get("last_write_at", ""))
-    if status in TERMINAL_JOB_STATUSES:
-        return result
     if status == "running":
         pid = result.get("pid")
         if process_is_alive(int(pid)) if isinstance(pid, int) else False:
@@ -335,6 +423,10 @@ def build_cli_command(action: str, paths: ConsolePaths, form: dict[str, Any] | N
         return [*base, "bootstrap-knowledge", "--knowledge-root", knowledge_root, "--knowledge-seed-root", str(paths.workflow_root / "docs" / "knowledge")]
     if action == "compile-research-records":
         return [*base, "compile-research-records", "--knowledge-root", knowledge_root]
+    if action == 'compile-semantic-knowledge':
+        return [*base, action, '--knowledge-root', knowledge_root,
+                '--max-mechanisms', str(data.get('max_mechanisms', 3)),
+                '--max-conditions-per-mechanism', str(data.get('max_conditions_per_mechanism', 2))]
     if action == "capture-interaction-note":
         command = [
             *base,
@@ -418,16 +510,29 @@ def build_cli_command(action: str, paths: ConsolePaths, form: dict[str, Any] | N
         ):
             if data.get(key) not in (None, ""):
                 command.extend([flag, str(data[key])])
+        if data.get("enable_live_api"):
+            command.append("--enable-live-api")
         return command
     if action == "workflow-continue":
         return [*base, "workflow-continue", "--knowledge-root", knowledge_root, "--run-dir", str(paths.runs_root)]
     if action == "workflow-auto-continue":
-        command = [*base, "workflow-auto-continue", "--knowledge-root", knowledge_root, "--run-dir", str(paths.runs_root)]
-        if data.get("enable_live_api"):
-            command.append("--enable-live-api")
+        command = [*base, "workflow-run", "--knowledge-root", knowledge_root, "--run-dir", str(paths.runs_root),
+                   "--ai-executor", "codex", "--expected-runtime-revision", str(data.get("expected_runtime_revision", ""))]
         return command
+    if action == "workflow-acknowledge-source-rate-limit":
+        reason = str(data.get("reason", "")).strip() or "operator confirmed platform recovery"
+        return [
+            *base,
+            "workflow-acknowledge-source-rate-limit",
+            "--knowledge-root",
+            knowledge_root,
+            "--run-dir",
+            str(paths.runs_root),
+            "--reason",
+            reason,
+        ]
     if action == "workflow-stop":
-        return [*base, "workflow-abort", "--knowledge-root", knowledge_root, "--run-dir", str(paths.runs_root), "--reason", "user stopped from console"]
+        return [*base, "workflow-pause", "--knowledge-root", knowledge_root, "--run-dir", str(paths.runs_root)]
     if action == "workflow-resume":
         return [*base, "workflow-resume", "--knowledge-root", knowledge_root, "--run-dir", str(paths.runs_root)]
     if action == "workflow-import-scout-seed-artifacts":

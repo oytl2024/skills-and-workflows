@@ -59,6 +59,12 @@ class FakeClientResponse(FakeResponse):
 
 
 class SimulatorTests(unittest.TestCase):
+    def test_zero_retry_after_is_paced_not_busy_looped(self):
+        client = FakeClient([FakeResponse(headers={"Retry-After": "0"}), FakeResponse(payload={"alpha": "a"})])
+        with patch("wqb.simulator.cooperative_sleep") as sleep:
+            self.assertEqual(poll_simulation(client, "/simulations/a"), {"alpha": "a"})
+        sleep.assert_called_once_with(1.0)
+
     def test_submit_simulation_returns_location_header(self):
         client = FakeClient([FakeResponse(headers={"Location": "/simulations/abc"})])
 

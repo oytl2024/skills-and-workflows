@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 from typing import Any
+from datetime import datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+
+
+RUNTIME_STALE_SECONDS = 30
 
 
 WORKFLOW_STAGE_LABELS = {
@@ -65,10 +72,44 @@ def _stage_status_from_workflow(state: dict[str, Any], stage_id: str) -> str:
     return "ready"
 
 
+def readiness_blocker_current_work(state: dict[str, Any]) -> dict[str, Any] | None:
+    """Input: Console state. Output: current-work blocker or none. Give blocked readiness priority over source retry."""
+    readiness = state.get("readiness", {})
+    if not isinstance(readiness, dict):
+        return None
+    issues = readiness.get("issues", [])
+    issue_rows = [issue for issue in issues if isinstance(issue, dict)]
+    blocked = readiness.get("blocked") is True or (
+        readiness.get("exists") is True and readiness.get("passed") is False and bool(issue_rows)
+    )
+    if not blocked:
+        return None
+    details: list[str] = []
+    for issue in issue_rows:
+        code = str(issue.get("code", "readiness_blocked") or "readiness_blocked")
+        message = str(issue.get("message", "") or "Readiness is blocked.")
+        details.append(f"{code}: {message}")
+        action = str(issue.get("action", "") or "")
+        if action:
+            details.append(f"Action: {action}")
+    if not details:
+        details.append("Readiness is blocked.")
+    path = str(readiness.get("path", "") or "")
+    return {
+        "title": "Readiness blocker",
+        "status": "blocked",
+        "next_action": "readiness-blocked",
+        "details": details,
+        "evidence_paths": [path] if path else [],
+    }
+
+
 def build_timeline_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
     """Input: console state. Output: timeline rows. Build the one-page workflow run tape."""
     freshness = state.get("freshness", {}) if isinstance(state.get("freshness"), dict) else {}
     maintenance = state.get("knowledge_maintenance", {}) if isinstance(state.get("knowledge_maintenance"), dict) else {}
+    semantic = state.get('semantic_compile') or {}
+    semantic_job = _running_job_for_action(state, 'compile-semantic-knowledge')
     delivery_gate = state.get("delivery_gate", {}) if isinstance(state.get("delivery_gate"), dict) else {}
     data_coverage = state.get("data_coverage", {}) if isinstance(state.get("data_coverage"), dict) else {}
     capture_job = _running_job_for_action(state, "capture-platform-data-fields")
@@ -82,10 +123,10 @@ def build_timeline_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
         ),
         _row(
             "knowledge_compile",
-            "completed" if maintenance.get("status") == "completed" else "waiting",
+            str(semantic_job.get('status')) if semantic_job else (str(semantic['status']) if semantic else ("completed" if maintenance.get("status") == "completed" else "waiting")),
             "knowledge maintenance",
-            "Compile raw facts into machine resources and compact human wiki.",
-            str(maintenance.get("path", maintenance.get("report_path", ""))),
+            ('Semantic compile: ' + str(semantic.get('error') or semantic.get('rejections') or 'partial coverage') + '; notification: ' + str((semantic.get('notification') or {}).get('status', 'not_needed'))) if semantic else "Compile raw facts into machine resources and compact human wiki.",
+            str(semantic.get('path') or maintenance.get("path", maintenance.get("report_path", ""))),
         ),
         _row(
             "platform_data_capture",
@@ -130,16 +171,202 @@ def build_timeline_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
     for checkpoint in state.get("ai_checkpoints", []):
         if isinstance(checkpoint, dict) and checkpoint.get("status") == "pending":
             rows.append(_row("ai_checkpoint", "waiting", "ai_judgment", str(checkpoint.get("reason", "")), ",".join(str(item) for item in checkpoint.get("evidence_paths", []))))
+    return rows + paired_arm_timeline(state)
+
+
+def paired_arm_timeline(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Input: existing Console state dict. Output: arm timeline rows list. Project durable plans/events without execution or new gates."""
+    run_dir = state.get('active_workflow', {}).get('run_dir')
+    if not run_dir:
+        return []
+    progress = {row.get('expression_hash'): row for row in state.get('strategy_progress', {}).get('rows', [])}
+    source = state.get('strategy_progress', {}).get('source_run_dir')
+    source_sidecar = None
+    if source:
+        try:
+            source_sidecar = hashlib.sha256((Path(source) / 'experiment_sidecar.json').read_bytes()).hexdigest()
+        except OSError:
+            return []
+    rows = []
+    for receipt in sorted((Path(run_dir) / 'runtime/research_plans').glob('paired-*.json')):
+        if receipt.name.endswith('.experiments.json'):
+            continue
+        try:
+            plan = json.loads(receipt.read_text(encoding='utf-8'))
+            patch = plan['config_patch']
+            path = receipt.with_suffix('.experiments.json')
+            raw = path.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != patch['experiment_sidecar_sha256']:
+                continue
+            if source_sidecar is not None and source_sidecar != patch['experiment_sidecar_sha256']:
+                continue
+            sidecar = json.loads(raw)
+            projected = []
+            for arm in sidecar['arms']:
+                event = progress.get(arm['expression_hash'], {})
+                status = str(event.get('status') or event.get('event', '')).upper()
+                phase = 'queued'
+                if arm.get('reused') or (status in ('CHECKED', 'QUALIFIED', 'MEASURED') and event.get('metrics')):
+                    phase = 'measured'
+                elif status in ('FAILED', 'ERROR'):
+                    phase = 'failed'
+                elif status in ('POLLING', 'PENDING', 'WAITING', 'SIMULATION_COMPLETED'):
+                    phase = 'polling'
+                elif status in ('SUBMITTED', 'RUNNING'):
+                    phase = 'submitted'
+                elif status == 'SUBMISSION_STARTED':
+                    phase = 'uncertain'
+                row = _row('scout_seed', phase, 'paired Scout', arm['arm_id'], str(path))
+                row.update(experiment_id=arm['experiment_id'], arm_id=arm['arm_id'],
+                    expression_hash=arm['expression_hash'], baseline_expression_hash=arm['baseline_expression_hash'])
+                row['label'] = 'Scout ' + arm['arm_id']
+                projected.append(row)
+            for row in projected:
+                siblings = [item for item in projected if item['experiment_id'] == row['experiment_id']]
+                row['comparison_complete'] = len(siblings) == 2 and all(item['status'] == 'measured' for item in siblings)
+                row['explanation'] = row['arm_id'] + ': ' + row['status'] + ('; comparison measured' if row['comparison_complete'] else '; comparison incomplete')
+            rows.extend(projected)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
     return rows
+
+
+def runtime_current_work(state: dict[str, Any]) -> dict[str, Any] | None:
+    """Input: state dict. Output: work dict or None. Separate worker evidence from requested intent."""
+    control = state.get('runtime_control', {})
+    if not control:
+        return None
+    status = str(control.get('status', 'unknown'))
+    reason = str(control.get('reason', ''))
+    stamp = control.get('heartbeat_at') or control.get('updated_at')
+    if control.get('invalid'):
+        status, reason = 'error', 'Invalid runtime state; maintenance required'
+    elif control.get('desired_state') == 'paused' and status not in {'paused', 'error', 'blocked', 'completed'}:
+        status, reason = 'pausing', 'Pause requested; awaiting worker acknowledgement'
+    elif status in {'running', 'waiting', 'unknown'}:
+        try:
+            observed = datetime.fromisoformat(str(stamp).replace('Z', '+00:00'))
+            age = (datetime.now(timezone.utc) - observed).total_seconds()
+        except (ValueError, TypeError):
+            status, reason = 'unknown', 'Worker heartbeat missing; execution is not confirmed'
+        else:
+            if age > RUNTIME_STALE_SECONDS or age < -RUNTIME_STALE_SECONDS:
+                status, reason = 'stale', 'Worker heartbeat is stale; inspect or resume the durable driver'
+    details = [reason] if reason else []
+    from wqb.runtime_boundaries import RESOURCE_ACTIONS
+    if reason in RESOURCE_ACTIONS and status == 'blocked':
+        boundary = control.get('runtime_boundary') or {}
+        return {'title': 'Runtime limit reached', 'status': 'blocked',
+                'next_action': RESOURCE_ACTIONS[reason],
+                'details': [reason, f"Elapsed: {control.get('elapsed_seconds', 0)} / {control.get('max_runtime_seconds', 'unknown')} seconds",
+                            f"Resource usage: {boundary.get('used', 'unknown')} / {boundary.get('limit', 'unknown')}",
+                            'Existing limits are preserved; Resume cannot enlarge resource authority.',
+                            'Notice: ' + str(boundary.get('notification', {}).get('status', 'not_recorded'))],
+                'evidence_paths': [boundary['evidence_path']] if boundary.get('evidence_path') else []}
+    details.append(f"Desired state: {control.get('desired_state', 'unknown')}")
+    if stamp:
+        details.append(f'Last worker update: {stamp}')
+    if control.get('next_wake_at'):
+        details.append(f"Next wake: {control['next_wake_at']}")
+    return {'title': 'Workflow driver', 'status': status, 'details': details,
+            'next_action': 'workflow-auto-continue' if status in {'paused', 'stale', 'unknown'} else reason or status,
+            'evidence_paths': []}
 
 
 def select_current_work(state: dict[str, Any], timeline: list[dict[str, Any]]) -> dict[str, Any]:
     """Input: console state and timeline. Output: current work summary. Explain the active row for the UI."""
+    if ((state.get('start_request') or {}).get('status') == 'cancelled'
+            and (state.get('readiness') or {}).get('context') == 'new-mission-preflight'):
+        return {'title': 'Research preparation stopped', 'status': 'paused',
+                'next_action': 'start-preflight-paused',
+                'details': ['Stop is recorded. No new research mission will be created by this request.',
+                            'Start can begin a new local preparation request.'], 'evidence_paths': []}
+    preparing = _running_job_for_action(state, 'workflow-start-from-option')
+    if preparing is not None:
+        return {'title': 'Preparing research locally', 'status': 'running',
+                'next_action': 'start-preflight-running',
+                'details': ['Checking the selected scope and repairing local compiled resources.',
+                            'No online knowledge capture is authorized by Start.'],
+                'evidence_paths': [str(preparing.get('summary_path', ''))]}
+    preflight = state.get('start_preflight') or {}
+    if preflight.get('blocked'):
+        issues = [issue for issue in preflight.get('issues', []) if isinstance(issue, dict)]
+        details = [f"{issue.get('code', '')}: {issue.get('message', '')} | "
+                   f"{issue.get('path', '')} | {issue.get('action', '')}" for issue in issues]
+        notification = preflight.get('notification') or {}
+        if notification:
+            details.append(f"Maintenance delivery: {notification.get('status', 'unknown')} "
+                           f"{notification.get('error', '')}; no capture or repair authorization.")
+        return {'title': 'Research preparation blocked', 'status': 'blocked',
+                'next_action': 'start-preflight-blocked',
+                'details': details,
+                'evidence_paths': [str(preflight.get('receipt_path', ''))]}
+    rounds = state.get('research_rounds') or {}
+    handoff = state.get('research_handoff') or {}
+    from wqb.runtime_boundaries import RESOURCE_ACTIONS
+    runtime = state.get('runtime_control') or {}
+    if runtime.get('status') == 'blocked' and runtime.get('reason') in RESOURCE_ACTIONS:
+        return runtime_current_work(state)
+    if (rounds.get('status') == 'blocked' and rounds.get('stop_reason') != 'user_paused') or handoff.get('status') == 'blocked':
+        reason = rounds.get('stop_reason') or handoff.get('stop_reason')
+        return {'title': 'Research loop paused', 'status': 'blocked',
+                'next_action': 'research-loop-blocked',
+                'details': [f"Round: {rounds.get('current_round_id', 'original batch')}", str(reason),
+                            str(handoff.get('message', '')),
+                            'No new simulations started; evidence and authorized limits are preserved.'],
+                'evidence_paths': []}
+    control = state.get('runtime_control') or {}
+    case = control.get('recovery_case') or {}
+    if case.get('status') in {'awaiting_maintenance_confirmation', 'maintenance_approved'}:
+        delivery = (case.get('notification') or {}).get('status', 'unknown')
+        approval = ('Human confirmation recorded; verification required before resume.'
+                    if case['status'] == 'maintenance_approved'
+                    else 'Waiting for human repair confirmation in the maintenance chat.')
+        return {'title': 'Maintenance blocker', 'status': 'blocked', 'next_action': 'maintenance-blocker',
+                'details': [f"Case: {case.get('case_id', 'unknown')}",
+                            f"Maintenance message delivery: {delivery}", approval,
+                            'Runtime renewal does not resolve this fault.',
+                            str((control.get('last_result') or {}).get('pause_reason', control.get('reason', '')))],
+                'evidence_paths': []}
+    scope = control.get('original_batch_recovery') or {}
+    if scope.get('authorized'):
+        if scope.get('planned', 0) > 0 and scope.get('remaining') == 0:
+            return {'title': 'Original batch completed', 'status': 'blocked',
+                    'next_action': 'research-mission-authority-required',
+                    'details': [f"{scope.get('checked')}/{scope.get('planned')} checked. Original-only permission finished.",
+                                'Choose an option card and Start a new bounded mission; Resume cannot extend the old scope.'],
+                    'evidence_paths': []}
+        work = runtime_current_work(state) or {}
+        return {**work, 'title': 'Original batch recovery', 'details': [
+            *work.get('details', []),
+            f"Checked: {scope.get('checked', 0)}/{scope.get('planned', 0)}; remaining: {scope.get('remaining', 0)}",
+            'Resume handles knowledge maintenance, cooldown and existing work; no new research.']}
+    readiness_work = readiness_blocker_current_work(state)
+    if readiness_work is not None:
+        return readiness_work
+    runtime_work = runtime_current_work(state)
+    if runtime_work is not None:
+        return runtime_work
     source_bridge = state.get("source_bridge", {})
     if isinstance(source_bridge, dict):
         action = str(source_bridge.get("action", ""))
         source_run_id = str(source_bridge.get("source_run_id", ""))
         details = [str(source_bridge.get("reason", "")), f"Source run: {source_run_id}"]
+        metadata = source_bridge.get("metadata", {})
+        if isinstance(metadata, dict):
+            retry_at = str(metadata.get("retry_at", ""))
+            next_check_at = str(metadata.get("next_check_at", ""))
+            operator_message = str(metadata.get("operator_message", ""))
+            consecutive = metadata.get("consecutive_429_count", "")
+            maximum = metadata.get("max_consecutive_429", "")
+            if retry_at:
+                details.append(f"Retry at: {retry_at}")
+            if next_check_at:
+                details.append(f"Next check: {next_check_at}")
+            if operator_message:
+                details.append(operator_message)
+            if str(consecutive) and str(maximum):
+                details.append(f"429 count: {consecutive}/{maximum}")
         evidence_paths = list(source_bridge.get("evidence_paths", []))
         auto_continue_job = _running_job_for_action(state, "workflow-auto-continue")
         if auto_continue_job is not None:

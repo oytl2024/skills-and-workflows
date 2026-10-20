@@ -15,6 +15,38 @@ from wqb.rate_limit_state import (
 
 
 class RateLimitStateTests(unittest.TestCase):
+    def test_bounded_retry_preserves_platform_evidence_and_expires(self):
+        class Error(Exception):
+            response = type("Response", (), {"status_code": 429, "headers": {"Retry-After": "60"}})()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for _ in range(3):
+                before = record_rate_limit(root, "submit", Error(), {}, "2026-08-12T00:00:00+00:00")
+            granted = rate_limit_state.authorize_bounded_retry(root, "2026-08-12T00:02:00+00:00")
+            self.assertEqual(granted["consecutive_429_count"], 3)
+            self.assertEqual(granted["retry_at"], before["retry_at"])
+            self.assertEqual(granted["updated_at"], before["updated_at"])
+            self.assertFalse(rate_limit_state.rate_limit_requires_maintenance(granted, "2026-08-12T00:02:01+00:00"))
+            self.assertTrue(rate_limit_state.rate_limit_requires_maintenance(granted, "2026-08-12T00:04:01+00:00"))
+            latest = record_rate_limit(root, "submit", Error(), {}, "2026-08-12T00:02:01+00:00")
+            self.assertTrue(rate_limit_state.rate_limit_requires_maintenance(latest, "2026-08-12T00:02:02+00:00"))
+
+    def test_bounded_retry_does_not_shorten_active_server_wait(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rate_limit_state.json"
+            path.write_text(json.dumps({"status": "cooldown", "consecutive_429_count": 3,
+                                        "retry_at": "2026-08-12T01:00:00+00:00"}))
+            with self.assertRaises(ValueError):
+                rate_limit_state.authorize_bounded_retry(Path(tmp), "2026-08-12T00:01:00+00:00")
+
+    def test_expired_retry_is_rejected_at_submission_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rate_limit_state.json"
+            path.write_text(json.dumps({"status": "cooldown", "consecutive_429_count": 3,
+                                        "retry_at": "2026-08-12T00:00:00+00:00"}))
+            with self.assertRaises(rate_limit_state.RateLimitRecoveryRequired):
+                rate_limit_state.check_source_retry_authorization(Path(tmp), "2026-08-12T01:00:00+00:00")
     def test_parse_retry_after_seconds_accepts_delta_seconds(self):
         now = datetime(2026, 8, 12, 0, 0, 0, tzinfo=timezone.utc)
 
@@ -52,7 +84,7 @@ class RateLimitStateTests(unittest.TestCase):
         self.assertTrue(cooldown_is_active(loaded, "2026-08-12T00:00:30+00:00"))
         self.assertFalse(cooldown_is_active(loaded, "2026-08-12T00:01:01+00:00"))
 
-    def test_record_rate_limit_clamps_explicit_retry_after(self):
+    def test_record_rate_limit_preserves_server_retry_after(self):
         class Error(Exception):
             response = type("Response", (), {"status_code": 429, "headers": {"Retry-After": "3600"}})()
 
@@ -65,8 +97,8 @@ class RateLimitStateTests(unittest.TestCase):
                 "2026-08-12T00:00:00+00:00",
             )
 
-        self.assertEqual(state["retry_after_seconds"], rate_limit_state.MAX_COOLDOWN_SECONDS)
-        self.assertEqual(state["retry_at"], "2026-08-12T00:15:00+00:00")
+        self.assertEqual(state["retry_after_seconds"], 3600)
+        self.assertEqual(state["retry_at"], "2026-08-12T01:00:00+00:00")
 
     def test_record_rate_limit_normalizes_malformed_counters(self):
         class Error(Exception):
@@ -132,6 +164,35 @@ class RateLimitStateTests(unittest.TestCase):
         self.assertEqual(reset["status"], "ready")
         self.assertEqual(loaded["consecutive_429_count"], 0)
         self.assertEqual(loaded["reset_reason"], "complete_in_flight")
+
+    def test_acknowledge_rate_limit_recovery_clears_threshold_with_audit_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "rate_limit_state.json").write_text(
+                json.dumps(
+                    {
+                        "status": "cooldown",
+                        "attempt_count": 3,
+                        "consecutive_429_count": 3,
+                        "retry_at": "2026-08-16T07:11:30+00:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            acknowledged = rate_limit_state.acknowledge_rate_limit_recovery(
+                root,
+                "operator confirmed platform recovery",
+                "2026-08-16T09:30:00+00:00",
+            )
+            loaded = read_rate_limit_state(root / "rate_limit_state.json")
+
+        self.assertEqual(acknowledged["status"], "ready")
+        self.assertEqual(loaded["consecutive_429_count"], 0)
+        self.assertEqual(loaded["attempt_count"], 0)
+        self.assertEqual(loaded["acknowledged_reason"], "operator confirmed platform recovery")
+        self.assertEqual(loaded["acknowledged_at"], "2026-08-16T09:30:00+00:00")
+        self.assertEqual(loaded["reset_reason"], "operator_acknowledged_rate_limit_recovery")
 
 
 if __name__ == "__main__":

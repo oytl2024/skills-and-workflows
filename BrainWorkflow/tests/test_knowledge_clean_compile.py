@@ -12,6 +12,16 @@ from wqb.knowledge_clean_compile import (
 
 
 class KnowledgeCleanCompileTests(unittest.TestCase):
+    def test_platform_compile_coordination_files_are_not_knowledge_or_cleanup_targets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ('raw', 'machine', 'wiki'):
+                (root / name).mkdir()
+            for name in ('.data_capture_compile.lock', '.data_capture_compile.lock.guard'):
+                (root / name).write_text('{}')
+            self.assertEqual(evaluate_clean_knowledge_structure(root)['issue_count'], 0)
+            self.assertEqual(plan_obsolete_active_cleanup(root), [])
+
     def _write_compile_report(self, root: Path, name: str, payload: dict[str, object]) -> Path:
         path = root / "raw" / "maintenance" / "compile_reports" / name
         path.parent.mkdir(parents=True, exist_ok=True)

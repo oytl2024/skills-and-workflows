@@ -16,6 +16,84 @@ def write_jsonl(path, rows):
 
 
 class DataLedgerCompileTests(unittest.TestCase):
+    def test_recompile_preserves_distinct_submission_usage_provenance(self):
+        """Input: captured field and existing usage fixture. Output: assertions; compilation cannot erase reconciliation identities."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = root / 'raw/platform/data_fields/2026-10-15'
+            scope = dict(instrument_type='EQUITY', region='USA', delay=1, universe='TOP3000')
+            write_jsonl(capture / 'data_fields.jsonl', [dict(scope=scope, data_set={'id': 'dataset'}, field={'id': 'field', 'type': 'VECTOR'})])
+            compile_data_ledger_from_raw(root, capture, '2026-10-15T00:00:00Z')
+            ledger = root / 'machine/data_ledger.jsonl'
+            row = json.loads(ledger.read_text())
+            row.update(submitted_usage_count=5, submitted_alpha_ids=['alpha1', 'alpha2'], submitted_legacy_usage_count=3)
+            write_jsonl(ledger, [row])
+            compile_data_ledger_from_raw(root, capture, '2026-10-16T00:00:00Z')
+            rebuilt = json.loads(ledger.read_text())
+            for key in ('submitted_usage_count', 'submitted_alpha_ids', 'submitted_legacy_usage_count'):
+                self.assertEqual(rebuilt[key], row[key])
+
+    def test_usage_projection_does_not_guess_ambiguous_dataset_or_wrong_scope(self):
+        """Input: ambiguous/wrong-scope fixtures. Output: assertions; unresolved usage preserves existing counters."""
+        from wqb.data_ledger_compile import project_manual_submission_usage
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            row = dict(dataset_id='d1', field_id='field', region='USA', delay=1, universe='TOP3000',
+                       instrument_type='EQUITY', submitted_usage_count=3)
+            ledger = root / 'machine/data_ledger.jsonl'
+            event = dict(evidence_kind='direct_user_report', identity=dict(alpha_id='alpha1', expression='rank(field)',
+                         settings=dict(region='USA', delay=1, universe='TOP3000', instrumentType='EQUITY')))
+            for rows in ([row, dict(row, dataset_id='d2')], [dict(row, region='EUR')]):
+                write_jsonl(ledger, rows)
+                result = project_manual_submission_usage(root, [event], '2026-10-16T00:00:00Z')
+                self.assertTrue(any('usage unresolved' in text for text in result['diagnostics']))
+                self.assertEqual([json.loads(line) for line in ledger.read_text().splitlines()], rows)
+
+    def test_legacy_dictionary_and_timing_contract_jsonl_roundtrip(self):
+        """Input: legacy/optional timing rows. Output: None. Preserve exact old shape and scoped policy metadata."""
+        from tests.test_resource_evidence import timing_contract
+        from wqb.data_ledger import data_ledger_record_from_dict, data_ledger_record_to_dict
+        expected = dict(dataset_id="", dataset_name="", field_id="", field_type="", region="", delay=0,
+                        universe="", semantic_tags=[], coverage=0.0, alpha_count=0, user_count=0,
+                        simulation_usage_count=0, submitted_usage_count=0, last_used_at="", best_result_label="",
+                        correlation_risk="unknown", source_paths=[], source_quality="", coverage_status="",
+                        source_updated_at="", available_regions=[], available_delays=[], available_universes=[],
+                        activity_tags=[], compatible_template_ids=[], gate_requirements=[], experiment_paths=[],
+                        instrument_type="", date_coverage="", data_category="", crowding_risk="unknown",
+                        known_operators=[], repair_usage_count=0, field_description="")
+        self.assertEqual(data_ledger_record_to_dict(data_ledger_record_from_dict({})), expected)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "data.jsonl"
+            row = dict(expected, timing_contract=timing_contract())
+            write_jsonl(path, [row])
+            self.assertEqual(data_ledger_record_to_dict(load_data_ledger(path)[0]), row)
+
+    def test_category_normalization_preserves_only_explicit_id_and_name(self):
+        """Input: category objects. Output: None. Reject opaque stringification and preserve explicit labels."""
+        from wqb import data_ledger_compile as compiler
+        self.assertTrue(callable(getattr(compiler, 'normalize_data_category', None)))
+        normalize = compiler.normalize_data_category
+        self.assertEqual(normalize({'id': 'fundamental', 'name': 'Fundamentals'}),
+                         ('Fundamentals', ['fundamental', 'fundamentals']))
+        self.assertEqual(normalize('News'), ('News', ['news']))
+        for value in (None, [], 42, {'name': []}, {'opaque': 'value'}):
+            self.assertEqual(normalize(value), ('', []))
+
+    def test_structured_category_is_not_stringified_in_compiled_ledger(self):
+        """Input: isolated capture. Output: None. Keep category meaning distinct from Python dict syntax."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = root / 'raw/platform/data_fields/2026-10-14'
+            write_jsonl(capture / 'data_fields.jsonl', [dict(
+                scope=dict(instrument_type='EQUITY', region='USA', delay=1, universe='TOP3000'),
+                data_set=dict(id='d', category=dict(id='fundamental', name='Fundamentals')),
+                field=dict(id='f', type='MATRIX'))])
+            compile_data_ledger_from_raw(root, capture, '2026-10-14T00:00:00Z')
+            record = load_data_ledger(root / 'machine/data_ledger.jsonl')[0]
+            self.assertEqual(record.data_category, 'Fundamentals')
+            self.assertIn('fundamental', record.semantic_tags)
+            self.assertFalse(any('{' in tag for tag in record.semantic_tags))
+
     def test_compile_data_ledger_writes_jsonl_to_machine_and_markdown_out_of_machine(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
@@ -693,6 +771,7 @@ class DataLedgerCompileTests(unittest.TestCase):
         entry = next(row for row in freshness if row["name"] == "data_ledger")
         self.assertEqual(entry["updated_at"], "2025-01-02")
         self.assertEqual(entry["compiled_at"], "2026-07-16T09:00:00+00:00")
+        self.assertEqual(entry["max_age_days"], 90)
 
     def test_targeted_refresh_does_not_make_preserved_stale_scope_readiness_fresh(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -720,7 +799,7 @@ class DataLedgerCompileTests(unittest.TestCase):
                 "source_paths": [],
                 "source_quality": "platform_raw_capture",
                 "coverage_status": "measured_raw",
-                "source_updated_at": "2026-07-10",
+                "source_updated_at": "2026-01-10",
                 "available_scopes": [eur_scope],
                 "compatible_template_ids": ["matrix_ts_zscore_rank"],
             }])
@@ -812,7 +891,7 @@ class DataLedgerCompileTests(unittest.TestCase):
             )
 
         by_region = {row["region"]: row for row in rows}
-        self.assertEqual(by_region["EUR"]["source_updated_at"], "2026-07-10")
+        self.assertEqual(by_region["EUR"]["source_updated_at"], "2026-01-10")
         self.assertEqual(by_region["USA"]["source_updated_at"], "2026-07-16")
         self.assertFalse(eur_report.passed)
         self.assertIn("stale_scope_data", {issue.code for issue in eur_report.issues})

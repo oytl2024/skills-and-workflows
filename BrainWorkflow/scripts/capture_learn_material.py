@@ -1,14 +1,16 @@
 import hashlib
 import html
 import json
+import math
 import os
 import re
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from wqb.client import WQBClient
+from wqb.client import BASE_URL, WQBClient
 from wqb.knowledge_contracts import SourceIndexRow, parse_markdown_front_matter, upsert_source_index_rows
 
 
@@ -19,6 +21,7 @@ MAX_RECORDS = 1000
 REQUEST_TIMEOUT_SECONDS = 12
 REQUEST_MAX_RETRIES = 1
 REQUEST_BASE_BACKOFF_SECONDS = 1
+ERROR_PAYLOAD_MAX_BYTES = 65536
 SEARCH_QUERIES = [
     "documentation",
     "operators",
@@ -108,10 +111,126 @@ def write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def write_markdown(path: Path, lines: list[str]) -> None:
+def guard_capture_path(root: Path, path: Path) -> None:
+    """Input: knowledge root/output Paths. Output: None. Reject escapes and linked/reparse ancestors."""
+    root = root.absolute()
+    path = path.absolute()
+    if not path.is_relative_to(root) or not path.resolve().is_relative_to(root.resolve()):
+        raise ValueError("capture output escapes knowledge root")
+    for parent in (path, *path.parents):
+        try:
+            metadata = parent.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(metadata.st_mode) or getattr(metadata, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 1024):
+            raise ValueError("linked capture output or parent is not allowed")
+
+
+def guard_capture_outputs(root: Path, generated_at: str) -> None:
+    """Input: knowledge Path/ISO str. Output: None. Preflight raw/index paths before any GET."""
+    dated = raw_capture_dir(generated_at, root)
+    for path in (dated, root / "raw/source_index.md", root / "machine/source_index.jsonl",
+                 root / "machine/source_index_write.guard"):
+        guard_capture_path(root, path)
+    pending = [dated] if dated.exists() else []
+    while pending:
+        for child in pending.pop().iterdir():
+            guard_capture_path(root, child)
+            if child.is_dir():
+                pending.append(child)
+
+
+def material_rows_valid(rows: Any, kind: str) -> bool:
+    """Input: row payload Any/material kind str. Output: bool. Exclude error envelopes and malformed material."""
+    if not isinstance(rows, list) or not rows:
+        return False
+    for row in rows:
+        if not isinstance(row, dict) or any(key in row for key in ("error", "errors", "detail")) or looks_like_course(row):
+            return False
+        if kind == "operator" and (not isinstance(row.get("name"), str) or not row["name"].strip()):
+            return False
+        if kind == "tutorial" and (not isinstance(row.get("id"), str) or not row["id"].strip()
+                                   or not readable_content(row.get("content"))):
+            return False
+    return True
+
+
+def readable_content(content: Any) -> bool:
+    """Input: source content Any. Output: bool. Validate known text/block schemas without discarding nontext facts."""
+    if isinstance(content, str):
+        return bool(content.strip())
+    if isinstance(content, list):
+        return bool(content) and all(readable_content(item) for item in content)
+    if not isinstance(content, dict):
+        return False
+    if 'type' not in content:
+        return (len(content) == 1 and next(iter(content)) in {'value', 'content', 'text'}
+                and readable_content(next(iter(content.values()))))
+    if (set(content) != {'id', 'type', 'value'} or not isinstance(content['id'], str)
+            or not content['id'].strip()):
+        return False
+    kind, value = content['type'], content['value']
+    if kind in ('TEXT', 'EQUATION'):
+        return isinstance(value, str) and bool(value.strip())
+    if not isinstance(value, dict):
+        return False
+    if kind == 'HEADING':
+        return (set(value) == {'content', 'level'} and isinstance(value['content'], str)
+                and bool(value['content'].strip()) and value['level'] in ('1', '2', '3', '4', '5', '6'))
+    if kind == 'TABLE':
+        data = value.get('data')
+        return (set(value) == {'data', 'firstColIsHeader', 'firstRowIsTableHeader'}
+                and type(value['firstColIsHeader']) is bool and type(value['firstRowIsTableHeader']) is bool
+                and isinstance(data, list) and bool(data)
+                and all(isinstance(row, list) and bool(row) and all(isinstance(cell, str) for cell in row)
+                        for row in data)
+                and all(len(row) == len(data[0]) for row in data)
+                and any(cell.strip() for row in data for cell in row))
+    if kind == 'IMAGE':
+        return (set(value) == {'fileSize', 'height', 'title', 'url', 'width'}
+                and all(type(value[key]) is int and value[key] > 0 for key in ('height', 'width'))
+                and type(value['fileSize']) is int and value['fileSize'] >= 0
+                and isinstance(value['title'], str) and bool(value['title'].strip())
+                and isinstance(value['url'], str) and re.fullmatch(r'https://[^\s/]+/\S+', value['url']) is not None)
+    if kind == 'SIMULATION_EXAMPLE':
+        settings = value.get('settings')
+        string_keys = {'instrumentType', 'language', 'maxTrade', 'nanHandling', 'neutralization',
+                       'pasteurization', 'region', 'unitHandling', 'universe'}
+        return (set(value) == {'regular', 'settings', 'type'} and value['type'] == 'REGULAR'
+                and isinstance(value['regular'], str) and bool(value['regular'].strip())
+                and isinstance(settings, dict) and set(settings) == string_keys | {'decay', 'delay', 'truncation'}
+                and all(isinstance(settings[key], str) and bool(settings[key].strip()) for key in string_keys)
+                and all(type(settings[key]) is int for key in ('decay', 'delay'))
+                and type(settings['truncation']) in (int, float) and math.isfinite(settings['truncation']))
+    return False
+
+
+def bounded_response_payload(response) -> Any:
+    """Input: requests Response. Output: JSON/text evidence Any. Bound retained HTTP error bytes without hiding truncation."""
+    body = response.content or b""
+    prefix = body[:ERROR_PAYLOAD_MAX_BYTES].decode("utf-8", errors="replace")
+    if len(body) > ERROR_PAYLOAD_MAX_BYTES:
+        return {"truncated": True, "body_bytes": len(body), "body_prefix": prefix}
+    try:
+        return json.loads(prefix)
+    except (ValueError, RecursionError):
+        return {"truncated": False, "body_bytes": len(body), "body_text": prefix}
+
+
+def write_markdown(path: Path, lines: list[str], *, root: Path | None = None) -> None:
     """Input: output path and markdown lines. Output: None. Persist an Obsidian-readable raw source file."""
+    active_root = root if root is not None else KNOWLEDGE_ROOT
+    guard_capture_path(active_root, path)
+    text = "\n".join(lines).rstrip() + "\n"
+    metadata, body = parse_markdown_front_matter(text)
+    if (metadata.get('capture_tool') == 'scripts/capture_learn_material.py'
+            and metadata.get('content_status') == 'raw_markdown'):
+        body_hash = hashlib.sha256(body.encode('utf-8')).hexdigest()
+        text = re.sub(r'^content_hash: [a-f0-9]{64}$', 'content_hash: ' + body_hash,
+                      text, count=1, flags=re.MULTILINE)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    guard_capture_path(active_root, path)
+    path.write_text(text, encoding="utf-8")
 
 
 def stable_json_hash(payload: Any) -> str:
@@ -129,10 +248,10 @@ def payload_record_count(payload: Any) -> int:
     return 1
 
 
-def knowledge_relative_path(path: Path) -> str:
-    """Input: vault path. Output: POSIX path relative to the active knowledge root."""
+def knowledge_relative_path(path: Path, root: Path | None = None) -> str:
+    """Input: source Path/optional knowledge Path. Output: relative str. Preserve the legacy default root."""
     try:
-        return path.resolve().relative_to(KNOWLEDGE_ROOT.resolve()).as_posix()
+        return path.resolve().relative_to((root if root is not None else KNOWLEDGE_ROOT).resolve()).as_posix()
     except ValueError:
         return path.as_posix()
 
@@ -142,9 +261,10 @@ def capture_date(generated_at: str) -> str:
     return generated_at.split("T", 1)[0]
 
 
-def raw_capture_dir(generated_at: str) -> Path:
-    """Input: ISO timestamp string. Output: raw capture directory. Place Markdown raw sources by date."""
-    return RAW_LEARN_ROOT / capture_date(generated_at)
+def raw_capture_dir(generated_at: str, root: Path | None = None) -> Path:
+    """Input: ISO str/optional knowledge Path. Output: Path. Place raw sources by date without global mutation."""
+    base = root / "raw" / "platform" / "learn" if root is not None else RAW_LEARN_ROOT
+    return base / capture_date(generated_at)
 
 
 def json_cache_dir(generated_at: str) -> Path:
@@ -164,6 +284,7 @@ def frontmatter(source_type: str, source_path: str, generated_at: str, payload: 
         "content_status: raw_markdown",
         f"record_count: {payload_record_count(payload)}",
         f"content_hash: {stable_json_hash(payload)}",
+        f"payload_hash: {stable_json_hash(payload)}",
         "update_check: compare record count, content hash, and platform endpoint against the previous Learn capture",
         "compiled_targets:",
     ]
@@ -183,12 +304,16 @@ def result_rows(payload: Any) -> list[dict[str, Any]]:
 
 
 def fetch_paginated(client: WQBClient, endpoint: str) -> list[dict[str, Any]]:
-    """Input: WQB client and endpoint. Output: all available rows up to MAX_RECORDS. Fetch one Learn section efficiently."""
+    """Input: WQB client/endpoint str. Output: list[dict] up to MAX_RECORDS. Preserve error envelopes before normalization."""
     rows: list[dict[str, Any]] = []
     offset = 0
     while offset < MAX_RECORDS:
         print(f"fetch {endpoint} offset={offset}", flush=True)
-        payload = client.get_json(f"{endpoint}?limit={PAGE_LIMIT}&offset={offset}")
+        request_path = f"{endpoint}?limit={PAGE_LIMIT}&offset={offset}"
+        payload = client.get_json(request_path)
+        if isinstance(payload, dict) and any(key in payload for key in ("error", "errors", "detail")):
+            failure = {"error": "platform_error_envelope", "endpoint": request_path, "response_payload": payload}
+            return rows[:MAX_RECORDS - 1] + [failure]
         batch = result_rows(payload)
         rows.extend(batch)
         if len(batch) < PAGE_LIMIT:
@@ -316,12 +441,13 @@ def write_raw_index(capture: dict[str, Any], manifest: dict[str, Any], output_di
     return path
 
 
-def write_raw_operators(operators: list[dict[str, Any]], generated_at: str, output_dir: Path) -> Path:
+def write_raw_operators(operators: list[dict[str, Any]], generated_at: str, output_dir: Path,
+                        *, root: Path | None = None) -> Path:
     """Input: operator rows, timestamp, output dir. Output: path. Write raw official operator records as Markdown."""
     path = output_dir / "operators.md"
     lines = frontmatter(
-        "platform_api",
-        knowledge_relative_path(path),
+        "platform_learn_material" if material_rows_valid(operators, "operator") else "platform_capture_error",
+        knowledge_relative_path(path, root),
         generated_at,
         operators,
         [TEMPLATE_OPERATOR_TARGET, OPERATOR_LEDGER_TARGET],
@@ -348,16 +474,20 @@ def write_raw_operators(operators: list[dict[str, Any]], generated_at: str, outp
                     "",
                 ]
             )
-    write_markdown(path, lines)
+    if not material_rows_valid(operators, "operator"):
+        lines.extend(["", "## Untrusted Response", "", "```json",
+                      json.dumps(operators, ensure_ascii=False, indent=2, sort_keys=True), "```"])
+    write_markdown(path, lines, root=root)
     return path
 
 
-def write_raw_documentation_pages(pages: list[dict[str, Any]], generated_at: str, output_dir: Path) -> Path:
+def write_raw_documentation_pages(pages: list[dict[str, Any]], generated_at: str, output_dir: Path,
+                                  *, root: Path | None = None) -> Path:
     """Input: documentation page rows, timestamp, output dir. Output: path. Write raw Learn documentation pages."""
     path = output_dir / "documentation_pages.md"
     lines = frontmatter(
-        "platform_api",
-        knowledge_relative_path(path),
+        "platform_learn_material" if material_rows_valid(pages, "tutorial") else "platform_capture_error",
+        knowledge_relative_path(path, root),
         generated_at,
         pages,
         [
@@ -368,6 +498,7 @@ def write_raw_documentation_pages(pages: list[dict[str, Any]], generated_at: str
             BENCHMARK_REPAIR_TARGET,
         ],
     )
+    lines.insert(-1, 'material_kind: documentation_page')
     lines.extend(["", "# Documentation Pages", "", f"Record count: {len(pages)}", ""])
     for page in sorted(pages, key=lambda item: str(item.get("title", item.get("id", ""))).lower()):
         page_id = page.get("id", "")
@@ -383,16 +514,22 @@ def write_raw_documentation_pages(pages: list[dict[str, Any]], generated_at: str
                 "",
             ]
         )
-    write_markdown(path, lines)
+    lines.extend(["", "## Raw Documentation Payload", "", "```json",
+                  json.dumps(pages, ensure_ascii=False, indent=2, sort_keys=True), "```"])
+    if not material_rows_valid(pages, "tutorial"):
+        lines.extend(["", "## Untrusted Response", "", "```json",
+                      json.dumps(pages, ensure_ascii=False, indent=2, sort_keys=True), "```"])
+    write_markdown(path, lines, root=root)
     return path
 
 
-def write_raw_errors(errors: list[dict[str, str]], generated_at: str, output_dir: Path) -> Path:
+def write_raw_errors(errors: list[dict[str, str]], generated_at: str, output_dir: Path,
+                     *, root: Path | None = None) -> Path:
     """Input: fetch error rows, timestamp, output dir. Output: path. Write raw documentation fetch errors."""
     path = output_dir / "documentation_errors.md"
     lines = frontmatter(
         "platform_api",
-        knowledge_relative_path(path),
+        knowledge_relative_path(path, root),
         generated_at,
         errors,
         [START_HERE_TARGET],
@@ -408,7 +545,7 @@ def write_raw_errors(errors: list[dict[str, str]], generated_at: str, output_dir
                 "",
             ]
         )
-    write_markdown(path, lines)
+    write_markdown(path, lines, root=root)
     return path
 
 
@@ -420,10 +557,13 @@ def write_raw_rows(
     output_dir: Path,
     filename: str,
     compiled_targets: list[str],
+    *,
+    root: Path | None = None,
 ) -> Path:
     """Input: row section metadata and rows. Output: path. Write raw API rows as Markdown."""
     path = output_dir / filename
-    lines = frontmatter("platform_api", knowledge_relative_path(path), generated_at, rows, compiled_targets)
+    source_type = "platform_learn_material" if endpoint in PAGINATED_ENDPOINTS.values() and material_rows_valid(rows, "rows") else "platform_api"
+    lines = frontmatter(source_type, knowledge_relative_path(path, root), generated_at, rows, compiled_targets)
     lines.extend(["", f"# {section_name}", "", f"Record count: {len(rows)}", ""])
     lines.extend(["", f"Source endpoint: `{endpoint}`", ""])
     for index, row in enumerate(rows, 1):
@@ -440,7 +580,7 @@ def write_raw_rows(
                 else:
                     lines.append(f"- {key}: {text}")
         lines.append("")
-    write_markdown(path, lines)
+    write_markdown(path, lines, root=root)
     return path
 
 
@@ -479,12 +619,16 @@ def write_raw_search_results(search_results: dict[str, Any], generated_at: str, 
     return path
 
 
-def update_learn_source_index(paths: list[Path]) -> Path:
+def update_learn_source_index(paths: list[Path], root: Path | None = None) -> Path:
     """Input: raw Learn paths. Output: source index path. Register raw Learn files in machine/raw indexes."""
+    active_root = root if root is not None else KNOWLEDGE_ROOT
+    for path in (*paths, active_root / "raw/source_index.md", active_root / "machine/source_index.jsonl",
+                 active_root / "machine/source_index_write.guard"):
+        guard_capture_path(active_root, path)
     rows: list[SourceIndexRow] = []
     for path in paths:
         metadata, _ = parse_markdown_front_matter(path.read_text(encoding="utf-8"))
-        relative_path = knowledge_relative_path(path)
+        relative_path = knowledge_relative_path(path, root)
         targets = metadata.get("compiled_targets", [])
         rows.append(
             SourceIndexRow(
@@ -500,7 +644,133 @@ def update_learn_source_index(paths: list[Path]) -> Path:
                 compiled_targets=[str(target) for target in targets] if isinstance(targets, list) else [],
             )
         )
-    return upsert_source_index_rows(KNOWLEDGE_ROOT, rows)
+    return upsert_source_index_rows(root if root is not None else KNOWLEDGE_ROOT, rows)
+
+
+def capture_resource_subset(root: Path, client, targets: list[dict], generated_at: str,
+                            *, request_limit: int = 12) -> dict:
+    """Input: knowledge Path, single-attempt client, target dicts, ISO str, int GET cap.
+
+    Output: dict with attempted_requests, successful_targets, remaining_targets, errors,
+    raw_markdown_files and generated_at. Persist raw/index receipts only. Targets are
+    {kind: operators}, {kind: operator, id: name}, {kind: operator_detail, id: name},
+    or {kind: tutorial, id: page_id}. Detail uses the /operators/{id} route recorded
+    in official operator cards; it never accepts an arbitrary caller-supplied URL.
+    WQBClient must already be authenticated; other clients must implement a finite
+    single-attempt get_json(path). No authentication, retries or redirects here.
+    """
+    if type(request_limit) is not int or request_limit < 0:
+        raise ValueError("request_limit must be a nonnegative integer")
+    if not isinstance(targets, list):
+        raise ValueError("targets must be a list")
+    datetime.fromisoformat(generated_at)
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T[^\r\n/\\]+", generated_at):
+        raise ValueError("generated_at must be an ISO datetime")
+    endpoints = []
+    for target in targets:
+        if not isinstance(target, dict):
+            raise ValueError("target must be a dict")
+        kind = target.get("kind")
+        if kind == "operators" and set(target) == {"kind"}:
+            endpoints.append("/operators")
+        elif kind in {"operator", "operator_detail", "tutorial"} and set(target) == {"kind", "id"}:
+            identity = target["id"]
+            if not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", identity):
+                raise ValueError("target id must be a simple known source identifier")
+            if kind == 'operator':
+                endpoints.append('/operators')
+            elif kind == 'operator_detail':
+                endpoints.append(f'/operators/{identity}')
+            else:
+                endpoints.append(f'/tutorial-pages/{identity}')
+        else:
+            raise ValueError("only explicit operator/list or tutorial targets are supported")
+    if isinstance(client, WQBClient) and targets and request_limit and not client.authenticated:
+        raise ValueError("authenticate the WQBClient separately before bounded capture")
+    result = {"generated_at": generated_at, "attempted_requests": 0, "successful_targets": [],
+              "remaining_targets": [], "errors": [], "raw_markdown_files": []}
+    paths = []
+    for index, (target, endpoint) in enumerate(zip(targets, endpoints)):
+        if result["attempted_requests"] >= request_limit:
+            result["remaining_targets"] = targets[index:]
+            break
+        guard_capture_outputs(root, generated_at)
+        result["attempted_requests"] += 1
+        payload = None
+        response = None
+        try:
+            if isinstance(client, WQBClient):
+                response = client._dispatch("GET", BASE_URL + endpoint,
+                                            timeout=min(client.timeout_seconds, REQUEST_TIMEOUT_SECONDS),
+                                            allow_redirects=False)
+                if response.status_code != 200:
+                    payload = bounded_response_payload(response)
+                response.raise_for_status()
+                if response.status_code != 200:
+                    raise ValueError(f"unexpected HTTP status {response.status_code}")
+                payload = response.json()
+            else:
+                payload = client.get_json(endpoint)
+            documentation_page = (target['kind'] == 'tutorial' or
+                (target['kind'] == 'operator_detail' and isinstance(payload, dict)
+                 and ('content' in payload or ('title' in payload and 'name' not in payload))))
+            if documentation_page:
+                if (not isinstance(payload, dict) or payload.get("id") != target["id"]
+                        or (target['kind'] == 'operator_detail' and
+                            (not isinstance(payload.get('title'), str) or not payload['title'].strip()))
+                        or not material_rows_valid([payload], "tutorial")):
+                    raise ValueError("missing or invalid non-course tutorial material")
+                rows = [payload]
+            else:
+                if target['kind'] == 'operator_detail':
+                    if not isinstance(payload, dict):
+                        raise ValueError('operator detail requires one direct object')
+                    rows = [payload]
+                else:
+                    rows = result_rows(payload)
+                if ((isinstance(payload, dict) and any(key in payload for key in ("error", "errors", "detail")))
+                        or not material_rows_valid(rows, "operator")):
+                    raise ValueError("missing or invalid operator material")
+                if target["kind"] in {"operator", "operator_detail"}:
+                    rows = [row for row in rows if row.get("name") == target["id"]]
+                    if len(rows) != 1 or ('id' in rows[0] and rows[0]['id'] != target['id']):
+                        raise ValueError("operator target must match exactly one returned row")
+        except Exception as error:
+            error_response = getattr(error, "response", None)
+            if error_response is not None:
+                response = error_response
+                if payload is None:
+                    payload = bounded_response_payload(response)
+            failure = {"target": dict(target), "endpoint": endpoint, "error": type(error).__name__,
+                       "message": str(error), "status_code": getattr(response, "status_code", None),
+                       "retry_after": response.headers.get("Retry-After") if response is not None else None,
+                       "response_payload": payload}
+            result["errors"].append(failure)
+            rows = None
+        receipt = {"generated_at": generated_at, "target": target, "endpoint": endpoint, "payload": payload,
+                   "error": result["errors"][-1] if rows is None else None}
+        output_dir = raw_capture_dir(generated_at, root) / ("subset-" + stable_json_hash(receipt))
+        guard_capture_outputs(root, generated_at)
+        guard_capture_path(root, output_dir)
+        if rows is None:
+            path = output_dir / "request_error.md"
+            lines = frontmatter("platform_capture_error", knowledge_relative_path(path, root),
+                                generated_at, receipt, [])
+        else:
+            if documentation_page:
+                path = write_raw_documentation_pages(rows, generated_at, output_dir, root=root)
+            else:
+                path = write_raw_operators(rows, generated_at, output_dir, root=root)
+            lines = path.read_text(encoding="utf-8").splitlines()
+            result["successful_targets"].append(dict(target))
+        lines.extend(["", "## Raw GET Receipt", "", "```json",
+                      json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True), "```"])
+        write_markdown(path, lines, root=root)
+        paths.append(path)
+    if paths:
+        update_learn_source_index(paths, root)
+    result["raw_markdown_files"] = [str(path) for path in paths]
+    return result
 
 
 def write_raw_learn_markdown(capture: dict[str, Any], manifest: dict[str, Any]) -> list[Path]:

@@ -9,7 +9,7 @@ from wqb.benchmark import REPAIRABLE_CHECKS, benchmark_alpha_record
 STAGE_MAX_SIMULATIONS = {
     "scout": 30,
     "seed": 8,
-    "discovery": 50,
+    "discovery": 30,
     "repair": 8,
     "submit": 0,
 }
@@ -80,8 +80,6 @@ class WorkflowTask:
 def cap_simulation_count(stage: str, requested_count: int) -> int:
     """Input: workflow stage and requested count. Output: capped count. Enforce stage batch budgets."""
     normalized = stage.strip().lower()
-    if normalized == "scout" and int(requested_count) > 0:
-        return STAGE_MAX_SIMULATIONS["scout"]
     stage_cap = STAGE_MAX_SIMULATIONS.get(normalized, requested_count)
     return max(0, min(int(requested_count), stage_cap))
 

@@ -2,16 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 from typing import Any
-
-
-UNITTEST_DISCOVERY_CODE = (
-    "import sys, runpy; sys.platform='linux'; "
-    "runpy.run_module('unittest', run_name='__main__')"
-)
 
 
 def _now() -> str:
@@ -26,8 +21,8 @@ def verification_commands() -> tuple[tuple[str, list[str]], ...]:
             "unittest_discovery",
             [
                 sys.executable,
-                "-c",
-                UNITTEST_DISCOVERY_CODE,
+                "-m",
+                "unittest",
                 "discover",
                 "-s",
                 "tests",
@@ -44,12 +39,17 @@ def verification_commands() -> tuple[tuple[str, list[str]], ...]:
 def _run_check(code: str, command: list[str], project_root: Path) -> dict[str, Any]:
     """Input: check code, command, project root. Output: machine-readable local command result."""
     try:
+        environment = os.environ.copy()
+        if os.name == "nt":
+            environment.setdefault("SystemRoot", environment.get("windir") or environment.get("SystemDrive", "C:") + "\\Windows")
+            environment.setdefault("windir", environment["SystemRoot"])
         completed = subprocess.run(
             command,
             cwd=str(project_root),
             capture_output=True,
             text=True,
             check=False,
+            env=environment,
         )
         return {
             "code": code,

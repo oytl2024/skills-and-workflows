@@ -38,8 +38,8 @@ class DeliveryVerificationTests(unittest.TestCase):
             self.assertEqual(
                 checks["unittest_discovery"]["command"][1:],
                 [
-                    "-c",
-                    "import sys, runpy; sys.platform='linux'; runpy.run_module('unittest', run_name='__main__')",
+                    "-m",
+                    "unittest",
                     "discover",
                     "-s",
                     "tests",

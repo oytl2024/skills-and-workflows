@@ -16,6 +16,18 @@ from wqb.workflow_state import create_initial_state, write_run_state
 
 
 class DeliveryGateTests(unittest.TestCase):
+    def test_optional_mechanism_view_accepts_empty_derived_json_but_not_corruption(self):
+        from wqb.delivery_gate import _parse_machine_resource
+        from wqb.mechanism_evidence import build_mechanism_evidence
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / 'machine/mechanism_evidence.json'
+            path.parent.mkdir()
+            path.write_text(json.dumps(build_mechanism_evidence([], []), indent=2), encoding='utf-8')
+            self.assertTrue(_parse_machine_resource(root, 'mechanism_evidence')[0])
+            path.write_text('{}', encoding='utf-8')
+            self.assertFalse(_parse_machine_resource(root, 'mechanism_evidence')[0])
+
     def _write_minimal_clean_knowledge(self, root: Path) -> Path:
         for name in ("raw", "machine", "wiki"):
             (root / name).mkdir(parents=True, exist_ok=True)
@@ -326,7 +338,7 @@ class DeliveryGateTests(unittest.TestCase):
             with patch("wqb.delivery_gate.evaluate_run_readiness", return_value=self._passing_readiness()):
                 report = run_delivery_gate(knowledge, runs, "2026-07-30T00:00:00+00:00")
 
-            self.assertEqual(report["status"], "passed")
+            self.assertEqual(report["status"], "passed", report)
             self.assertIn("expected_pause", {check["code"] for check in report["checks"]})
 
     def test_delivery_gate_accepts_structured_missing_candidates_pause(self):

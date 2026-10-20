@@ -3,6 +3,9 @@ from typing import Any
 
 import requests
 
+from wqb.runtime_control import check_submission_allowed, cooperative_sleep
+from wqb.simulation_request_policy import next_poll_delay
+
 
 MAX_SIMULATION_POLL_RETRY_AFTER_POLLS = 120
 MAX_SIMULATION_POLL_RETRY_AFTER_WAIT_SECONDS = 900.0
@@ -33,6 +36,9 @@ class SimulationPollTimeout(requests.exceptions.Timeout):
 
 def submit_simulation(client, payload: dict[str, Any]) -> str:
     """Input: WQB client and simulation payload. Output: progress URL. Submit one simulation."""
+    from wqb.original_batch_recovery import validate_original_payloads
+    validate_original_payloads(payload)
+    check_submission_allowed(1)
     response = client.post_json("/simulations", payload)
     location = response.headers.get("Location")
     if not location:
@@ -44,6 +50,9 @@ def submit_multisimulation(client, payloads: list[dict[str, Any]]) -> str:
     """Input: WQB client and payload list. Output: progress URL. Submit a multisimulation batch."""
     if not payloads:
         raise ValueError("multisimulation requires at least one payload")
+    from wqb.original_batch_recovery import validate_original_payloads
+    validate_original_payloads(payloads)
+    check_submission_allowed(len(payloads))
     response = client.post_json("/simulations", payloads)
     location = response.headers.get("Location")
     if not location:
@@ -83,11 +92,12 @@ def poll_simulation(
     retry_after_polls = 0
     retry_after_wait_seconds = 0.0
     while True:
+        check_submission_allowed()
         response = _request_progress(client, progress_url)
         retry_after = response.headers.get("Retry-After")
         if retry_after:
             retry_after_polls += 1
-            sleep_seconds = _retry_after_seconds(str(retry_after))
+            sleep_seconds = next_poll_delay({}, retry_after_polls - 1, _retry_after_seconds(str(retry_after)), 0.0)
             projected_wait = retry_after_wait_seconds + sleep_seconds
             if retry_after_polls > max_retry_after_polls or projected_wait > max_retry_after_wait_seconds:
                 raise SimulationPollTimeout(
@@ -106,7 +116,7 @@ def poll_simulation(
                     response=response,
                 )
             retry_after_wait_seconds = projected_wait
-            time.sleep(sleep_seconds)
+            cooperative_sleep(sleep_seconds)
             continue
         response.raise_for_status()
         return response.json()

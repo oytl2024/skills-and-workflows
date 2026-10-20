@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timezone
 import json
 from pathlib import Path
@@ -39,6 +39,22 @@ class ReadinessReport:
     passed: bool
     blocked: bool
     issues: list[ReadinessIssue]
+
+
+def resolve_operational_readiness(report: ReadinessReport, snapshot: dict | None = None) -> ReadinessReport:
+    """Input: readiness report and optional frozen paired snapshot. Output: report; replace only the verified legacy-reader incompatibility."""
+    if snapshot is None:
+        return report
+    from wqb.hypothesis_selection import validate_operational_resource_context
+    if not validate_operational_resource_context(snapshot):
+        raise ValueError('paired_scout readiness requires verified operational context')
+    issues = [issue for issue in report.issues if not (
+        issue.level == 'block' and issue.code == 'v2_hypothesis_unexecutable'
+        and 'source-backed resource contract requires approved operational evidence context' in issue.message)]
+    if len(issues) == len(report.issues):
+        return report
+    blocked = any(issue.level == 'block' for issue in issues)
+    return replace(report, issues=issues, passed=not blocked, blocked=blocked)
 
 
 def _issue(level: str, code: str, message: str, path: Path | str = "", action: str = "") -> ReadinessIssue:
@@ -182,7 +198,7 @@ def _record_scope_keys(record: DataLedgerRecord) -> set[tuple[str, str, int, str
     return {fallback} if fallback is not None else set()
 
 
-def _canonical_raw_fields_path(root: Path, source_path: str) -> Path | None:
+def _canonical_raw_fields_path(root: Path, source_path: str, record: DataLedgerRecord | None = None) -> Path | None:
     """Input: vault root and source path. Output: raw data_fields path or none. Resolve safe capture evidence."""
     candidate = Path(str(source_path).replace("\\", "/"))
     resolved = candidate if candidate.is_absolute() else root / candidate
@@ -192,6 +208,10 @@ def _canonical_raw_fields_path(root: Path, source_path: str) -> Path | None:
         return None
     if tuple(part.lower() for part in relative.parts[:3]) != ("raw", "platform", "data_fields"):
         return None
+    if resolved.name.startswith('semantic-subset-') and record is not None:
+        from wqb.knowledge_contracts import verified_field_extract_source
+        return verified_field_extract_source(root, relative.as_posix(), record.dataset_id, record.field_id,
+                                             _record_scope_keys(record))
     if resolved.name != "data_fields.jsonl":
         return None
     return resolved
@@ -264,7 +284,7 @@ def _batch_uncertified_records(records: list[DataLedgerRecord], root: Path) -> l
         if source_date is None or not record_scopes:
             continue
         for source_path in record.source_paths:
-            raw_path = _canonical_raw_fields_path(root, source_path)
+            raw_path = _canonical_raw_fields_path(root, source_path, record)
             if raw_path is None or not raw_path.exists():
                 continue
             cache_key = (raw_path, source_date)
@@ -332,7 +352,10 @@ def _validate_scope_artifacts(
     template_path = template_library_path_for_knowledge(root)
     try:
         ledger_records = load_data_ledger_from_knowledge(root)
-        template_records = load_template_library_from_knowledge(root)
+        from wqb.workflow_stage_adapters import _read_start_semantic_pair
+        from wqb.template_library import template_record_from_dict
+        _, raw_templates, operators = _read_start_semantic_pair(root)
+        template_records = [template_record_from_dict(row) for row in raw_templates]
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
         issues.append(_issue(level, "parse_error", f"Cannot load scoped knowledge artifacts: {error}", root, "Fix JSONL before running research."))
         return
@@ -448,6 +471,21 @@ def _validate_scope_artifacts(
             )
         )
         return
+    if any(record.binding_version == 2 for record in template_records):
+        from wqb.workflow_stage_adapters import _select_hypothesis_snapshot_rows
+        try:
+            raw_fields = [json.loads(line) for line in ledger_path.read_text(encoding='utf-8').splitlines() if line.strip()]
+            # Raw capture time is not field availability. The readiness cutoff is this evaluation date only.
+            scope = dict(region=region, delay=int(delay), universe=universe,
+                         as_of=datetime.combine(current, datetime.max.time(), timezone.utc).isoformat())
+            covered_keys = {(row.dataset_id, row.field_id) for row in covered_data}
+            raw_fields = [row for row in raw_fields if (row.get('dataset_id'), row.get('field_id')) in covered_keys]
+            _select_hypothesis_snapshot_rows(scope, raw_fields, raw_templates, operators)
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            issues.append(_issue(level, 'v2_hypothesis_unexecutable',
+                'Reviewed v2 hypothesis coverage/dependencies unavailable: ' + str(error), template_path,
+                'Compile missing field availability/units/operator facts; no silent legacy fallback.'))
+        return
     has_template_match = any(
         select_templates_for_data(
             template_records,
@@ -532,8 +570,8 @@ def evaluate_run_readiness(
         current,
         _data_ledger_max_age_days(freshness_records),
     )
-    if mode == "research" and batch_size < 30:
-        issues.append(_issue("block", "batch_size_too_small", "Research discovery batch size must be at least 30.", "", "Set batch_size to 30 or higher."))
+    if mode == "research" and batch_size < 1:
+        issues.append(_issue("block", "batch_size_too_small", "Research batch size must be positive.", "", "Select a positive batch cap; Scout and Discovery are capped at 30."))
     if mode == "research" and not live_api_enabled:
         issues.append(_issue("block", "live_api_disabled", "Research mode requires explicit live API enablement.", "", "Pass live_api_enabled=True or use plan-only mode."))
     if mode == "submit-candidate" and not submit_confirmed:

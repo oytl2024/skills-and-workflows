@@ -426,7 +426,8 @@ class ConsoleStateTests(unittest.TestCase):
                 )
             )
 
-        self.assertTrue(state["readiness"]["passed"])
+        self.assertTrue(state["run_readiness"]["passed"])
+        self.assertFalse(state["readiness"]["passed"])
         self.assertEqual(state["freshness"]["record_count"], 4)
         self.assertEqual(state["option_cards"][0]["title"], "Explore current Power Pool boards")
         self.assertIn("Research Schedule", state["schedule"]["preview"])
@@ -634,6 +635,13 @@ class ConsoleStateTests(unittest.TestCase):
             (run_dir / "approved_candidates.jsonl").write_text(
                 '{"candidate_id":"c1","status":"queued"}\n', encoding="utf-8"
             )
+            ai_dir = run_dir / "stages" / "ai"
+            ai_dir.mkdir(parents=True)
+            (ai_dir / "ai_checkpoints.jsonl").write_text(json.dumps({
+                "checkpoint_id": "ai-run-1", "checkpoint_type": "near_miss_interpretation",
+                "reason": "Explain checked signal", "evidence_paths": [],
+                "created_at": "2026-07-12T00:00:00Z", "status": "pending",
+            }) + "\n", encoding="utf-8")
 
             state = load_console_state(
                 ConsolePaths(
@@ -650,6 +658,8 @@ class ConsoleStateTests(unittest.TestCase):
         self.assertEqual(state["active_workflow"]["run_id"], "run1")
         self.assertEqual(state["workflow_events"][0]["event_type"], "workflow_created")
         self.assertEqual(state["approved_queue"][0]["candidate_id"], "c1")
+        self.assertEqual(state["run_ai_checkpoints"][0]["checkpoint_id"], "ai-run-1")
+        self.assertEqual(state["ai_checkpoints"][0]["checkpoint_id"], "ai-run-1")
 
     def test_active_workflow_summary_includes_nonterminal_consistency_diagnostics(self):
         with tempfile.TemporaryDirectory() as tmp:

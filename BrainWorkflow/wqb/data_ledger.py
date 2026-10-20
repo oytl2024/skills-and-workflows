@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from wqb.knowledge_paths import existing_machine_resource_path
+from wqb.semantic_contracts import check_semantic_record_fields, timing_contract_from_dict
 
 
 LOW_RISK_BONUS = 1.5
@@ -57,6 +58,12 @@ class DataLedgerRecord:
     known_operators: list[str] = field(default_factory=list)
     repair_usage_count: int = 0
     field_description: str = ""
+    units: str | None = None
+    vector_grain: str | None = None
+    available_at: str | None = None
+    timing_contract: dict | None = None
+    submitted_alpha_ids: list[str] | None = None
+    submitted_legacy_usage_count: int | None = None
 
 
 def data_ledger_record_to_dict(record: DataLedgerRecord) -> dict[str, Any]:
@@ -64,11 +71,17 @@ def data_ledger_record_to_dict(record: DataLedgerRecord) -> dict[str, Any]:
     row = asdict(record)
     if row["available_scopes"] is None:
         row.pop("available_scopes")
+    for key in ('units', 'vector_grain', 'available_at', 'timing_contract',
+                'submitted_alpha_ids', 'submitted_legacy_usage_count'):
+        if row[key] is None:
+            row.pop(key)
     return row
 
 
 def data_ledger_record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
     """Input: dict row. Output: DataLedgerRecord. Normalize one JSON-safe data ledger row."""
+    if "timing_contract" in row:
+        check_semantic_record_fields(row, DataLedgerRecord)
     return DataLedgerRecord(
         dataset_id=str(row.get("dataset_id", "")),
         dataset_name=str(row.get("dataset_name", "")),
@@ -109,6 +122,12 @@ def data_ledger_record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
         known_operators=[str(item) for item in row.get("known_operators", []) if str(item)],
         repair_usage_count=int(row.get("repair_usage_count", 0)),
         field_description=str(row.get("field_description", "")),
+        units=row.get('units'),
+        vector_grain=row.get('vector_grain'),
+        available_at=row.get('available_at'),
+        timing_contract=timing_contract_from_dict(row['timing_contract']) if 'timing_contract' in row else None,
+        submitted_alpha_ids=row.get('submitted_alpha_ids'),
+        submitted_legacy_usage_count=row.get('submitted_legacy_usage_count'),
     )
 
 
@@ -154,7 +173,7 @@ def _valid_source_date(value: str) -> date | None:
         return None
 
 
-def _canonical_capture_path(knowledge_root: Path, source_path: str) -> Path | None:
+def _canonical_capture_path(knowledge_root: Path, source_path: str, record: DataLedgerRecord | None = None) -> Path | None:
     """Input: vault root and source path. Output: canonical capture path or none. Resolve only raw data-field evidence."""
     candidate = Path(str(source_path).replace("\\", "/"))
     if candidate.is_absolute():
@@ -172,6 +191,10 @@ def _canonical_capture_path(knowledge_root: Path, source_path: str) -> Path | No
     expected = ("raw", "platform", "data_fields")
     if tuple(part.lower() for part in relative.parts[:3]) != expected:
         return None
+    if resolved.name.startswith('semantic-subset-') and record is not None:
+        from wqb.knowledge_contracts import verified_field_extract_source
+        return verified_field_extract_source(root, relative.as_posix(), record.dataset_id, record.field_id,
+                                             _record_scope_keys(record))
     if resolved.name != "data_fields.jsonl" or len(relative.parts) < 5:
         return None
     return resolved
@@ -262,7 +285,7 @@ def _has_authoritative_capture_evidence(record: DataLedgerRecord, knowledge_root
         return False
     remaining = set(required_scopes)
     for source_path in record.source_paths:
-        raw_path = _canonical_capture_path(knowledge_root, source_path)
+        raw_path = _canonical_capture_path(knowledge_root, source_path, record)
         if raw_path is None or not raw_path.exists():
             continue
         capture_dir = raw_path.parent

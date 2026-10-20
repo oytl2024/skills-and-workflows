@@ -33,8 +33,10 @@ def record_console_job_context(paths: ConsolePaths, job: ConsoleJob, next_comman
         f"- Summary: `{job.summary_path}`\n"
     )
     with CONSOLE_CONTEXT_WRITE_LOCK:
-        _append(paths.milestone_path, milestone_text)
-        _append(paths.todo_path, todo_text)
+        if not paths.milestone_path.exists():
+            paths.milestone_path.parent.mkdir(parents=True, exist_ok=True)
+            paths.milestone_path.write_text('# Project architecture\n\nRuntime jobs are recorded in todo.md and runs/console_jobs/.\n', encoding='utf-8')
+        _append(paths.todo_path, todo_text + milestone_text)
         summary = Path(job.summary_path)
         existing = summary.read_text(encoding="utf-8") if summary.exists() else "# Console Job Summary\n"
         if "## Next Command" not in existing:

@@ -11,9 +11,12 @@ MACHINE_RESOURCE_FILES: dict[str, str] = {
     "template_library": "template_library.jsonl",
     "benchmark_rules": "benchmark_rules.jsonl",
     "research_records": "research_records.jsonl",
+    "mechanism_evidence": "mechanism_evidence.json",
     "source_index": "source_index.jsonl",
     "freshness_manifest": "freshness_manifest.json",
 }
+
+OPTIONAL_DERIVED_RESOURCES = frozenset({'mechanism_evidence'})
 
 LEGACY_MACHINE_RESOURCE_PATHS: dict[str, tuple[Path, ...]] = {
     "data_ledger": (Path("wiki") / "20_semantics" / "data_ledger.jsonl",),
@@ -103,9 +106,14 @@ def machine_resource_path(knowledge_root: str | Path, resource_name: str) -> Pat
     return Path(knowledge_root) / "machine" / MACHINE_RESOURCE_FILES[name]
 
 
-def existing_machine_resource_path(knowledge_root: str | Path, resource_name: str) -> Path:
-    """Input: knowledge root and resource name. Output: existing canonical path or legacy fallback path."""
+def existing_machine_resource_path(knowledge_root: str | Path, resource_name: str, *, receipt: dict | None = None) -> Path:
+    """Input: root, name, optional fixed receipt dict. Output: selected Path; share receipt for semantic pairs."""
     name = _require_resource_name(resource_name)
+    if name in {"operator_ledger", "template_library"}:
+        from wqb.semantic_publication import read_semantic_release, validate_semantic_receipt
+
+        selected = validate_semantic_receipt(Path(knowledge_root), receipt) if receipt is not None else read_semantic_release(Path(knowledge_root))
+        return Path(selected["paths"][name])
     canonical = machine_resource_path(knowledge_root, name)
     if canonical.exists():
         return canonical

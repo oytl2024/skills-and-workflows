@@ -15,7 +15,7 @@ from wqb.knowledge_freshness import (
     load_freshness_manifest,
 )
 from wqb.knowledge_contracts import canonical_source_family, parse_markdown_front_matter
-from wqb.knowledge_paths import MACHINE_RESOURCE_FILES, machine_resource_path
+from wqb.knowledge_paths import MACHINE_RESOURCE_FILES, OPTIONAL_DERIVED_RESOURCES, machine_resource_path
 from wqb.research_planner import plan_research_options
 from wqb.run_readiness import evaluate_run_readiness
 from wqb.workflow_events import WorkflowEventReadError, read_workflow_events_strict
@@ -324,6 +324,15 @@ def _parse_machine_resource(
             if not records:
                 raise ValueError("freshness manifest is empty")
             return True, f"Machine resource is non-empty and parseable: {resource_name}.", []
+        if resource_name == 'mechanism_evidence':
+            view = json.loads(path.read_text(encoding='utf-8'))
+            if (not isinstance(view, dict) or type(view.get('schema_version')) is not int or view['schema_version'] != 1
+                    or not isinstance(view.get('input_digest'), str) or len(view['input_digest']) != 64
+                    or any(c not in '0123456789abcdef' for c in view['input_digest'])
+                    or any(not isinstance(view.get(k), list) or any(not isinstance(r, dict) for r in view[k])
+                           for k in ('groups', 'exclusions'))):
+                raise ValueError('invalid derived mechanism view')
+            return True, 'Derived mechanism view is parseable; empty evidence is valid.', []
         rows: list[dict[str, Any]] = []
         for line in path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
@@ -666,6 +675,10 @@ def run_delivery_gate(
     machine_rows: dict[str, list[dict[str, Any]]] = {}
     for resource_name in MACHINE_RESOURCE_FILES:
         path = machine_resource_path(knowledge, resource_name)
+        if resource_name in OPTIONAL_DERIVED_RESOURCES and not path.exists():
+            checks.append(_check(True, f'machine_resource_{resource_name}',
+                'Optional derived view is absent; knowledge maintenance can rebuild it.', str(path)))
+            continue
         parsed, message, rows = _parse_machine_resource(knowledge, resource_name)
         machine_rows[resource_name] = rows
         checks.append(

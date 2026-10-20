@@ -6,11 +6,35 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+from wqb.runtime_control import _write, RuntimePaused
+from wqb.source_run_lock import acquire_source_run_lock, release_source_run_lock
+
 
 BASE_COOLDOWN_SECONDS = 60
 MAX_COOLDOWN_SECONDS = 900
 MAX_CONSECUTIVE_429 = 3
 MAX_BACKOFF_ATTEMPT_COUNT = 32
+BOUNDED_RETRY_LEASE_SECONDS = 90
+
+
+class RateLimitRecoveryRequired(RuntimePaused):
+    """Input: source Path/state dict. Output: typed local stop. Request bounded recovery without submitting."""
+
+    def __init__(self, source: Path, state: dict) -> None:
+        super().__init__("rate_limit_recovery_authorization_required")
+        self.source_run_dir = str(source)
+        self.retry_at = str(state.get("retry_at", ""))
+
+
+def check_source_retry_authorization(source: Path, now: str | None = None) -> None:
+    """Input: source Path/optional ISO time. Output: none or local stop. Recheck cooldown/lease immediately before POST."""
+    state = read_rate_limit_state(Path(source) / "rate_limit_state.json")
+    current = now or datetime.now(timezone.utc).isoformat()
+    if state.get("status") == "invalid":
+        raise ValueError("invalid rate-limit evidence; submission refused")
+    count = _normalized_counter(state.get("consecutive_429_count"), MAX_CONSECUTIVE_429)
+    if cooldown_is_active(state, current) or (count >= MAX_CONSECUTIVE_429 - 1 and not bounded_retry_is_authorized(state, current)):
+        raise RateLimitRecoveryRequired(Path(source), state)
 
 
 def _parse_time(value: str) -> datetime:
@@ -89,12 +113,48 @@ def cooldown_is_active(state: dict[str, Any], now: str) -> bool:
         return False
 
 
-def rate_limit_requires_maintenance(state: dict[str, Any]) -> bool:
+def bounded_retry_is_authorized(state: dict[str, Any], now: str) -> bool:
+    """Input: rate-limit dict/time str. Output: bool. Match an unexpired retry lease to unchanged platform evidence."""
+    permit = state.get("bounded_retry")
+    if not isinstance(permit, dict) or state.get("status") != "cooldown":
+        return False
+    if any(permit.get(key) != state.get(key) for key in ("updated_at", "retry_at", "consecutive_429_count", "attempt_count")):
+        return False
+    try:
+        return _parse_time(permit["authorized_at"]) <= _parse_time(now) < _parse_time(permit["expires_at"]) and not cooldown_is_active(state, now)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def authorize_bounded_retry(run_dir: str | Path, now: str) -> dict[str, Any]:
+    """Input: source Path/time str. Output: dict. Lease one bounded recovery window without claiming platform recovery."""
+    root = Path(run_dir)
+    path = root / "rate_limit_state.json"
+    lock = acquire_source_run_lock(root, "bounded-rate-recovery", now)
+    if lock.get("status") != "acquired":
+        raise ValueError("source worker owns rate-limit state")
+    try:
+        state = read_rate_limit_state(path)
+        retry_at = state.get("retry_at")
+        if state.get("status") != "cooldown" or not retry_at or _parse_time(now) < _parse_time(str(retry_at)):
+            raise ValueError("valid expired platform cooldown required")
+        state["bounded_retry"] = {key: state.get(key) for key in ("updated_at", "retry_at", "consecutive_429_count", "attempt_count")}
+        state["bounded_retry"].update(authorized_at=now,
+            expires_at=(_parse_time(now) + timedelta(seconds=BOUNDED_RETRY_LEASE_SECONDS)).isoformat(),
+            reason="bounded_runtime_retry_not_platform_recovery_evidence")
+        _write(path, state)
+        return state
+    finally:
+        release_source_run_lock(root, "bounded-rate-recovery", now, owner_id=str(lock.get("owner_id", "")))
+
+
+def rate_limit_requires_maintenance(state: dict[str, Any], now: str | None = None) -> bool:
     """Input: rate-limit state dict. Output: bool. Stop automatic recovery at the consecutive-429 threshold."""
     count = _normalized_counter(
         state.get("consecutive_429_count", 0), MAX_CONSECUTIVE_429
     )
-    return count >= MAX_CONSECUTIVE_429
+    current = now or datetime.now(timezone.utc).isoformat()
+    return count >= MAX_CONSECUTIVE_429 and not bounded_retry_is_authorized(state, current)
 
 
 def reset_rate_limit(
@@ -118,6 +178,34 @@ def reset_rate_limit(
         "max_consecutive_429": MAX_CONSECUTIVE_429,
         "reset_reason": str(reason),
         "reset_at": now,
+    }
+    path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    return state
+
+
+def acknowledge_rate_limit_recovery(
+    run_dir: str | Path,
+    reason: str,
+    now: str,
+) -> dict[str, Any]:
+    """Input: source run, operator reason, timestamp. Output: ready state dict. Clear a 429 threshold after local acknowledgement."""
+    root = Path(run_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "rate_limit_state.json"
+    previous = read_rate_limit_state(path)
+    state = {
+        **(previous if isinstance(previous, dict) else {}),
+        "status": "ready",
+        "updated_at": now,
+        "retry_after_seconds": 0,
+        "retry_at": "",
+        "attempt_count": 0,
+        "consecutive_429_count": 0,
+        "max_consecutive_429": MAX_CONSECUTIVE_429,
+        "reset_reason": "operator_acknowledged_rate_limit_recovery",
+        "reset_at": now,
+        "acknowledged_reason": str(reason),
+        "acknowledged_at": now,
     }
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     return state
@@ -154,7 +242,7 @@ def record_rate_limit(
     headers = getattr(response, "headers", {}) or {}
     retry_after = parse_retry_after_seconds(headers, current_time)
     wait_seconds = (
-        min(MAX_COOLDOWN_SECONDS, retry_after)
+        retry_after
         if retry_after is not None
         else compute_backoff_seconds(attempt_count)
     )

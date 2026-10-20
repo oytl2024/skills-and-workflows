@@ -20,16 +20,16 @@ class ResearchWorkflowTests(unittest.TestCase):
 
         self.assertEqual(summary["scout"], 30)
         self.assertEqual(summary["seed"], 8)
-        self.assertEqual(summary["discovery"], 50)
+        self.assertEqual(summary["discovery"], 30)
         self.assertEqual(summary["repair"], 8)
         self.assertEqual(summary["submit"], 0)
         self.assertIsNot(summary, __import__("wqb.research_workflow", fromlist=["STAGE_MAX_SIMULATIONS"]).STAGE_MAX_SIMULATIONS)
 
     def test_scout_and_repair_cap_small_batches(self):
-        self.assertEqual(cap_simulation_count("scout", 2), 30)
+        self.assertEqual(cap_simulation_count("scout", 2), 2)
         self.assertEqual(cap_simulation_count("scout", 50), 30)
         self.assertEqual(cap_simulation_count("repair", 50), 8)
-        self.assertEqual(cap_simulation_count("discovery", 50), 50)
+        self.assertEqual(cap_simulation_count("discovery", 50), 30)
 
     def test_precheck_rejects_complex_expressions_for_scout(self):
         multiline = "rank(ts_mean(field_a, 5))\nrank(field_b)"

@@ -119,12 +119,19 @@ def evaluate_freshness(
 ) -> list[KnowledgeFreshnessStatus]:
     """Input: records and current date. Output: statuses. Mark stale knowledge artifacts."""
     statuses: list[KnowledgeFreshnessStatus] = []
+    receipt = None
+    if artifact_root is not None and any(row.name in {"operator_ledger", "template_library"} for row in records):
+        from wqb.semantic_publication import read_semantic_release
+
+        receipt = read_semantic_release(artifact_root)
     for record in records:
-        updated = date.fromisoformat(record.updated_at)
+        semantic = receipt is not None and receipt["release_id"] is not None and record.name in receipt["paths"]
+        updated_at = receipt["generated_at"][:10] if semantic else record.updated_at
+        updated = date.fromisoformat(updated_at)
         age_days = (today - updated).days
         artifact_exists = True
         if artifact_root is not None:
-            artifact_path = Path(record.path)
+            artifact_path = Path(receipt["paths"][record.name] if semantic else record.path)
             if not artifact_path.is_absolute():
                 if artifact_path.parts and artifact_path.parts[0].lower() == artifact_root.name.lower():
                     artifact_path = artifact_root.parent / artifact_path
@@ -134,8 +141,8 @@ def evaluate_freshness(
         statuses.append(
             KnowledgeFreshnessStatus(
                 name=record.name,
-                path=record.path,
-                updated_at=record.updated_at,
+                path=receipt["paths"][record.name] if semantic else record.path,
+                updated_at=updated_at,
                 max_age_days=record.max_age_days,
                 age_days=age_days,
                 stale=age_days > record.max_age_days or not artifact_exists,

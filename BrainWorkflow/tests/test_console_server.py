@@ -10,12 +10,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from wqb.console_server import build_action_command, create_console_proposal, make_console_server, render_dashboard, render_proposals, render_runtime_fragments, run_console_action, update_console_proposal_decision
+from wqb.console_server import _workflow_action_hash, assert_workflow_action_current, build_action_command, create_console_proposal, make_console_server, render_dashboard, render_proposals, render_runtime_fragments, run_console_action, update_console_proposal_decision
 from wqb.console_jobs import create_job, load_job_history
 from wqb.console_state import ConsolePaths, load_console_state
 from wqb.data_ledger_compile import compile_data_ledger_from_raw
 from wqb.knowledge_clean_compile import apply_obsolete_active_cleanup
 from wqb.workflow_proposals import load_workflow_proposals
+
+
+def validate_start_coverage(paths, form):
+    """Input: ConsolePaths and form dict. Output: None. Exercise the strict validation now deferred to local prep."""
+    from wqb.console_server import _selected_option, _selected_scope, _validate_option_data_coverage
+    _validate_option_data_coverage(paths, _selected_option(paths, form["selected_option_id"]), _selected_scope(form))
 
 
 def make_paths(root: Path) -> ConsolePaths:
@@ -42,13 +48,15 @@ def valid_option(**overrides):
     return {**row, **overrides}
 
 
-def request_from_console_server(server, method: str, path: str, body: str = "") -> tuple[int, dict[str, str], bytes]:
+def request_from_console_server(server, method: str, path: str, body: str = "", origin: str | None = None) -> tuple[int, dict[str, str], bytes]:
     """Input: local Console server and HTTP request values. Output: status, headers, body. Exercise one handler request."""
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     connection = HTTPConnection(*server.server_address, timeout=5)
     try:
         headers = {"Content-Type": "application/x-www-form-urlencoded"} if body else {}
+        if method == "POST":
+            headers["Origin"] = origin if origin is not None else f"http://{server.server_address[0]}:{server.server_address[1]}"
         connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse()
         return response.status, dict(response.getheaders()), response.read()
@@ -60,6 +68,60 @@ def request_from_console_server(server, method: str, path: str, body: str = "") 
 
 
 class ConsoleServerTests(unittest.TestCase):
+    def test_round_blocker_invalidates_resume_action_revision(self):
+        """Input: Console snapshots. Output: assertions. Reject Resume forms captured before a round blocker."""
+        state = {"active_workflow": {"run_id": "run-1"}, "research_rounds": {"status": "running"}}
+        blocked = {**state, "research_rounds": {"status": "blocked", "stop_reason": "research_plan_unavailable"}}
+        self.assertNotEqual(_workflow_action_hash(state), _workflow_action_hash(blocked))
+
+    def test_workflow_resume_rejects_stale_form_state(self):
+        state = {"active_workflow": {"exists": True, "run_id": "run-1"}}
+        current_hash = render_runtime_fragments(state)["action_revision"]
+
+        assert_workflow_action_current({"action": "workflow-auto-continue", "state_hash": current_hash}, state)
+        with self.assertRaisesRegex(ValueError, "stale workflow state"):
+            assert_workflow_action_current({"action": "workflow-auto-continue", "state_hash": "old"}, state)
+        assert_workflow_action_current({"action": "workflow-stop"}, state)
+
+    def test_action_revision_ignores_transient_source_metadata_but_tracks_pause(self):
+        state = {
+            "active_workflow": {"exists": True, "run_id": "run-1", "status": "paused"},
+            "runtime_control": {"desired_state": "paused", "request_revision": "revision-1"},
+            "source_bridge": {"action": "retry_planned", "metadata": {"next_check_at": "t1"}},
+        }
+        first = _workflow_action_hash(state)
+        changed_metadata = {**state, "source_bridge": {"action": "retry_planned", "metadata": {"next_check_at": "t2"}}}
+        changed_pause = {**state, "runtime_control": {"desired_state": "running", "request_revision": "revision-2"}}
+
+        self.assertEqual(first, _workflow_action_hash(changed_metadata))
+        self.assertNotEqual(first, _workflow_action_hash(changed_pause))
+
+    def test_post_rejects_foreign_origin_before_running_action(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server = make_console_server("127.0.0.1", 0, make_paths(Path(tmp)))
+            status, _, _ = request_from_console_server(
+                server, "POST", "/actions/run", "action=workflow-auto-continue", origin="http://evil.example"
+            )
+
+        self.assertEqual(status, 403)
+
+    def test_post_accepts_current_resume_revision_without_live_action(self):
+        from urllib.parse import urlencode
+
+        state = {"active_workflow": {"exists": True, "run_id": "run-1"},
+                 "runtime_control": {"desired_state": "paused", "request_revision": "rev-1"}}
+        body = urlencode({"action": "workflow-auto-continue", "state_hash": _workflow_action_hash(state), "expected_runtime_revision": "rev-1"})
+        with tempfile.TemporaryDirectory() as tmp:
+            server = make_console_server("127.0.0.1", 0, make_paths(Path(tmp)))
+            with patch("wqb.console_server.load_console_state", return_value=state), patch(
+                "wqb.console_server.run_console_action",
+                return_value=SimpleNamespace(status="completed", job_id="fake-job"),
+            ) as action:
+                status, _, _ = request_from_console_server(server, "POST", "/actions/run", body)
+
+        self.assertEqual(status, 200)
+        action.assert_called_once()
+
     def test_render_dashboard_has_single_page_timeline_control_center(self):
         state = {
             "readiness": {"exists": True, "passed": False},
@@ -119,6 +181,61 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn("job-live", fragments["recent_jobs"])
         self.assertIn("data-runtime-fragment='timeline'", html)
         self.assertIn("/api/fragments", html)
+
+    def test_runtime_fragments_include_workflow_progress_permissions_and_revision(self):
+        state = {
+            "readiness": {"passed": True},
+            "freshness": {"valid": True, "stale_count": 0, "missing_count": 0},
+            "data_coverage": {"field_count": 2, "scope_count": 1, "data_set_count": 1, "error_count": 0, "status": "completed"},
+            "jobs": [],
+            "active_workflow": {"exists": True, "run_id": "active", "current_stage": "scout_seed", "status": "paused", "next_action": "workflow-resume"},
+            "current_work": {
+                "title": "Maintenance blocker",
+                "status": "blocked",
+                "next_action": "maintenance-blocker",
+                "details": ["consecutive platform rate limit threshold reached"],
+                "evidence_paths": ["runs/source/rate_limit_state.json"],
+            },
+            "source_bridge": {
+                "action": "maintenance_blocker",
+                "reason": "consecutive platform rate limit threshold reached",
+                "metadata": {"next_check_at": "2026-08-16T08:15:00+00:00"},
+            },
+        }
+
+        fragments = render_runtime_fragments(state)
+
+        self.assertIn("workflow_progress", fragments)
+        self.assertIn("Resume workflow", fragments["workflow_progress"])
+        self.assertIn("disabled", fragments["workflow_progress"])
+        self.assertIn("Stop workflow", fragments["workflow_progress"])
+        self.assertFalse(fragments["allowed_actions"]["continue_workflow"])
+        self.assertTrue(fragments["allowed_actions"]["stop_workflow"])
+        self.assertIn("state_hash", fragments)
+        self.assertIn("server_revision", fragments)
+        self.assertIn("code_commit", fragments)
+        self.assertIn("last_refreshed_at", fragments)
+
+    def test_render_dashboard_refreshes_workflow_progress_without_layout_change(self):
+        state = {
+            "readiness": {"passed": True},
+            "freshness": {"valid": True, "stale_count": 0, "missing_count": 0},
+            "data_coverage": {"field_count": 2, "scope_count": 1, "data_set_count": 1, "error_count": 0, "status": "completed"},
+            "jobs": [],
+            "active_workflow": {"exists": True, "run_id": "active", "current_stage": "scout_seed", "status": "paused", "next_action": "workflow-resume"},
+            "current_work": {"title": "Scout and Seed", "status": "paused", "next_action": "workflow-resume", "details": [], "evidence_paths": []},
+            "source_bridge": {"action": "retry_planned", "reason": "planned source candidates remain"},
+        }
+
+        html = render_dashboard(state)
+
+        self.assertIn("<h3>Workflow Progress</h3>", html)
+        self.assertIn("data-runtime-fragment='workflow_progress'", html)
+        self.assertIn("Resume workflow", html)
+        self.assertIn("Stop workflow", html)
+        self.assertIn("new EventSource('/api/events')", html)
+        self.assertIn("if (!streamConnected) refreshState()", html)
+        self.assertIn("Object.entries(fragments)", html)
 
     def test_render_dashboard_polling_does_not_overlap_refresh_requests(self):
         html = render_dashboard({"active_workflow": {"exists": False}, "jobs": []})
@@ -227,8 +344,9 @@ class ConsoleServerTests(unittest.TestCase):
 
         html = render_dashboard(state)
 
-        self.assertIn('value="workflow-auto-continue"', html)
-        self.assertIn("Continue workflow", html)
+        self.assertNotIn('value="workflow-auto-continue"', html)
+        self.assertIn("Resume workflow", html)
+        self.assertIn("disabled", html)
         self.assertIn('value="workflow-stop"', html)
         self.assertIn("Stop workflow", html)
         self.assertNotIn('name="source_run_id"', html)
@@ -271,11 +389,98 @@ class ConsoleServerTests(unittest.TestCase):
         html = render_dashboard(state)
 
         self.assertIn("Maintenance blocker", html)
-        self.assertIn("Continue workflow", html)
+        self.assertIn("Resume workflow", html)
         self.assertIn("disabled", html)
         self.assertIn("consecutive platform rate limit threshold reached", html)
         self.assertIn('value="workflow-stop"', html)
         self.assertNotIn('value="workflow-auto-continue"', html)
+
+    def test_render_dashboard_disables_continue_when_readiness_blocked_even_if_source_retry_exists(self):
+        state = {
+            "readiness": {
+                "exists": True,
+                "passed": False,
+                "blocked": True,
+                "path": "runs/source/readiness_report.json",
+                "issues": [
+                    {
+                        "level": "block",
+                        "code": "stale_scope_data",
+                        "message": "Compatible data ledger records for USA D1 TOP3000 are stale.",
+                        "action": "Refresh platform raw data fields for this exact scope before research.",
+                    }
+                ],
+            },
+            "freshness": {"exists": True, "valid": True, "record_count": 6, "stale_count": 0, "missing_count": 0},
+            "data_coverage": {"exists": True, "field_count": 120, "scope_count": 4, "data_set_count": 8, "error_count": 0, "status": "completed"},
+            "startable_scopes": [],
+            "option_cards": [],
+            "schedule": {"preview": "# Schedule"},
+            "jobs": [],
+            "proposal_counts": {},
+            "active_workflow": {"exists": True, "run_id": "active", "current_stage": "scout_seed", "status": "paused", "next_action": "workflow-resume"},
+            "approved_queue": [],
+            "queue_diagnostics": [],
+            "workflow_events": [],
+            "current_work": {
+                "title": "Readiness blocker",
+                "status": "blocked",
+                "next_action": "readiness-blocked",
+                "details": [
+                    "stale_scope_data: Compatible data ledger records for USA D1 TOP3000 are stale.",
+                    "Action: Refresh platform raw data fields for this exact scope before research.",
+                ],
+                "evidence_paths": ["runs/source/readiness_report.json"],
+            },
+            "source_bridge": {"action": "retry_planned", "reason": "planned source candidates remain"},
+        }
+
+        html = render_dashboard(state)
+        fragments = render_runtime_fragments(state)
+
+        self.assertIn("Readiness blocker", html)
+        self.assertIn("stale_scope_data", html)
+        self.assertIn("Resume workflow", html)
+        self.assertIn("disabled", html)
+        self.assertNotIn('value="workflow-auto-continue"', html)
+        self.assertFalse(fragments["allowed_actions"]["continue_workflow"])
+        self.assertEqual(fragments["allowed_actions"]["start_workflow"], False)
+        self.assertTrue(fragments["allowed_actions"]["stop_workflow"])
+
+    def test_render_dashboard_exposes_local_rate_limit_acknowledgement_when_required(self):
+        state = {
+            "readiness": {"exists": True, "passed": True, "blocked": False},
+            "freshness": {"exists": True, "valid": True, "record_count": 6, "stale_count": 0, "missing_count": 0},
+            "data_coverage": {"exists": True, "field_count": 120, "scope_count": 4, "data_set_count": 8, "error_count": 0, "status": "completed"},
+            "startable_scopes": [],
+            "option_cards": [],
+            "schedule": {"preview": "# Schedule"},
+            "jobs": [],
+            "proposal_counts": {},
+            "active_workflow": {"exists": True, "run_id": "active", "current_stage": "scout_seed", "status": "paused", "next_action": "maintenance-blocker"},
+            "approved_queue": [],
+            "queue_diagnostics": [],
+            "workflow_events": [],
+            "current_work": {
+                "title": "Maintenance blocker",
+                "status": "blocked",
+                "next_action": "maintenance-blocker",
+                "details": ["Cooldown has ended, but the 429 threshold still requires operator acknowledgement before retrying existing planned source work."],
+                "evidence_paths": ["runs/source/rate_limit_state.json"],
+            },
+            "source_bridge": {
+                "action": "maintenance_blocker",
+                "reason": "rate limit threshold still blocks retry",
+                "metadata": {"operator_acknowledgement_required": True},
+            },
+        }
+
+        html = render_dashboard(state)
+
+        self.assertNotIn("Acknowledge rate limit recovery", html)
+        self.assertNotIn('value="workflow-acknowledge-source-rate-limit"', html)
+        self.assertNotIn('name="reason"', html)
+        self.assertNotIn("--enable-live-api", html)
 
     def test_option_cards_are_directly_selectable(self):
         state = {
@@ -306,6 +511,17 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertNotIn('name="confirm_submit"', html)
         self.assertNotIn('value="workflow-submit"', html)
 
+    def test_dashboard_shows_run_bound_ai_checkpoint_status_without_claiming_model_execution(self):
+        state = {"active_workflow": {"exists": True}, "jobs": [], "ai_checkpoints": [{
+            "checkpoint_id": "ai-run-1", "checkpoint_type": "near_miss_interpretation",
+            "reason": "Explain checked near miss", "status": "pending",
+        }]}
+        html = render_dashboard(state)
+        self.assertIn("AI judgments", html)
+        self.assertIn("near_miss_interpretation", html)
+        self.assertIn("pending", html)
+        self.assertNotIn("model completed", html)
+
     def test_dashboard_renders_start_only_without_active_workflow(self):
         inactive = render_dashboard({"active_workflow": {"exists": False}, "jobs": []})
         active = render_dashboard(
@@ -318,7 +534,8 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertNotIn('value="workflow-start-from-option"', active)
         self.assertIn('value="workflow-auto-continue"', active)
         self.assertIn('value="workflow-stop"', active)
-        self.assertIn('name="enable_live_api"', active)
+        self.assertNotIn('Enable live source recovery', active)
+        self.assertIn('Resume workflow', active)
 
     def test_workflow_import_scout_seed_artifacts_action_builds_command(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -346,6 +563,12 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertIn("--knowledge-root", command)
         self.assertIn("--run-dir", command)
 
+    def test_console_run_configures_read_only_codex_checkpoint_adapter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            command = build_action_command("workflow-auto-continue", make_paths(Path(tmp)), {})
+        self.assertIn("--ai-executor", command)
+        self.assertEqual(command[command.index("--ai-executor") + 1], "codex")
+
     def test_render_dashboard_hides_data_capture_and_compile_controls_from_normal_path(self):
         state = {
             "readiness": {"exists": True, "passed": False, "blocked": True},
@@ -369,7 +592,8 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertNotIn('value="compile-data-ledger"', html)
         self.assertNotIn('value="compile-knowledge"', html)
         self.assertNotIn('value="delivery-gate"', html)
-        self.assertNotIn('name="enable_live_api"', html)
+        self.assertIn('type="hidden" name="enable_live_api" value="on"', html)
+        self.assertNotIn('Allow live simulations for this run', html)
 
     def test_render_proposals_uses_select_controls_for_structured_fields(self):
         html = render_proposals([{"proposal_id": "proposal-1", "title": "Lifecycle review", "status": "proposed"}])
@@ -599,8 +823,7 @@ class ConsoleServerTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "no records matching"):
-                build_action_command(
-                    "workflow-start-from-option",
+                validate_start_coverage(
                     paths,
                     {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "0", "selected_universe": "TOP500"},
                 )
@@ -631,7 +854,7 @@ class ConsoleServerTests(unittest.TestCase):
             for invalid in ({**base, "source_quality": "schema_seed", "coverage_status": "measured_raw"}, {**base, "source_quality": "platform_raw_capture", "coverage_status": "partial"}):
                 self._write_start_fixture(paths, option, [invalid])
                 with self.assertRaisesRegex(ValueError, "data coverage"):
-                    build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
+                    validate_start_coverage(paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
     def test_build_action_command_starts_certified_exact_scope_and_rejects_partial_exact_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -648,7 +871,7 @@ class ConsoleServerTests(unittest.TestCase):
 
             command = build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
             with self.assertRaisesRegex(ValueError, "data coverage"):
-                build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "EUR", "selected_delay": "1", "selected_universe": "TOP3000"})
+                validate_start_coverage(paths, {"selected_option_id": "option-1", "selected_region": "EUR", "selected_delay": "1", "selected_universe": "TOP3000"})
 
         self.assertIn("USA D1 TOP3000", " ".join(command))
 
@@ -697,7 +920,7 @@ class ConsoleServerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "data coverage"):
-                build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
+                validate_start_coverage(paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
         self.assertEqual(compiled_row["coverage_status"], "partial")
 
@@ -712,7 +935,7 @@ class ConsoleServerTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "ledger"):
-                build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
+                validate_start_coverage(paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
     def test_build_action_command_refuses_matching_scope_without_templates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -725,7 +948,7 @@ class ConsoleServerTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "templates"):
-                build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
+                validate_start_coverage(paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
     def _write_start_fixture(self, paths, option, ledger_rows, template=None):
         """Input: console paths, option, ledger rows. Output: none. Write valid freshness and start artifacts."""
@@ -831,7 +1054,7 @@ class ConsoleServerTests(unittest.TestCase):
             for invalid in ({**base, "coverage_status": "measured_raw"}, {**base, "source_quality": "unknown", "coverage_status": "measured_raw"}, {**base, "source_quality": "platform_raw_capture", "coverage_status": "unknown"}):
                 self._write_start_fixture(paths, {"title": "Power Pool"}, [invalid])
                 with self.assertRaisesRegex(ValueError, "data coverage"):
-                    build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
+                    validate_start_coverage(paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
     def test_build_action_command_requires_positive_coverage_and_fresh_source_date(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -854,7 +1077,7 @@ class ConsoleServerTests(unittest.TestCase):
             ):
                 self._write_start_fixture(paths, {"title": "Power Pool"}, [invalid])
                 with self.assertRaisesRegex(ValueError, "data coverage"):
-                    build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
+                    validate_start_coverage(paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
     def test_build_action_command_requires_existing_compatible_template(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -864,7 +1087,7 @@ class ConsoleServerTests(unittest.TestCase):
             for template_ids, template in cases:
                 self._write_start_fixture(paths, {"title": "Power Pool"}, [{**base, "compatible_template_ids": template_ids}], template=template)
                 with self.assertRaisesRegex(ValueError, "templates"):
-                    build_action_command("workflow-start-from-option", paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
+                    validate_start_coverage(paths, {"selected_option_id": "option-1", "selected_region": "USA", "selected_delay": "1", "selected_universe": "TOP3000"})
 
     def test_build_action_command_ignores_non_tradeable_rows_when_template_matches_exist(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -926,7 +1149,7 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertEqual(completed.status, "refused")
         self.assertEqual(len(jobs), 1)
         self.assertIn("enable_live_api", completed.error)
-        self.assertIn("Console Job Context", milestone)
+        self.assertNotIn("Console Job Context", milestone)
 
     def test_run_console_action_starts_data_capture_async(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1045,7 +1268,7 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertEqual(len(job_records), 1)
         start_async.assert_not_called()
 
-    def test_run_console_action_reuses_detached_auto_continue_job(self):
+    def test_run_console_action_restarts_after_detached_dead_worker(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = make_paths(Path(tmp))
             existing = create_job(
@@ -1059,12 +1282,11 @@ class ConsoleServerTests(unittest.TestCase):
             payload.update({"status": "detached", "pid": 999999, "started_at": payload["created_at"]})
             job_path.write_text(json.dumps(payload), encoding="utf-8")
 
-            with patch("wqb.console_server.start_job_async") as start_async:
-                reused = run_console_action(paths, {"action": "workflow-auto-continue"})
+            with patch("wqb.console_server.start_job_async", side_effect=lambda job, **kwargs: job) as start_async:
+                restarted = run_console_action(paths, {"action": "workflow-auto-continue"})
 
-        self.assertEqual(reused.job_id, existing.job_id)
-        self.assertEqual(reused.status, "detached")
-        start_async.assert_not_called()
+        self.assertNotEqual(restarted.job_id, existing.job_id)
+        start_async.assert_called_once()
 
     def test_run_console_action_starts_all_long_maintenance_actions_async_and_records_terminal_context(self):
         actions = ("compile-data-ledger", "compile-research-records", "compile-knowledge", "delivery-gate", "bootstrap-knowledge", "plan-research-options")
@@ -1090,25 +1312,30 @@ class ConsoleServerTests(unittest.TestCase):
 
         self.assertEqual(len(terminal_paths), len(actions))
         self.assertTrue(all(payload["status"] == "completed" for payload in terminal_paths))
-        self.assertEqual(milestone.count("Console Job Context"), len(actions))
+        self.assertEqual(milestone.count("Console Job Context"), 0)
         self.assertEqual(todo.count("### Console Job"), len(actions))
 
     def test_async_context_recording_failure_keeps_terminal_job_record(self):
+        context_attempted = threading.Event()
+
+        def fail_context(*args, **kwargs):
+            """Input: callback arguments. Output: raises OSError after signalling the mocked attempt."""
+            context_attempted.set()
+            raise OSError("context unavailable")
+
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             paths = make_paths(root)
             paths.workflow_root.mkdir()
             with patch("wqb.console_server.build_action_command", return_value=[sys.executable, "-c", "print('done')"]):
-                with patch("wqb.console_server.record_console_job_context", side_effect=OSError("context unavailable")):
+                with patch("wqb.console_server.record_console_job_context", side_effect=fail_context) as recorder:
                     started = run_console_action(paths, {"action": "compile-data-ledger"})
-            for _ in range(100):
-                payload = json.loads((Path(started.job_dir) / "job.json").read_text(encoding="utf-8"))
-                if payload["status"] in {"completed", "failed", "refused", "timed_out"}:
-                    break
-                threading.Event().wait(0.02)
+                    self.assertTrue(context_attempted.wait(5), "completion callback did not run")
+                    payload = json.loads((Path(started.job_dir) / "job.json").read_text(encoding="utf-8"))
 
         self.assertEqual(started.status, "running")
         self.assertEqual(payload["status"], "completed")
+        recorder.assert_called_once()
 
     def test_capture_job_persists_command_capture_directory_before_async_start(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1196,7 +1423,7 @@ class ConsoleServerTests(unittest.TestCase):
         self.assertEqual(completed.status, "failed")
         self.assertEqual(payload["status"], "failed")
         self.assertIn("runner failed", completed.error)
-        self.assertIn("Console Job Context", milestone)
+        self.assertNotIn("Console Job Context", milestone)
 
     def test_proposal_creation_writes_durable_job_and_context(self):
         with tempfile.TemporaryDirectory() as tmp:

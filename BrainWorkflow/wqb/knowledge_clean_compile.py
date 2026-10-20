@@ -15,6 +15,7 @@ from wqb.knowledge_paths import (
 )
 
 
+COORDINATION_FILES = {'.data_capture_compile.lock', '.data_capture_compile.lock.guard'}
 SENSITIVE_NAME_FRAGMENTS = (
     ".env",
     "credential",
@@ -100,7 +101,7 @@ def evaluate_clean_knowledge_structure(knowledge_root: str | Path) -> dict[str, 
             )
         )
     if root.exists():
-        for path in sorted(item for item in root.iterdir() if item.is_file()):
+        for path in sorted(item for item in root.iterdir() if item.is_file() and item.name not in COORDINATION_FILES):
             issues.append(
                 KnowledgeCleanIssue(
                     "root_level_file",
@@ -121,6 +122,24 @@ def evaluate_clean_knowledge_structure(knowledge_root: str | Path) -> dict[str, 
                 )
             )
     wiki_root = root / "wiki"
+    from wqb.semantic_publication import read_semantic_release, _safe_path
+
+    try:
+        receipt = read_semantic_release(root)
+        if receipt['release_id'] is not None:
+            for target, entry in receipt['manifest']['wiki'].items():
+                path = _safe_path(root, target)
+                if not path.is_file() or _sha256(path) != entry['sha256']:
+                    issues.append(KnowledgeCleanIssue(
+                        "semantic_wiki_version_mismatch", str(path),
+                        "Human wiki does not match the active semantic release; page updates are file-atomic, not simultaneous.",
+                        "Retry publication of the active receipt to restore its version-labelled wiki materials.",
+                    ))
+    except ValueError as error:
+        issues.append(KnowledgeCleanIssue(
+            "semantic_release_invalid", str(root / "machine" / "semantic_release.json"),
+            str(error), "Repair the release pointer or immutable generation; do not silently use legacy resources.",
+        ))
     if wiki_root.exists():
         for path in sorted(wiki_root.rglob("*")):
             if path.is_file() and path.suffix.lower() in WIKI_MACHINE_EXTENSIONS:
@@ -145,7 +164,7 @@ def plan_obsolete_active_cleanup(knowledge_root: str | Path) -> list[CleanupCand
     root = Path(knowledge_root)
     rows: list[CleanupCandidate] = []
     if root.exists():
-        for path in sorted(item for item in root.iterdir() if item.is_file()):
+        for path in sorted(item for item in root.iterdir() if item.is_file() and item.name not in COORDINATION_FILES):
             action = "refuse" if _is_sensitive(path, root) else "remove"
             rows.append(
                 CleanupCandidate(

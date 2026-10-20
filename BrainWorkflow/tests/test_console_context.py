@@ -9,11 +9,12 @@ from wqb.console_state import ConsolePaths
 
 
 class ConsoleContextTests(unittest.TestCase):
-    def test_record_console_job_context_updates_milestone_todo_and_summary(self):
+    def test_record_console_job_context_preserves_architecture_updates_todo_and_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             runs = root / "runs"
             milestone = root / "milestone.md"
+            milestone.write_text('# Architecture\n', encoding='utf-8')
             todo = root / "todo.md"
             paths = ConsolePaths(root, root / "BrainWorkflow", root / "knowledge", runs, milestone, todo, runs / "console_jobs")
             job = create_job(paths.job_root, "readiness-check", [sys.executable, "-c", "print('ok')"], root, {}, now="2026-07-16T00:00:00Z")
@@ -25,7 +26,8 @@ class ConsoleContextTests(unittest.TestCase):
             todo_text = todo.read_text(encoding="utf-8")
             summary_text = Path(completed.summary_path).read_text(encoding="utf-8")
 
-        self.assertIn("Console Job Context", milestone_text)
+        self.assertEqual(milestone_text, '# Architecture\n')
+        self.assertIn('Console Job Context', todo_text)
         self.assertIn("readiness-check", todo_text)
         self.assertIn("Next Command", summary_text)
 

@@ -13,6 +13,18 @@ def write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
 
 
 class KnowledgeSourceResolverTests(unittest.TestCase):
+    def test_catalog_cache_reuses_rows_and_invalidates_changed_resource(self):
+        """Input: updated local machine resource. Output: assertions. Cache must never hide a new capture."""
+        from wqb.knowledge_source_resolver import _read_jsonl
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'fields.jsonl'
+            write_jsonl(path, [{'field_id': 'cash'}])
+            first = _read_jsonl(path)
+            self.assertIs(_read_jsonl(path), first)
+            write_jsonl(path, [{'field_id': 'new_cash_field'}])
+            self.assertEqual(_read_jsonl(path), [{'field_id': 'new_cash_field'}])
+            self.assertIsNot(_read_jsonl(path), first)
+
     def test_resolver_prefers_matching_knowledge_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

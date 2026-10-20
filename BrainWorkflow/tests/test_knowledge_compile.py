@@ -163,5 +163,37 @@ class KnowledgeCompileTests(unittest.TestCase):
         self.assertNotEqual(compiled_rows[0]["content_hash"], compiled_rows[1]["content_hash"])
 
 
+class MechanismCompileTests(unittest.TestCase):
+    def test_derived_rebuild_failure_is_visible_atomic_and_replayable(self):
+        from unittest.mock import patch
+        from tests.test_mechanism_evidence import evidence_fixture
+        from wqb.research_record import ResearchRecord, sync_research_record_to_machine
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            records, experiments = evidence_fixture()
+            for row in records[0]['backtest']:
+                row['mechanism_experiments'] = experiments
+            record = ResearchRecord(run_id='r', objective='test', backtest=records[0]['backtest'],
+                                    triage=[dict(failed=['correlation'])])
+            sync_research_record_to_machine(record, root, 'now')
+            ledger = (root / 'machine/research_records.jsonl').read_bytes()
+            first = compile_research_records(root, 'now')
+            path = root / 'machine/mechanism_evidence.json'
+            self.assertTrue(path.is_file(), 'maintenance compile must emit mechanism evidence')
+            original = path.read_bytes()
+            self.assertEqual(first['mechanism_evidence_path'], str(path))
+            with patch('wqb.semantic_publication.os.replace', side_effect=OSError('write failed')):
+                with self.assertRaises(OSError):
+                    compile_research_records(root, 'later')
+            self.assertEqual(path.read_bytes(), original)
+            path.unlink()
+            compile_research_records(root, 'replay')
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual((root / 'machine/research_records.jsonl').read_bytes(), ledger)
+            case = (root / 'wiki/60_research_cases/r.md').read_text()
+            for heading in ('Mechanism', 'Conditions', 'Comparison', 'Results', 'Limits'):
+                self.assertIn(heading, case)
+
+
 if __name__ == "__main__":
     unittest.main()

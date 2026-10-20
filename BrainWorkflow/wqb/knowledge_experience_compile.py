@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from wqb.knowledge_contracts import canonical_source_family, render_front_matter
 from wqb.knowledge_paths import (
@@ -12,7 +13,7 @@ from wqb.knowledge_paths import (
     machine_resource_path,
     relative_to_knowledge_root,
 )
-from wqb.research_record import load_research_record_ledger
+from wqb.research_record import load_research_record_ledger, repair_report_text, render_repair_report_lines
 
 
 HUMAN_WIKI_FILES = {
@@ -25,6 +26,7 @@ HUMAN_WIKI_FILES = {
 }
 
 MAX_COMPILED_FROM = 24
+MAX_SEMANTIC_WIKI_ROWS = 12
 CASE_REPORT_DIR = Path("wiki") / "60_research_cases"
 CASE_REASON_PRIORITY = {
     "submitted_or_approved": 0,
@@ -46,6 +48,61 @@ def _front_matter(generated_at: str, compiled_from: list[str], consumed_by: list
             "update_trigger": "compile-knowledge",
         }
     )
+
+
+def _semantic_text(value: Any) -> str:
+    """Input: model display object. Output: escaped compact str. Keep prose from creating links or HTML."""
+    return _safe_text(value).replace('[', '\\[').replace(']', '\\]').replace('<', '&lt;').replace('>', '&gt;').replace('`', '\\`')
+
+
+def _semantic_evidence(refs: list[dict], sources: set[str]) -> str:
+    """Input: validated evidence dict list/permitted source set. Output: bounded Markdown str. Link each claim to its evidence grade and source."""
+    links = []
+    for ref in refs[:6]:
+        path, kind = ref.get('source_path'), ref.get('kind')
+        if path not in sources or kind not in {'documented', 'hypothesis', 'measured'}:
+            continue
+        links.append(f'[{kind}: {_semantic_text(Path(path).name)}](../{quote(path, safe="/")})')
+        if kind == 'measured':
+            for experiment in ref.get('experiment_refs', [])[:3]:
+                if experiment in sources:
+                    links.append(f'[experiment: {_semantic_text(Path(experiment).name)}](../{quote(experiment, safe="/")})')
+    return '; '.join(dict.fromkeys(links)) or 'unverified'
+
+
+def render_semantic_wiki_materials(proposals: dict, generated_at: str) -> dict[str, str]:
+    """Input: merged validated proposals dict/timestamp str. Output: allowed wiki path/text dict. Render bounded human explanations."""
+    sources = [ref['path'] for ref in proposals['source_refs']]
+    permitted = set(sources)
+    data = ['# Data Semantics', '', 'Coverage: partial; omitted or legacy rows are not newly validated.', '']
+    patterns = ['# Template And Operator Patterns', '', 'Hypotheses are unverified unless linked experiment evidence says measured.', '']
+    templates = [row for row in proposals['validated_templates'] if row.get('hypothesis_card')]
+    for row in templates[:MAX_SEMANTIC_WIKI_ROWS]:
+        card = row['hypothesis_card']
+        data.append(f"- **{_semantic_text(row.get('template_id'))}:** {_semantic_text(card.get('data_meaning'))}")
+        data.append('- Evidence: ' + _semantic_evidence(row.get('evidence_refs', []), permitted) + '.')
+        patterns.extend([f"## {_semantic_text(row.get('template_id'))}",
+            f"- Lineage: {_semantic_text(row.get('hypothesis_id'))} / {_semantic_text(row.get('hypothesis_version'))}"])
+        for key in ('mechanism', 'conditions', 'alternative', 'prediction', 'operator_roles', 'falsification'):
+            patterns.append(f'- {key}: {_semantic_text(card.get(key))}')
+        patterns.append('- Evidence: ' + _semantic_evidence(row.get('evidence_refs', []), permitted) + '; unverified is not measured.')
+        for path in row.get('experiment_paths', [])[:3]:
+            if path in permitted and path.startswith('raw/research/'):
+                patterns.append(f'- Failure/case evidence: [{_semantic_text(Path(path).name)}](../{quote(path, safe="/")}).')
+    operators = [row for row in proposals['validated_operators'] if row.get('conditional_uses')]
+    for row in operators[:MAX_SEMANTIC_WIKI_ROWS]:
+        patterns.append(f"## Operator: {_semantic_text(row['operator'])}")
+        for use in row['conditional_uses'][:6]:
+            patterns.append(f"- Conditions: {_semantic_text(use.get('conditions'))}; role: {_semantic_text(use.get('purpose'))}; failure: {_semantic_text(use.get('failure_risks'))}.")
+            patterns.append('- Evidence: ' + _semantic_evidence(use.get('evidence_refs', []), permitted) + '.')
+    if not templates:
+        data.append('- Data meanings remain incomplete; no validated hypothesis cards in this release.')
+    patterns.extend(['', '## Sources'])
+    for source in sources[:MAX_COMPILED_FROM]:
+        patterns.append(f'- [{_semantic_text(Path(source).name)}](../{quote(source, safe="/")})')
+    front = _front_matter(generated_at, sources, ['human_learning', 'research_planner'])
+    return {'wiki/20_data_semantics.md': front+'\n'+'\n'.join(data)+'\n',
+            'wiki/30_template_and_operator_patterns.md': front+'\n'+'\n'.join(patterns)+'\n'}
 
 
 def _read_jsonl_rows(path: Path, limit: int = 200) -> list[dict[str, Any]]:
@@ -148,9 +205,9 @@ def select_research_case_records(rows: list[dict[str, Any]], limit: int) -> list
     )[:max(int(limit), 0)]
 
 
-def _research_snapshot_key(row: dict[str, Any]) -> tuple[float, str]:
-    """Input: ledger row. Output: sortable key. Pick a deterministic latest snapshot for one run."""
-    return _research_synced_at_seconds(row), json.dumps(
+def _research_snapshot_key(row: dict[str, Any]) -> tuple[bool, float, str]:
+    """Input: ledger row dict. Output: tuple key. Prefer authoritative evidence, then its latest snapshot."""
+    return row.get('final_state') != 'compiled_from_raw', _research_synced_at_seconds(row), json.dumps(
         row, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":")
     )
 
@@ -181,11 +238,11 @@ def _lesson_from_case_reason(reason: str, failed: list[str]) -> str:
 
 def _case_report_text(row: dict[str, Any], generated_at: str) -> str:
     """Input: research row and timestamp. Output: compact Markdown case report."""
-    run_id = str(row.get("run_id", ""))
-    objective = str(row.get("objective", ""))
+    run_id = repair_report_text(row.get("run_id", ""))
+    objective = repair_report_text(row.get("objective", ""))
     reason = str(row.get("case_reason", ""))
     failed = sorted({
-        str(item)
+        repair_report_text(item)
         for triage in row.get("triage", [])
         if isinstance(triage, dict)
         for item in triage.get("failed", [])
@@ -195,18 +252,39 @@ def _case_report_text(row: dict[str, Any], generated_at: str) -> str:
         ["machine/research_records.jsonl"],
         ["human_learning", "workflow_review"],
     )
+    from wqb.mechanism_evidence import build_mechanism_evidence
+    mechanism_lines = []
+    for group in build_mechanism_evidence([row], [])['groups'][:MAX_SEMANTIC_WIKI_ROWS]:
+        experiment = group['experiment']
+        card = next((r.get('template_provenance', {}).get('hypothesis_card', {}) for r in group['observations']
+                     if r.get('template_provenance', {}).get('hypothesis_card')), {})
+        mechanism_lines.extend([
+            '- Mechanism: ' + repair_report_text(card.get('mechanism', experiment.get('design_id', experiment.get('experiment_id')))),
+            '- Conditions: ' + repair_report_text(experiment.get('conditions', [])),
+            '- Comparison: ' + repair_report_text(experiment.get('prediction_comparison', 'No explicit numerical comparison.')),
+            '- Results: ' + repair_report_text(dict(label=group['label'], differences=group['observed_differences'])),
+            '- Limits: ' + repair_report_text(group['limitations']) + '; scoped observations, not causal/statistical proof.',
+        ])
     return "\n".join([
         front.rstrip(),
         f"# Research Case {run_id}",
         "",
         f"- Objective: {objective}",
-        f"- Case Reason: {reason}",
-        f"- Failed Checks: {', '.join(failed) if failed else 'none recorded'}",
+        f"- Case Reason: {repair_report_text(reason)}",
+        f"- Failed Checks: {', '.join(failed[:6]) if failed else 'none recorded'}",
         f"- Run ID: `{run_id}`",
         "",
         "## Reusable Lesson",
         "",
-        _lesson_from_case_reason(reason, failed),
+        _lesson_from_case_reason(reason, failed[:6]),
+        '',
+        '## Mechanism Evidence',
+        '',
+        *mechanism_lines,
+        "",
+        "## Repair",
+        "",
+        *render_repair_report_lines(row.get('repair', {})),
         "",
     ]) + "\n"
 
@@ -242,6 +320,9 @@ def compile_human_experience_wiki(
     max_case_reports: int = 20,
 ) -> dict[str, Any]:
     """Input: knowledge root, timestamp, case limit. Output: compact human wiki compile summary."""
+    from wqb.semantic_publication import read_semantic_release
+    if read_semantic_release(Path(knowledge_root))['release_id'] is not None:
+        raise ValueError('active semantic release: direct wiki20/30 overwrite refused; use compile-semantic-knowledge')
     root = Path(knowledge_root)
     generated = generated_at or _now()
     ledger_rows = _read_jsonl_rows(existing_machine_resource_path(root, "data_ledger"))

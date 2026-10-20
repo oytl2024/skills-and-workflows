@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, field, fields, replace
 import json
 from pathlib import Path
 import re
 from typing import Any
 
 from wqb.knowledge_paths import existing_machine_resource_path, machine_resource_path
+from wqb.semantic_contracts import (
+    EvidenceRef, HypothesisCard, InputSlot, OperatorRole,
+    check_semantic_record_fields, semantic_fields_from_dict, semantic_record_to_dict,
+)
 
 
 FIELD_TYPE_BONUS = 3.0
@@ -18,6 +22,7 @@ LEGACY_OPERATOR_SOURCE_PREFIXES = (
     (Path("wiki") / "30_templates").as_posix(),
 )
 OPERATOR_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+PLATFORM_OPERATOR_FIELDS = {"name", "id", "category", "description", "type", "scope", "level", "documentation"}
 
 
 @dataclass(frozen=True)
@@ -30,6 +35,20 @@ class OperatorSemanticRecord:
     risk_tags: list[str]
     repair_levers: list[str]
     source_paths: list[str]
+    semantic_version: int = 1
+    semantic_status: str = "legacy/unreviewed"
+    evidence_refs: list[EvidenceRef] = field(default_factory=list)
+    conditional_uses: list[dict] = field(default_factory=list)
+    definition: dict | None = None
+    raw_definition: str = ""
+    raw_description: str = ""
+    hypothesis_card: HypothesisCard | None = None
+    input_slots: list[InputSlot] = field(default_factory=list)
+    operator_roles: list[OperatorRole] = field(default_factory=list)
+    binding_version: int = 1
+    hypothesis_id: str = ""
+    hypothesis_version: int = 1
+    definition_basis: dict | None = None
 
 
 def default_operator_semantics() -> list[OperatorSemanticRecord]:
@@ -81,6 +100,7 @@ def normalize_string_list(value: Any, *, uppercase: bool = False) -> list[str]:
 
 def operator_semantic_record_from_dict(row: dict[str, Any]) -> OperatorSemanticRecord:
     """Input: dict row. Output: OperatorSemanticRecord. Normalize one operator semantic row."""
+    check_semantic_record_fields(row, OperatorSemanticRecord)
     return OperatorSemanticRecord(
         operator=str(row.get("operator", "")),
         family=str(row.get("family", "")),
@@ -90,12 +110,14 @@ def operator_semantic_record_from_dict(row: dict[str, Any]) -> OperatorSemanticR
         risk_tags=normalize_string_list(row.get("risk_tags")),
         repair_levers=normalize_string_list(row.get("repair_levers")),
         source_paths=normalize_string_list(row.get("source_paths")),
+        raw_description=_raw_operator_description(row),
+        **semantic_fields_from_dict(row),
     )
 
 
 def operator_semantic_record_to_dict(record: OperatorSemanticRecord) -> dict[str, Any]:
     """Input: OperatorSemanticRecord. Output: dict. Convert a record to JSON-safe data."""
-    return asdict(record)
+    return semantic_record_to_dict(record)
 
 
 def load_operator_semantics(path: Path) -> list[OperatorSemanticRecord]:
@@ -157,6 +179,10 @@ def expression_operator_provenance(expression: str, knowledge_root: str | Path) 
 
 def write_operator_semantics_jsonl(path: Path, records: list[OperatorSemanticRecord]) -> Path:
     """Input: path and records. Output: path. Write operator semantics as deterministic JSONL."""
+    if any(parent.name == 'semantic_releases' for parent in path.parents):
+        raise ValueError('immutable semantic release cannot be written directly')
+    if path.parent.name == 'machine' and (path.parent / 'semantic_release.json').exists():
+        raise ValueError('active semantic release forbids canonical direct writes')
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for record in sorted(records, key=lambda item: item.operator):
@@ -219,14 +245,8 @@ def normalize_operator_source_paths(source_paths: list[str]) -> list[str]:
 
 def normalize_operator_record_sources(record: OperatorSemanticRecord) -> OperatorSemanticRecord:
     """Input: operator record. Output: record with canonical source paths. Preserve reviewed semantic fields."""
-    return OperatorSemanticRecord(
-        operator=record.operator,
-        family=record.family,
-        workflow_uses=list(record.workflow_uses),
-        compatible_field_types=list(record.compatible_field_types),
-        template_tags=list(record.template_tags),
-        risk_tags=list(record.risk_tags),
-        repair_levers=list(record.repair_levers),
+    return replace(
+        record,
         source_paths=normalize_operator_source_paths(record.source_paths),
     )
 
@@ -258,11 +278,69 @@ def _canonical_operator_rows(knowledge_root: Path) -> list[tuple[dict[str, Any],
             continue
         source_path = path.relative_to(knowledge_root).as_posix()
         rows.extend((row, source_path) for row in operators if isinstance(row, dict))
+    rows.extend(_indexed_markdown_operator_rows(knowledge_root))
+    return rows
+
+
+def _raw_operator_description(row: dict) -> str:
+    """Input: operator dict. Output: str. Keep literal source description separate from typed/economic facts."""
+    value = row.get('raw_description', row.get('description', ''))
+    if not isinstance(value, str):
+        raise ValueError('raw_description: expected source text')
+    return value
+
+
+def _indexed_markdown_operator_rows(root: Path) -> list[tuple[dict, str]]:
+    """Input: vault Path. Output: (row dict, path str) list. Verify indexed Markdown before preserving labelled facts."""
+    from wqb.knowledge_contracts import parse_markdown_front_matter
+    from wqb.semantic_compilation import _material
+    index_path = existing_machine_resource_path(root, 'source_index')
+    if not index_path.exists():
+        return []
+    rows, seen = [], {}
+    for line in index_path.read_text(encoding='utf-8').splitlines():
+        if not line.strip():
+            continue
+        indexed = json.loads(line)
+        relative = indexed.get('path', '')
+        if not (isinstance(relative, str) and relative.startswith('raw/platform/')
+                and 'operator' in relative.lower() and relative.endswith('.md')):
+            continue
+        if relative in seen and seen[relative] != indexed:
+            raise ValueError('conflicting operator source index rows: ' + relative)
+        seen[relative] = indexed
+        _, text = _material(root, indexed)
+        _, body = parse_markdown_front_matter(text.replace('\r\n', '\n'))
+        headings = list(re.finditer(r'^###\s+`?([A-Za-z_][A-Za-z0-9_]*)`?\s*$', body, re.MULTILINE))
+        names = set()
+        for number, heading in enumerate(headings):
+            name = heading[1]
+            if name in names:
+                raise ValueError('conflicting duplicate operator heading: ' + name)
+            names.add(name)
+            end = headings[number + 1].start() if number + 1 < len(headings) else len(body)
+            section = body[heading.end():end]
+            category = re.search(r'^##\s+', section, re.MULTILINE)
+            if category:
+                section = section[:category.start()]
+            labels = {}
+            for label in ('Source id', 'Definition', 'Description'):
+                values = re.findall(r'^- ' + re.escape(label) + r':[ \t]*(.*)$', section, re.MULTILINE)
+                if len(values) > 1:
+                    raise ValueError('conflicting operator source label: ' + name + '/' + label)
+                if values:
+                    value = values[0].strip()
+                    labels[label] = value[1:-1] if value.startswith('`') and value.endswith('`') else value
+            if labels.get('Source id') != name:
+                raise ValueError('operator source identity missing or conflicting: ' + name)
+            rows.append((dict(name=name, raw_definition=labels.get('Definition', ''),
+                              raw_description=labels.get('Description', '')), relative))
     return rows
 
 
 def _record_from_canonical_operator(row: dict[str, Any], source_path: str) -> OperatorSemanticRecord | None:
     """Input: canonical operator row and path. Output: semantic record or none. Compile conservative source semantics."""
+    row = _normalize_canonical_operator_row(row)
     operator = str(row.get("name", row.get("operator", row.get("id", "")))).strip()
     if not operator:
         return None
@@ -275,23 +353,77 @@ def _record_from_canonical_operator(row: dict[str, Any], source_path: str) -> Op
         risk_tags=normalize_string_list(row.get("risk_tags")),
         repair_levers=normalize_string_list(row.get("repair_levers")),
         source_paths=[source_path],
+        raw_description=_raw_operator_description(row),
+        **semantic_fields_from_dict(row),
     )
+
+
+def _normalize_canonical_operator_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Input: canonical dict. Output: dict. Validate v2 shape and separate raw syntax from typed definitions."""
+    if row.get("semantic_version") == 2 or row.get("binding_version") == 2:
+        allowed = {item.name for item in fields(OperatorSemanticRecord)} | PLATFORM_OPERATOR_FIELDS
+        if set(row) - allowed:
+            raise ValueError("canonical operator: unknown v2 fields")
+    normalized = dict(row)
+    if isinstance(normalized.get("definition"), str):
+        syntax = normalized.pop("definition")
+        if "raw_definition" in normalized and normalized["raw_definition"] != syntax:
+            raise ValueError("canonical operator: conflicting raw definition strings")
+        normalized["raw_definition"] = syntax
+    return normalized
 
 
 def compile_operator_semantics(
     knowledge_root: str | Path, generated_at: str
 ) -> dict[str, Any]:
     """Input: vault root and timestamp. Output: compile summary. Merge canonical operators, seeds, and reviewed records."""
+    from wqb.semantic_publication import read_semantic_release
+    if read_semantic_release(Path(knowledge_root))['release_id'] is not None:
+        raise ValueError('active semantic release: direct operator compile refused; use compile-semantic-knowledge')
     root = Path(knowledge_root)
     jsonl_path = machine_resource_path(root, "operator_ledger")
     markdown_path = root / "machine" / "previews" / "operator_semantics.md"
     by_operator = {record.operator: record for record in default_operator_semantics()}
+    captured_facts = {}
     for row, source_path in _canonical_operator_rows(root):
         record = _record_from_canonical_operator(row, source_path)
+        if record is not None:
+            previous = captured_facts.get(record.operator)
+            if previous is not None:
+                for key in ('raw_definition', 'raw_description', 'definition'):
+                    old, new = getattr(previous, key), getattr(record, key)
+                    if old and new and old != new:
+                        raise ValueError('conflicting captured operator facts: ' + record.operator + '/' + key)
+                record = replace(record, raw_definition=record.raw_definition or previous.raw_definition,
+                                 raw_description=record.raw_description or previous.raw_description,
+                                 definition=record.definition or previous.definition,
+                                 source_paths=sorted(set(previous.source_paths + record.source_paths)))
+            captured_facts[record.operator] = record
         if record is not None and record.operator not in by_operator:
             by_operator[record.operator] = record
-    reviewed = load_operator_semantics(existing_machine_resource_path(root, "operator_ledger"))
-    for record in reviewed:
+        elif record is not None:
+            by_operator[record.operator] = replace(
+                by_operator[record.operator],
+                **semantic_fields_from_dict(operator_semantic_record_to_dict(record)),
+                raw_description=record.raw_description, source_paths=record.source_paths,
+            )
+    reviewed_path = existing_machine_resource_path(root, "operator_ledger")
+    reviewed_rows = [json.loads(line) for line in reviewed_path.read_text(encoding="utf-8").splitlines() if line.strip()] if reviewed_path.exists() else []
+    reviewed = [operator_semantic_record_from_dict(row) for row in reviewed_rows]
+    for row, record in zip(reviewed_rows, reviewed):
+        captured = by_operator.get(record.operator)
+        if captured is not None:
+            captured_fields = semantic_fields_from_dict(operator_semantic_record_to_dict(captured))
+            missing = {key: value for key, value in captured_fields.items() if key not in row}
+            if not record.raw_definition and captured.raw_definition:
+                missing["raw_definition"] = captured.raw_definition
+            if not record.raw_description and captured.raw_description:
+                missing['raw_description'] = captured.raw_description
+            if missing.get('raw_definition') or missing.get('raw_description'):
+                missing['source_paths'] = sorted(set(record.source_paths + captured.source_paths))
+            if any(value for key, value in missing.items() if key not in {"semantic_version", "binding_version", "semantic_status", "hypothesis_version"}):
+                missing["semantic_version"] = max(record.semantic_version, captured.semantic_version)
+            record = replace(record, **missing)
         by_operator[record.operator] = record
     records = [normalize_operator_record_sources(record) for record in by_operator.values()]
     write_operator_semantics_jsonl(jsonl_path, records)

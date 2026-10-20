@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timezone
+import ast
 import json
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from uuid import uuid4
 
 from wqb.data_field_capture import DATA_CAPTURE_LOCK_NAME
 from wqb.data_ledger import DataLedgerRecord, data_ledger_record_to_dict, load_data_ledger, write_data_ledger_markdown
+from wqb.knowledge_age_policy import KNOWLEDGE_MAX_AGE_DAYS
 from wqb.knowledge_paths import existing_machine_resource_path, machine_resource_path
 from wqb.lockfile import exclusive_json_lock
 from wqb.semantics import field_semantic_embedding
@@ -22,6 +24,21 @@ COMPILE_LOCK_NAME = DATA_CAPTURE_LOCK_NAME
 COMPILE_LOCK_TIMEOUT_SECONDS = 5.0
 COMPILE_LOCK_SLEEP_SECONDS = 0.05
 COMPILE_LOCK_STALE_SECONDS = 3600.0
+DATA_LEDGER_MAX_AGE_DAYS = KNOWLEDGE_MAX_AGE_DAYS
+
+
+def normalize_data_category(value: object) -> tuple[str, list[str]]:
+    """Input: raw category object. Output: (label str, tags list[str]). Preserve explicit names/IDs only."""
+    if isinstance(value, str):
+        label = value.strip()
+        return label, [label.lower()] if label else []
+    if not isinstance(value, dict):
+        return '', []
+    identifier = value.get('id')
+    name = value.get('name')
+    identifier = identifier.strip() if isinstance(identifier, str) else ''
+    name = name.strip() if isinstance(name, str) else ''
+    return name or identifier, sorted({item.lower() for item in (identifier, name) if item})
 
 
 def _now() -> str:
@@ -102,7 +119,7 @@ def _update_manifest(root: Path, source_day: str, compiled_at: str, output_path:
         "path": machine_resource_path(root, DATA_LEDGER_RESOURCE).relative_to(root).as_posix(),
         "updated_at": source_day,
         "compiled_at": compiled_at,
-        "max_age_days": 1,
+        "max_age_days": DATA_LEDGER_MAX_AGE_DAYS,
         "status": "refreshed",
         "source_note": "Compiled from raw platform data-field captures.",
     }
@@ -334,7 +351,8 @@ def _record_from_group(
     field_type = str(field.get("type", ""))
     alpha_count = max(int(row.get("field", {}).get("alphaCount", 0) or 0) for row in rows)
     user_count = max(int(row.get("field", {}).get("userCount", row.get("field", {}).get("user_count", 0)) or 0) for row in rows)
-    tags = sorted(set(embedding["tags"]) | {str(data_set.get("category", "")).lower()} - {""})
+    category, category_tags = normalize_data_category(data_set.get("category"))
+    tags = sorted(set(embedding["tags"]) | set(category_tags))
     regions = sorted({scope["region"] for scope in exact_scopes})
     delays = sorted({scope["delay"] for scope in exact_scopes})
     universes = sorted({scope["universe"] for scope in exact_scopes})
@@ -357,6 +375,8 @@ def _record_from_group(
             user_count=user_count,
             simulation_usage_count=prior.simulation_usage_count if prior else 0,
             submitted_usage_count=prior.submitted_usage_count if prior else 0,
+            submitted_alpha_ids=prior.submitted_alpha_ids if prior else None,
+            submitted_legacy_usage_count=prior.submitted_legacy_usage_count if prior else None,
             last_used_at=prior.last_used_at if prior else "",
             best_result_label=prior.best_result_label if prior else "unexplored_raw_candidate",
             correlation_risk=correlation_risk,
@@ -374,13 +394,72 @@ def _record_from_group(
             experiment_paths=prior.experiment_paths if prior else [],
             instrument_type=str(primary_scope.get("instrument_type", "")),
             date_coverage=str(field.get("dateCoverage", field.get("date_coverage", ""))),
-            data_category=str(data_set.get("category", "")),
+            data_category=category,
             crowding_risk=correlation_risk,
             known_operators=["rank", "ts_delta", "ts_zscore"],
             repair_usage_count=prior.repair_usage_count if prior else 0,
             field_description=str(field.get("description", "")),
+            units=field.get('units'),
+            vector_grain=field.get('vector_grain'),
+            available_at=field.get('available_at'),
         )
     )
+
+
+def project_manual_submission_usage(knowledge_root: Path, events: list[dict], generated_at: str) -> dict:
+    """Input: vault Path, verified lifecycle dicts, report time str. Output: paths/diagnostics dict; count distinct Alphas without erasing legacy totals."""
+    root = Path(knowledge_root)
+    diagnostics = []
+    ledger = machine_resource_path(root, DATA_LEDGER_RESOURCE)
+    preview = root / DATA_LEDGER_MD
+    with exclusive_json_lock(root / COMPILE_LOCK_NAME, COMPILE_LOCK_TIMEOUT_SECONDS,
+                             COMPILE_LOCK_SLEEP_SECONDS, COMPILE_LOCK_STALE_SECONDS,
+                             'data ledger compile lock is busy'):
+        existing = existing_machine_resource_path(root, DATA_LEDGER_RESOURCE)
+        if not existing.exists():
+            return {'projection_paths': [], 'diagnostics': ['usage unresolved: data ledger absent; no rows fabricated']}
+        rows = _read_jsonl(existing, strict_objects=True)
+        for event in events:
+            identity = event.get('identity', {})
+            if event.get('evidence_kind') != 'direct_user_report' or not identity:
+                continue
+            try:
+                tree = ast.parse(identity['expression'], mode='eval')
+            except (KeyError, SyntaxError):
+                diagnostics.append('usage unresolved: expression is not a supported local AST')
+                continue
+            functions = {node.func.id for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+            fields = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)} - functions
+            settings = identity['settings']
+            scope = (settings.get('instrumentType', 'EQUITY'), settings.get('region'), settings.get('delay'), settings.get('universe'))
+            for field_id in sorted(fields):
+                matches = [row for row in rows if row.get('field_id') == field_id
+                           and scope in _ledger_row_scope_keys(row)]
+                if len(matches) != 1:
+                    diagnostics.append(f'usage unresolved: {field_id} has {len(matches)} exact-scope ledger matches')
+                    continue
+                row = matches[0]
+                ids = row.get('submitted_alpha_ids', [])
+                legacy = row.get('submitted_legacy_usage_count', row.get('submitted_usage_count', 0))
+                if (not isinstance(ids, list) or any(not isinstance(item, str) for item in ids)
+                        or type(legacy) is not int or legacy < 0):
+                    raise ValueError('invalid submission usage provenance')
+                row['submitted_alpha_ids'] = sorted(set(ids) | {identity['alpha_id']})
+                row['submitted_legacy_usage_count'] = legacy
+                row['submitted_usage_count'] = legacy + len(row['submitted_alpha_ids'])
+                if legacy:
+                    diagnostics.append('legacy submission count retained separately; historical identity overlap unknown')
+        token = uuid4().hex
+        staged = [(ledger.with_name(ledger.name + '.' + token + '.tmp'), ledger),
+                  (preview.with_name(preview.name + '.' + token + '.tmp'), preview)]
+        try:
+            _write_jsonl(staged[0][0], rows)
+            write_data_ledger_markdown(staged[1][0], load_data_ledger(staged[0][0]), generated_at)
+            _publish_staged_outputs(staged)
+        finally:
+            for temporary, _ in staged:
+                temporary.unlink(missing_ok=True)
+    return {'projection_paths': [str(ledger), str(preview)], 'diagnostics': sorted(set(diagnostics))}
 
 
 def compile_data_ledger_from_raw(
