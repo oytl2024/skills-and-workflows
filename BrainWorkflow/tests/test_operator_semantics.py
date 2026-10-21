@@ -18,6 +18,34 @@ from wqb.operator_semantics import (
 
 
 class OperatorSemanticsTests(unittest.TestCase):
+    def test_legacy_full_capture_accepts_literal_audit_with_rich_unrelated_description(self):
+        """Input: exact captured API payload with rich/nullable metadata. Output: None. Verify raw without relaxing V2 interpretation."""
+        from unittest.mock import Mock
+        from scripts.capture_learn_material import capture_resource_subset
+        from wqb.knowledge_contracts import parse_markdown_front_matter
+        from wqb.resource_evidence import _operator_receipt_context
+        rows = [dict(name='vec_count', category='Vector', definition='vec_count(x)',
+                     description='Number of elements.', scope=['REGULAR'], level=None, documentation=None),
+                dict(name='rank', category='Cross Sectional', definition='rank(x)',
+                     description='<p>Ranks values.</p>', scope=['REGULAR'], level='ALL', documentation='/operators/rank')]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            client = Mock()
+            client.get_json.return_value = rows
+            result = capture_resource_subset(root, client, [{'kind': 'operators'}], '2026-10-21T00:00:00Z', request_limit=1)
+            self.assertEqual(result['errors'], [])
+            text = Path(result['raw_markdown_files'][0]).read_text(encoding='utf-8')
+            source = json.loads((root / 'machine/source_index.jsonl').read_text(encoding='utf-8'))
+            _, body = parse_markdown_front_matter(text)
+            with self.assertRaisesRegex(ValueError, 'unsupported'):
+                _operator_receipt_context(body, source, text, 'vec_count')
+            row = expression_operator_provenance('vec_count(x)', root, legacy_capture=True)[0]
+            self.assertEqual(row['source'], 'knowledge_indexed_operator_capture')
+            self.assertEqual(row['raw_definition'], 'vec_count(x)')
+            with self.assertRaisesRegex(ValueError, 'does not reproduce'):
+                _operator_receipt_context(body.replace('Number of elements.', 'Changed.', 1),
+                    source, text, 'vec_count', raw_capture=True)
+
     def test_legacy_provenance_uses_verified_capture_not_in_new_release(self):
         """Input: partial published ledger and indexed raw. Output: None. Recover only explicit legacy source facts."""
         from wqb.semantic_publication import stage_semantic_release, publish_semantic_release

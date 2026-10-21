@@ -980,14 +980,15 @@ def page_rule_contract() -> dict:
                 ancillary_digests=deepcopy(PAGE_ANCILLARY_DIGESTS))
 
 
-def _operator_receipt_context(body: str, source: dict, raw: str | bytes, operator: str) -> str:
+def _operator_receipt_context(body: str, source: dict, raw: str | bytes, operator: str, *, raw_capture: bool = False) -> str:
     """Input: verified complete body/index row/original text/operator. Output: interpretation body str or ValueError.
 
     Only the bounded capture writer's exact duplicate audit payload is non-new
     context. Validate all rows, the complete rendered body, header and subset
     identity before returning a view without the terminal receipt. Original
     text, source hashes and evidence locators are never changed. Tutorial and
-    unknown receipt schemas remain explicitly unsupported, not ignored.
+    unknown receipt schemas remain explicitly unsupported, not ignored. The
+    legacy raw_capture bool verifies exact rendering only, never V2 meanings.
     """
     if "Raw GET Receipt" not in body:
         return body
@@ -1036,6 +1037,8 @@ def _operator_receipt_context(body: str, source: dict, raw: str | bytes, operato
                 or any(type(item) is not str or not re.fullmatch(r"[A-Z_]+", item) for item in row["scope"])
                 or len(set(row["scope"])) != len(row["scope"])):
             raise ValueError("unsupported operator receipt scope")
+        if raw_capture:
+            continue
         for key in ("definition", "description"):
             value = row[key]
             if not isinstance(value, str) or not value or value != " ".join(value.split()) or any(c in value for c in "<>`"):
@@ -1073,6 +1076,9 @@ def _operator_receipt_context(body: str, source: dict, raw: str | bytes, operato
                           f"- Level: {row.get('level', 'unspecified')}", f"- Documentation: {row.get('documentation', '')}",
                           f"- Definition: `{row['definition']}`", f"- Description: {row['description']}", ""])
     canonical = "\n".join(lines).rstrip() + "\n"
+    if raw_capture:
+        from wqb.knowledge_contracts import _learn_repair_body
+        canonical = _learn_repair_body('operators', selected)
     if match[1] != canonical:
         raise ValueError("GET receipt does not reproduce complete captured operator cards")
     return canonical

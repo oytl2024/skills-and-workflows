@@ -230,7 +230,7 @@ def _legacy_capture_provenance(root: Path, operators: set[str]) -> dict[str, dic
             continue
         verified, text = _material(root, source)
         _, body = parse_markdown_front_matter(text.replace('\r\n', '\n'))
-        _operator_receipt_context(body, source, text, name)
+        _operator_receipt_context(body, source, text, name, raw_capture=True)
         captured = datetime.fromisoformat(source['captured_at'].replace('Z', '+00:00'))
         if captured.tzinfo is None:
             raise ValueError('operator capture requires timezone-aware captured_at')
