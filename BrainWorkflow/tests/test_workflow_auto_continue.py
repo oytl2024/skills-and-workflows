@@ -121,6 +121,49 @@ def write_start_artifacts(root: Path) -> None:
 
 
 class WorkflowAutoContinueTests(unittest.TestCase):
+    def test_failed_source_readiness_stops_instead_of_requesting_another_batch(self):
+        """Input: source runner readiness failure. Output: assertions. Propagate the source gate before another simulation attempt."""
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+            report = source / "readiness_report.json"
+            report.write_text(json.dumps({"passed": False, "blocked": True, "issues": [
+                {"level": "block", "code": "stale_scope_data", "message": "scope is stale"}]}))
+            active = root / "active"
+            active.mkdir()
+            status = dict(active=True, status="paused", current_stage="scout_seed", run_dir=str(active),
+                          pause_reason="checked research results required")
+            engine = Mock()
+            engine.status.return_value = status
+            decision = SourceBridgeDecision("start_source_batch", "new batch", metadata={
+                "local_construction_ready": True, "allow_live_fallback": False})
+            runner = Mock(return_value=dict(status="readiness_blocked", run_dir=str(source),
+                                            readiness_json_path=str(report)))
+            with patch("wqb.workflow_auto_continue.WorkflowOrchestrator", return_value=engine), \
+                 patch("wqb.workflow_auto_continue.inspect_scout_seed_source_bridge", return_value=decision), \
+                 patch("wqb.workflow_auto_continue._readiness_blocker_for_status", return_value=None):
+                result = auto_continue_workflow(SimpleNamespace(run_root=root), {}, "2026-10-21T00:00:00Z", True, source_batch_runner=runner)
+            self.assertEqual(result["next_action"], "readiness-blocked")
+            self.assertEqual(result["readiness_blocker"]["codes"], ["stale_scope_data"])
+            self.assertEqual(runner.call_count, 1)
+            from wqb.runtime_control import request_runtime_state, read_runtime_control
+            from wqb.workflow_driver import run_workflow_driver
+            request_runtime_state(active, "running", max_simulations=7, max_runtime_seconds=60)
+            step = Mock(return_value=result)
+            driven = run_workflow_driver(SimpleNamespace(), {"runtime_max_steps": 3}, step=step,
+                                         status_reader=lambda: status)
+            self.assertEqual(step.call_count, 1)
+            self.assertEqual(driven["runtime_reason"], "readiness-blocked")
+            self.assertEqual(read_runtime_control(active)["max_simulations"], 7)
+
+    def test_source_readiness_failure_without_report_is_maintenance_not_retry(self):
+        """Input: malformed source failure. Output: assertions. Missing error evidence cannot restart the source loop."""
+        from wqb.workflow_auto_continue import _source_recovery_result
+        result = _source_recovery_result({}, {}, {"status": "readiness_blocked"})
+        self.assertEqual(result["next_action"], "maintenance-blocker")
+
     def test_created_workflow_advances_without_manual_continue(self):
         with patch('wqb.workflow_auto_continue.WorkflowOrchestrator') as factory, \
              patch('wqb.workflow_auto_continue._readiness_blocker_for_status', return_value=None):

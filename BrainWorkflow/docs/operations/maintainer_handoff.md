@@ -18,6 +18,16 @@ If the root recovery files are unavailable, use this document plus the committed
 
 ## Operation And Maintenance Separation
 
+### Source readiness and frozen runs (2026-10-21)
+
+A source batch, retry or recovery belongs to its active workflow manifest. CLI forwards that context to the readiness gate, checks run identity, knowledge root and scope, and reuses `_snapshot_schedule_inputs` to validate the frozen contract. Legacy runs keep legacy choices; opted-in V2 runs must still have complete verified operational context. Updating the global semantic release does not migrate an existing run. Standalone commands without owning-run context keep strict global readiness; there is no silent fallback from V2 to legacy.
+
+Frozen choices do not freeze or renew facts: every frozen field identity must still exist uniquely in the current exact-scope ledger with positive measured coverage; source dates, freshness, raw certification and general knowledge gates remain enforced. A failed source gate is returned as `readiness-blocked` on the same driver step with its actual report path. An absent or unusable failure report becomes a maintenance blocker, never `workflow-auto-continue`. This prevents timestamp-changing error batches from bypassing no-progress detection until runtime exhaustion. Planning context errors remain maintenance faults; true time/simulation limits remain separately authorized boundaries.
+
+Offline replay of the affected legacy run confirmed all 200 frozen fields and four templates pass; no source batch, model job or platform request was started. Do not delete the previous failed reports or runtime boundary, and do not increase the 43,200-second limit as part of this repair. A maintenance proof is not runtime renewal or research-resume authority.
+
+Acceptance: 272 focused regressions and the final 2,115-test offline suite passed with unchanged source. Missing/duplicate/zero-coverage/cache-only/uncertified frozen fields remain blocked. Separately approved proof renewal preserved original intent, 143/150 simulation usage, elapsed 43,203.236697 seconds and the 43,200-second limit; the runtime therefore remains blocked until a separately authorized extension. Historical failed source reports and limit notices are retained.
+
 ### Maintenance notification diagnosis (2026-10-21)
 
 The canonical rules and entry documents live only at the outer workspace root. A blocked research workflow never authorizes automatic code repair. A normal code blocker persists a recovery case and queues an evidence-only message through `runs/maintenance_channel.json`; the human confirms repair, then a full offline source-bound verification permits local resolution, not automatic research resume.

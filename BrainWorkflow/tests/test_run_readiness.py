@@ -8,6 +8,66 @@ from wqb.run_readiness import evaluate_run_readiness, write_readiness_reports
 
 
 class RunReadinessTests(unittest.TestCase):
+    def test_all_frozen_fields_must_remain_current_and_certified(self):
+        """Input: two frozen fields and degraded current rows. Output: assertions. Never validate a partial multi-field dependency set."""
+        from tests.test_workflow_auto_continue import write_start_artifacts
+        from wqb.workflow_stage_adapters import create_start_snapshot
+        import copy
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_start_artifacts(root)
+            knowledge = root / "knowledge"
+            scope = dict(region="USA", delay=1, universe="TOP3000")
+            snapshot = create_start_snapshot(knowledge, "option-1", scope)
+            first = snapshot["data_ledger_rows"][0]
+            second = copy.deepcopy(first)
+            second["field_id"] = "second_cash_field"
+            snapshot["data_ledger_rows"].append(second)
+            ledger = knowledge / "machine/data_ledger.jsonl"
+            raw = knowledge / first["source_paths"][0]
+            raw_row = json.loads(raw.read_text().splitlines()[0])
+            raw_row["field"]["id"] = second["field_id"]
+            raw.write_text(raw.read_text() + json.dumps(raw_row) + "\n")
+            ledger.write_text("\n".join(json.dumps(row) for row in (first, second)) + "\n")
+            self.assertTrue(evaluate_run_readiness(knowledge, "research", live_api_enabled=True,
+                                                 start_snapshot=snapshot, **scope).passed)
+            for change in ("missing", "duplicate", "zero_coverage", "cache_only", "missing_raw"):
+                with self.subTest(change=change):
+                    row = copy.deepcopy(second)
+                    if change == "zero_coverage":
+                        row["coverage"] = 0
+                    elif change == "cache_only":
+                        row["source_quality"] = "schema_seed"
+                    elif change == "missing_raw":
+                        row["source_paths"] = ["raw/platform/data_fields/missing/data_fields.jsonl"]
+                    rows = [first] if change == "missing" else [first, row]
+                    if change == "duplicate":
+                        rows.append(copy.deepcopy(row))
+                    ledger.write_text("\n".join(json.dumps(item) for item in rows) + "\n")
+                    self.assertTrue(evaluate_run_readiness(knowledge, "research", live_api_enabled=True,
+                                                          start_snapshot=snapshot, **scope).blocked)
+
+    def test_frozen_legacy_readiness_ignores_new_global_v2_templates_not_freshness(self):
+        """Input: legacy Start snapshot and changed global release. Output: assertions. Preserve original templates but not expired facts."""
+        from tests.test_workflow_auto_continue import write_start_artifacts
+        from wqb.workflow_stage_adapters import create_start_snapshot
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_start_artifacts(root)
+            knowledge = root / "knowledge"
+            scope = dict(region="USA", delay=1, universe="TOP3000")
+            snapshot = create_start_snapshot(knowledge, "option-1", scope)
+            with patch("wqb.workflow_stage_adapters._read_start_semantic_pair", side_effect=ValueError("new global v2 release")):
+                report = evaluate_run_readiness(knowledge, "research", live_api_enabled=True,
+                                                start_snapshot=snapshot, **scope)
+            self.assertTrue(report.passed, report.issues)
+            expired = evaluate_run_readiness(knowledge, "research", live_api_enabled=True,
+                                             today_value="2099-01-01", start_snapshot=snapshot, **scope)
+            self.assertTrue(expired.blocked)
+            mismatch = evaluate_run_readiness(knowledge, "research", live_api_enabled=True,
+                                              start_snapshot=snapshot, **{**scope, "region": "EUR"})
+            self.assertTrue(mismatch.blocked)
+
     def write_manifest(self, root: Path) -> None:
         manifest = root / "machine" / "freshness_manifest.json"
         manifest.parent.mkdir(parents=True, exist_ok=True)

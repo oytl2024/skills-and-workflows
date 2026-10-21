@@ -416,6 +416,7 @@ def require_readiness_gate(
     region: str | None = None,
     universe: str | None = None,
     delay: int | None = None,
+    start_snapshot: dict | None = None,
 ) -> None:
     """Input: readiness inputs and output dir. Output: none. Raise with report paths when execution is blocked."""
     report = evaluate_run_readiness(
@@ -427,6 +428,7 @@ def require_readiness_gate(
         region=region,
         universe=universe,
         delay=delay,
+        **({'start_snapshot': start_snapshot} if start_snapshot is not None else {}),
     )
     json_path, markdown_path = write_readiness_reports(Path(output_dir), report)
     if report.blocked:
@@ -435,7 +437,7 @@ def require_readiness_gate(
 
 def _live_gate_kwargs(config: dict[str, Any], run_dir: Path) -> dict[str, Any]:
     """Input: run config and run dir. Output: readiness kwargs. Build live execution readiness gate inputs."""
-    return {
+    result = {
         "knowledge_root": config.get("knowledge_root") or default_knowledge_root(),
         "output_dir": run_dir,
         "mode": "research",
@@ -445,6 +447,24 @@ def _live_gate_kwargs(config: dict[str, Any], run_dir: Path) -> dict[str, Any]:
         "universe": str(config.get("universe", "TOP3000")),
         "delay": int(config.get("delay", 1)),
     }
+    if config.get('active_workflow_run_dir'):
+        from wqb.research_planning import ResearchPlanningBlocked
+        from wqb.workflow_stage_adapters import _snapshot_schedule_inputs
+        try:
+            active = Path(config['active_workflow_run_dir'])
+            manifest = json.loads((active / 'run_manifest.json').read_text(encoding='utf-8'))
+            if (manifest.get('run_id') != active.name
+                    or Path(manifest['knowledge_root']).resolve() != Path(result['knowledge_root']).resolve()):
+                raise ValueError('source readiness manifest identity/root mismatch')
+            snapshot = manifest['start_snapshot']
+            scope = {key: result[key] for key in ('region', 'delay', 'universe')}
+            _snapshot_schedule_inputs(snapshot, manifest['selected_option_id'], scope)
+            if any(manifest['selected_scope'][key] != scope[key] for key in scope):
+                raise ValueError('source readiness manifest scope mismatch')
+            result['start_snapshot'] = snapshot
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise ResearchPlanningBlocked('invalid source readiness context: ' + str(error)) from error
+    return result
 
 
 def _print_readiness_blocked(run_dir: Path, error: ReadinessGateError, extra: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -4017,6 +4037,10 @@ def main() -> None:
                 result = status_row
         elif args.command in {"workflow-auto-continue", "workflow-run"}:
             from wqb.workflow_auto_continue import auto_continue_workflow
+
+            source_status = orchestrator.status()
+            if source_status.get('active') and source_status.get('run_dir'):
+                config = {**config, 'active_workflow_run_dir': source_status['run_dir']}
 
             if args.command == "workflow-run":
                 from wqb.runtime_control import read_runtime_control, request_runtime_state

@@ -343,6 +343,7 @@ def _validate_scope_artifacts(
     delay: int | None,
     current: date,
     data_ledger_max_age_days: int | None,
+    start_snapshot: dict | None = None,
 ) -> None:
     """Input: root, mode, issues, scope. Output: none. Validate ledger/template fit for a selected run scope."""
     if region is None or universe is None or delay is None:
@@ -354,8 +355,16 @@ def _validate_scope_artifacts(
         ledger_records = load_data_ledger_from_knowledge(root)
         from wqb.workflow_stage_adapters import _read_start_semantic_pair
         from wqb.template_library import template_record_from_dict
-        _, raw_templates, operators = _read_start_semantic_pair(root)
-        template_records = [template_record_from_dict(row) for row in raw_templates]
+        if start_snapshot is not None:
+            from wqb.workflow_stage_adapters import _snapshot_schedule_inputs
+            _, _, frozen_fields, template_records, _ = _snapshot_schedule_inputs(
+                start_snapshot, str((start_snapshot.get('selected_option') or {}).get('option_id', '')),
+                dict(region=region, delay=int(delay), universe=universe))
+            frozen_keys = {(row.dataset_id, row.field_id) for row in frozen_fields}
+            ledger_records = [row for row in ledger_records if (row.dataset_id, row.field_id) in frozen_keys]
+        else:
+            _, raw_templates, operators = _read_start_semantic_pair(root)
+            template_records = [template_record_from_dict(row) for row in raw_templates]
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
         issues.append(_issue(level, "parse_error", f"Cannot load scoped knowledge artifacts: {error}", root, "Fix JSONL before running research."))
         return
@@ -367,6 +376,15 @@ def _validate_scope_artifacts(
         limit=max(len(ledger_records), 1),
         universe=universe,
     )
+    if start_snapshot is not None:
+        selected_keys = {(row.dataset_id, row.field_id) for row in selected_data}
+        if (selected_keys != frozen_keys or len(selected_data) != len(frozen_keys)
+                or any(float(row.coverage) <= 0 for row in selected_data)
+                or mode in STRICT_BLOCKING_MODES and any(not _has_measured_platform_metadata(row) for row in selected_data)):
+            issues.append(_issue(level, 'frozen_fields_unavailable',
+                'Every frozen field identity must retain unique exact-scope measured coverage; partial dependencies are not executable.',
+                ledger_path, 'Restore current measured field coverage without changing the frozen Start snapshot.'))
+            return
     if not selected_data:
         issues.append(
             _issue(
@@ -471,6 +489,10 @@ def _validate_scope_artifacts(
             )
         )
         return
+    if start_snapshot is not None:
+        # The existing snapshot validator checked complete bindings and scope.
+        # Freshness, raw certification and coverage above still use current facts.
+        return
     if any(record.binding_version == 2 for record in template_records):
         from wqb.workflow_stage_adapters import _select_hypothesis_snapshot_rows
         try:
@@ -520,6 +542,7 @@ def evaluate_run_readiness(
     region: str | None = None,
     universe: str | None = None,
     delay: int | None = None,
+    start_snapshot: dict | None = None,
 ) -> ReadinessReport:
     """Input: root, mode, safety flags. Output: report. Check whether a run may start."""
     if mode not in READINESS_MODES:
@@ -569,6 +592,7 @@ def evaluate_run_readiness(
         delay,
         current,
         _data_ledger_max_age_days(freshness_records),
+        start_snapshot,
     )
     if mode == "research" and batch_size < 1:
         issues.append(_issue("block", "batch_size_too_small", "Research batch size must be positive.", "", "Select a positive batch cap; Scout and Discovery are capped at 30."))

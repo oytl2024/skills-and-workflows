@@ -177,6 +177,21 @@ def _planning_blocked_result(orchestrator: WorkflowOrchestrator, run: Path, now:
             'stop_reason': 'research_planning_blocked', 'message': message}
 
 
+def _source_recovery_result(status: dict, decision: dict, recovery: dict) -> dict:
+    """Input: workflow/bridge/source result dicts. Output: next-action dict. Stop on source readiness failure instead of looping."""
+    result = {**status, 'source_bridge': decision, 'source_recovery': recovery,
+              'next_action': 'workflow-auto-continue'}
+    if recovery.get('status') != 'readiness_blocked':
+        return result
+    path = Path(str(recovery.get('readiness_json_path', '')))
+    blocker = _readiness_blocker_from_report(_read_json(path), path) if path.is_file() else None
+    if blocker is None:
+        return {**result, 'next_action': 'maintenance-blocker',
+                'message': 'Source readiness failed without a valid blocking report; preserve evidence.'}
+    return {**result, 'next_action': 'readiness-blocked', 'readiness_blocker': blocker,
+            'message': 'Source readiness blocked; no further source batches or platform requests are allowed.'}
+
+
 def auto_continue_workflow(
     paths: OrchestratorPaths,
     config: dict[str, Any],
@@ -251,7 +266,7 @@ def auto_continue_workflow(
                 recovery = complete_in_flight_runner(decision.source_run_dir)
             finally:
                 _release_lock(decision.source_run_dir, "complete-in-flight", now, lock)
-            return {**status, "source_bridge": decision_dict, "source_recovery": recovery, "next_action": "workflow-auto-continue"}
+            return _source_recovery_result(status, decision_dict, recovery)
         if decision.action == "retry_planned" and retry_planned_runner is not None:
             lock = acquire_source_run_lock(decision.source_run_dir, "retry-planned", now)
             if lock.get("status") != "acquired":
@@ -260,7 +275,7 @@ def auto_continue_workflow(
                 recovery = retry_planned_runner(decision.source_run_dir)
             finally:
                 _release_lock(decision.source_run_dir, "retry-planned", now, lock)
-            return {**status, "source_bridge": decision_dict, "source_recovery": recovery, "next_action": "workflow-auto-continue"}
+            return _source_recovery_result(status, decision_dict, recovery)
         if decision.action in {"complete_in_flight", "retry_planned"}:
             return {**status, "source_bridge": decision_dict, "next_action": decision.action, "message": "Source recovery runner is not configured."}
         if decision.action == "start_source_batch" and source_batch_runner is not None:
@@ -300,7 +315,7 @@ def auto_continue_workflow(
                 return _planning_blocked_result(orchestrator, Path(run_dir), now, str(exc))
             finally:
                 _release_lock(run_dir, "start-source-batch", now, lock)
-            return {**status, "source_bridge": decision_dict, "source_recovery": recovery, "next_action": "workflow-auto-continue"}
+            return _source_recovery_result(status, decision_dict, recovery)
         if decision.action == "maintenance_blocker":
             return {**status, "source_bridge": decision_dict, "next_action": "maintenance-blocker"}
         return {**status, "source_bridge": decision_dict, "next_action": "source-batch-runner-missing", "message": "Source batch runner is not configured."}

@@ -4006,6 +4006,32 @@ class CliTests(unittest.TestCase):
         finally:
             cleanup_run_dir(run_dir)
 
+    def test_source_readiness_forwards_only_matching_manifest_context(self):
+        """Input: real legacy snapshot and scoped source config. Output: assertions. Bind source gates to the owning run."""
+        from tests.test_workflow_auto_continue import write_start_artifacts
+        from wqb.workflow_stage_adapters import create_start_snapshot
+        from wqb.cli import _live_gate_kwargs
+        from wqb.research_planning import ResearchPlanningBlocked
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_start_artifacts(root)
+            knowledge = root / "knowledge"
+            scope = dict(region="USA", delay=1, universe="TOP3000")
+            snapshot = create_start_snapshot(knowledge, "option-1", scope)
+            active = root / "active"
+            active.mkdir()
+            manifest = dict(run_id=active.name, knowledge_root=str(knowledge), selected_option_id="option-1",
+                            selected_scope=scope, start_snapshot=snapshot)
+            (active / "run_manifest.json").write_text(json.dumps(manifest))
+            config = dict(knowledge_root=str(knowledge), active_workflow_run_dir=str(active), **scope)
+            self.assertEqual(_live_gate_kwargs(config, root / "source")["start_snapshot"], snapshot)
+            with self.assertRaises(ResearchPlanningBlocked):
+                _live_gate_kwargs({**config, "region": "EUR"}, root / "source")
+            manifest["run_id"] = "different-run"
+            (active / "run_manifest.json").write_text(json.dumps(manifest))
+            with self.assertRaises(ResearchPlanningBlocked):
+                _live_gate_kwargs(config, root / "source")
+
     def test_field_batch_blocks_before_auth_when_readiness_fails(self):
         from wqb.cli import field_batch
 
