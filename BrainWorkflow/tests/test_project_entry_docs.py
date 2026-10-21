@@ -14,12 +14,12 @@ ARCHIVE = ROOT / "skills-and-workflows" / "BrainWorkflow" / "docs" / "archive" /
 class ProjectEntryDocsTests(unittest.TestCase):
     def test_product_interaction_contract_is_a_durable_project_rule(self):
         """Input: canonical rules files. Output: assertions. Keep routine interaction and authority boundaries explicit."""
-        rules = (ROOT / 'skills-and-workflows' / 'AGENTS.md').read_text(encoding='utf-8')
+        rules = (ROOT / 'AGENTS.md').read_text(encoding='utf-8')
         for term in ('BrainWorkflow Product Interaction Contract', 'Option Card', 'Start/Stop',
                      'Final Alpha submission', 'event-driven', 'SELF/PROD', 'in-flight saves',
                      'independently requested maintenance', 'end-to-end offline regression'):
             self.assertIn(term, rules)
-        self.assertIn('skills-and-workflows/AGENTS.md', (ROOT / 'AGENTS.md').read_text(encoding='utf-8'))
+        self.assertIn('BrainWorkflow Version Sync And Cleanup', rules)
 
     def test_milestone_is_current_valid_architecture(self):
         source = (ROOT / "milestone.md").read_text(encoding="utf-8")
@@ -47,7 +47,7 @@ class ProjectEntryDocsTests(unittest.TestCase):
         self.assertTrue("Exact next action" in source)
         self.assertLess(len(source), 25000)
 
-    def test_legacy_documents_are_archived_and_redirected(self):
+    def test_legacy_documents_are_archived_without_duplicate_entries(self):
         manifest = (ARCHIVE / "README.md").read_text(encoding="utf-8")
         for name in ("root-milestone.md", "root-todo.md", "repository-milestone.md", "repository-todo.md", "project-todo.md"):
             path = ARCHIVE / name
@@ -55,11 +55,12 @@ class ProjectEntryDocsTests(unittest.TestCase):
             if path.is_file():
                 self.assertGreater(path.stat().st_size, 1000)
                 self.assertIn(sha256(path.read_bytes()).hexdigest(), manifest)
-        project_stub = (ROOT / "skills-and-workflows" / "BrainWorkflow" / "todo.md").read_text(encoding="utf-8")
-        self.assertIn("../../../todo.md", project_stub)
+        for base in (ROOT / "skills-and-workflows", ROOT / "skills-and-workflows" / "BrainWorkflow"):
+            for name in ("AGENTS.md", "todo.md", "milestone.md"):
+                self.assertFalse((base / name).exists(), f"Duplicate root entry: {base / name}")
 
     def test_agent_rules_use_architecture_first_and_todo_for_handoffs(self):
-        for path in (ROOT / "AGENTS.md", ROOT / "skills-and-workflows" / "AGENTS.md"):
+        for path in (ROOT / "AGENTS.md",):
             rules = path.read_text(encoding="utf-8")
             self.assertIn("milestone.md", rules)
             self.assertIn("todo.md", rules)

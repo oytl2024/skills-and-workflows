@@ -1,5 +1,13 @@
 # 手动清理清单
 
+## 2026-10-21 单一根入口
+
+用户明确批准仅在 brain 最外层保留 AGENTS.md、todo.md、milestone.md。仓库 AGENTS 的独有规则已合入根 AGENTS；下列四个普通文件允许删除，原版本可从已同步的 `7bff56b` Git 历史恢复：`skills-and-workflows/AGENTS.md`、`skills-and-workflows/todo.md`、`skills-and-workflows/milestone.md`、`skills-and-workflows/BrainWorkflow/todo.md`。后三者只是根文件跳转页，无独有任务正文；历史归档不删除。入口回归改为检查根规则完整、嵌套入口不存在、归档哈希不变。本文旧段落中的“仓库 AGENTS.md”指当时位置，当前规则唯一入口为 brain/AGENTS.md。
+
+根三文件处于共享仓库之外，本次不移动 Git 根目录，也不将私人任务日志上传；GitHub同步的是删除变更、引用说明和回归测试，不代表根三文件已被远端备份。仓库 README 明确说明需从外层工作区入口维护。
+
+结果：四条路径经工作区边界、普通文件及祖先无链接核验后，已用原生 LiteralPath 非递归删除；规则有效内容合并至根 AGENTS.md，历史归档未改。先验证新断言失败，再完成合并并通过 24 项架构/入口回归（0.079 秒）；保留原有 25000 字符入口限额。源码、脚本和看板的架构入口已使用工作区根，无须修改运行代码。
+
 ## 2026-10-21 全工作区依赖复核（第二轮）
 
 用户批准整个 brain 的无用文件审计。删除前同步基线：`3e7c6847497147558c726584b7cc3688402fb388`，本地与 origin/agent/brainworkflow-phase2 一致。以下均为未跟踪的可再生缓存或空测试目录，不需要上传私有内容备份。
