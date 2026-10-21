@@ -1,5 +1,31 @@
 # 手动清理清单
 
+## 2026-10-21 全工作区依赖复核（第二轮）
+
+用户批准整个 brain 的无用文件审计。删除前同步基线：`3e7c6847497147558c726584b7cc3688402fb388`，本地与 origin/agent/brainworkflow-phase2 一致。以下均为未跟踪的可再生缓存或空测试目录，不需要上传私有内容备份。
+
+本轮删除白名单，相对 `skills-and-workflows/BrainWorkflow/`：
+
+- `output/__pycache__/`：1 个 pyc，仅当对应 Python 源码存在时删除。
+- `scripts/__pycache__/`：7 个 pyc，同上。
+- `tests/__pycache__/`：134 个 pyc，同上。
+- `wqb/__pycache__/`：115 个 pyc，同上。
+- `tests/_tmp_cli_0b4b262437a040168187e55b8524bad2/`
+- `tests/_tmp_cli_22e382bebd704029b7ae7f3eb7ac6af4/`
+- `tests/_tmp_cli_3c2128dad0d84b4ca106ee68dc927ffd/`
+- `tests/_tmp_cli_4b079cc354494f6b87a8279e8e0d4bb5/`
+- `tests/_tmp_cli_4bee650eb9c14d168fb45c5a2c2c3acb/`
+- `tests/_tmp_cli_4dc9d98d0e0e4a3d9523a1ef8a5c5f76/`
+- `tests/_tmp_cli_62318a53da454e32b503f9a260dfdf43/`
+- `tests/_tmp_cli_65da0ab9b5094e5b8fa6e0ee913b7003/`
+- `tests/_tmp_cli_c5d363bb87d04ef79dc26d989c234a34/`
+
+九个 `_tmp_cli_` 目录已核验为空，生成来源为 `tests/test_cli.py::make_run_dir/cleanup_run_dir`，不是研究运行。缓存仅逐文件删除 `.pyc`，拒绝子目录、链接、没有源文件的缓存及意外条目；最后只移除空目录，不递归扫除。
+
+依赖检查结论：docs/knowledge 的示例账本仍被 knowledge_bootstrap/knowledge_vault_migration 使用；operator_data_semantics.md 是 operator_semantics 的默认来源；cache 是 CLI 默认目录并被历史来源引用。因此不删除这些文件。output 下 source-audit/source-preparation、浏览器验证与 sandbox-probe、维护日志是独有验证/来源证据或含浏览器资料，不因“不被 import”认定无用。根 knowledge/raw/machine/wiki、runs、archive、.superpowers、tools/signboard、management、规则/交接和历史兼容代码保留。敏感 profile/netstat 不在本轮权限内。
+
+执行及回归结果：逐文件核验对应源文件存在后，原生非递归删除 257 个 pyc 和 13 个空目录（4 个缓存目录、9 个测试目录）。架构、入口、假设演示、CLI、知识库初始化及算符语义共 219 项离线测试通过（13.394 秒）；使用 `-B` 和 `PYTHONDONTWRITEBYTECODE=1` 防止回归重建缓存。回归后核验缓存与测试临时目录不存在，未修改运行代码或删除独有证据。进一步删除源码/历史材料需要证明替代关系与兼容性，不能仅靠静态零引用推断。
+
 ## 2026-10-21 版本同步与清理复核
 
 本节是当前规则；下文 2026-10-14 的禁止提交/推送仅描述当时授权，不覆盖本次明确授权。新版本 `e975850` 已推送到 `origin/agent/brainworkflow-phase2`，本地与远端完整提交号一致；不强推、不修改默认分支、不删除 Git 历史。
