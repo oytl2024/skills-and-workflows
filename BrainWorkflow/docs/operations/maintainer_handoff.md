@@ -18,6 +18,16 @@ If the root recovery files are unavailable, use this document plus the committed
 
 ## Operation And Maintenance Separation
 
+### Maintenance notification diagnosis (2026-10-21)
+
+The canonical rules and entry documents live only at the outer workspace root. A blocked research workflow never authorizes automatic code repair. A normal code blocker persists a recovery case and queues an evidence-only message through `runs/maintenance_channel.json`; the human confirms repair, then a full offline source-bound verification permits local resolution, not automatic research resume.
+
+Distinguish proof validation from transport: `maintenance_verification_stale` means a previously passed proof covers older source; `maintenance_verification_invalid` / `maintenance_evidence_invalid` means incomplete or invalid evidence. None is itself a failed message send. Console explicitly displays proof reason and actual notification state. `not_requested` means no send attempted; `queued` means accepted by the local Codex queue, not human receipt; `failed` means a known local setup/process-start failure; `delivery_uncertain` is not automatically replayed.
+
+Console startup schedules one nonblocking local compensation pass for the active run's stale proof. Its locked receipt is keyed by case and current source under `runtime/maintenance_verification/notifications/`. This is a one-time source-change event, not a recurring AI or platform check. It can notify about an already-paused run but never changes runtime intent, cumulative usage, quota, approvals, old case/proof or final submission authority. Reopening/reverification still requires human authorization. GET/render paths remain read-only, and normal Start/Stop operation is unchanged. Failed or uncertain receipts are preserved; do not delete them to force a resend. A missing/malformed saved source hash is invalid evidence, not a source-staleness event. The existing notification `list` includes these receipts; only after actually receiving the message, acknowledge with `python -m wqb.maintenance_notifications acknowledge-verification --run-dir <run> --case-id <id> --code-digest <source hash>`. This changes the named notice only; a late transport result cannot undo the receipt.
+
+Acceptance: 159 focused regressions and the final 2,110-test offline suite passed with unchanged source. A real notification-only `codex queue` invocation returned accepted/queued (not proof of human receipt). Separately authorized verification renewed the old run proof while asserting unchanged Pause, request revision, cumulative usage and all limits. Reloaded Console source revision matched disk; fragments showed a resolved case and enabled Resume without starting research or calling WQB. No temporary outputs from these checks require cleanup; historical receipts remain evidence.
+
 Keep the actual workflow run and project maintenance in separate loops.
 
 - The **operations loop** uses the Console/CLI, reads durable run state, and performs routine workflow actions: option selection, start, resume, continue, Scout/Seed artifact import, candidate approval, and status checks.

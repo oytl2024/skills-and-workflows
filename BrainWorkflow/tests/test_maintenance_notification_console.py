@@ -10,6 +10,36 @@ from wqb.runtime_control import request_runtime_state, update_runtime_status
 
 
 class MaintenanceNotificationConsoleTests(unittest.TestCase):
+    def test_console_start_schedules_only_one_nonblocking_notification_pass(self):
+        """Input: mocked local server. Output: assertions. Startup compensates once, never by recurring model polling."""
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from wqb.console_server import run_console
+        from wqb.maintenance_notifications import dispatch_startup_notifications
+        server = SimpleNamespace(server_address=("127.0.0.1", 8765), serve_forever=Mock(), server_close=Mock())
+        paths = SimpleNamespace(runs_root=Path("runs"))
+        with patch("wqb.console_server.default_console_paths", return_value=paths), \
+             patch("wqb.console_server.make_console_server", return_value=server), \
+             patch("wqb.console_server.threading.Thread") as worker:
+            run_console(open_browser=False)
+        worker.assert_called_once_with(target=dispatch_startup_notifications, args=(paths.runs_root,),
+                                       name="maintenance-startup-notice", daemon=True)
+        worker.return_value.start.assert_called_once()
+        server.serve_forever.assert_called_once()
+        server.server_close.assert_called_once()
+
+    def test_stale_verification_is_not_misreported_as_failed_transport(self):
+        """Input: stale proof projection dict. Output: assertions. Keep proof and transport failure distinct."""
+        state = {"active_workflow": {"exists": True}, "runtime_control": {
+            "recovery_case": {"status": "awaiting_maintenance_confirmation",
+                "verification_error": "maintenance_verification_stale",
+                "notification": {"status": "not_requested"}}}}
+        rendered = _render_workflow_progress(state)
+        self.assertIn("Maintenance verification is outdated", rendered)
+        self.assertIn("No maintenance-chat delivery attempted", rendered)
+        self.assertNotIn("delivery failed", rendered)
+        self.assertFalse(_workflow_action_state(state)["continue_workflow"])
+
     def test_invalid_fresh_status_preserves_confirmation_gate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

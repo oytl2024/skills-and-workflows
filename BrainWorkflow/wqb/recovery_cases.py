@@ -14,9 +14,16 @@ RECOVERY_LOCK_SECONDS = 2.0
 MAINTENANCE_BLOCKING_STATUSES = {"awaiting_maintenance_confirmation", "maintenance_approved"}
 
 
+def verification_notification_path(run_dir: Path, case_id: str, code_digest: str) -> Path:
+    """Input: run Path and case/source str. Output: Path. Identify a source-bound notification receipt, not approval."""
+    identity = hashlib.sha256(json.dumps([case_id, code_digest]).encode()).hexdigest()[:24]
+    return Path(run_dir) / "runtime/maintenance_verification/notifications" / (identity + ".json")
+
+
 def read_current_recovery_case(run_dir: Path) -> dict:
     """Input: run Path. Output: dict. Read fresh case state, keeping corrupt resolution evidence blocked."""
     snapshot = read_runtime_control(run_dir).get("recovery_case") or {}
+    verification_error, code_digest = "maintenance_evidence_invalid", ""
     case_id = str(snapshot.get("case_id", ""))
     if not snapshot:
         return {}
@@ -37,17 +44,30 @@ def read_current_recovery_case(run_dir: Path) -> dict:
         count = receipt.get("tests_run")
         approval = (fresh.get("repair_approval") or {}).get("approval_id")
         command = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"]
+        code_digest = _code_digest(Path(__file__).resolve().parents[1])
+        saved_digest = receipt.get("code_digest")
         valid = (receipt.get("status") == "passed" and receipt.get("case_id") == case_id
                  and isinstance(approval, str) and len(approval) == 32 and all(character in '0123456789abcdef' for character in approval)
                  and receipt.get("approval_id") == approval and receipt.get("command") == command
                  and type(receipt.get("returncode")) is int and receipt["returncode"] == 0
-                 and receipt.get("code_digest") == _code_digest(Path(__file__).resolve().parents[1])
+                 and isinstance(saved_digest, str) and len(saved_digest) == 64
+                 and all(character in "0123456789abcdef" for character in saved_digest)
                  and receipt.get("code_unchanged") is True and isinstance(count, int) and not isinstance(count, bool) and count > 0)
+        verification_error = "maintenance_verification_stale" if valid else "maintenance_verification_invalid"
+        valid = valid and saved_digest == code_digest
     if valid:
         return fresh
     if snapshot.get("category") == "code_or_contract" or snapshot.get("status") in MAINTENANCE_BLOCKING_STATUSES:
+        notification = {"status": "not_requested"}
+        if verification_error == "maintenance_verification_stale":
+            path = verification_notification_path(run_dir, case_id, code_digest)
+            notice = _read(path)
+            if (notice.get("case_id") == case_id and notice.get("code_digest") == code_digest
+                    and notice.get("status") in {"claimed", "queued", "failed", "delivery_uncertain", "notified"}):
+                notification = notice
         return {**snapshot, "status": "awaiting_maintenance_confirmation",
-                "notification": {"status": "failed", "error": "invalid_case_evidence_preserved"}}
+                "verification_error": verification_error, "verification_code_digest": code_digest,
+                "notification": notification}
     return snapshot
 
 

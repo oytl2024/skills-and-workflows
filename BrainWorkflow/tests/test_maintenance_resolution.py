@@ -101,7 +101,33 @@ class MaintenanceResolutionTests(unittest.TestCase):
         with patch("wqb.maintenance_resolution.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "Ran 12 tests in 1s\nOK\n")):
             verify_and_resolve(self.run, self.case["case_id"], approved["repair_approval"]["approval_id"])
         with patch("wqb.maintenance_resolution._code_digest", return_value="different-source"):
-            self.assertEqual(read_current_recovery_case(self.run)["status"], "awaiting_maintenance_confirmation")
+            projected = read_current_recovery_case(self.run)
+        self.assertEqual(projected["status"], "awaiting_maintenance_confirmation")
+        self.assertEqual(projected["verification_error"], "maintenance_verification_stale")
+        self.assertEqual(projected["notification"]["status"], "not_requested")
+        self.assertNotEqual(projected["notification"].get("error"), "queue_process_not_started")
+        from wqb.recovery_cases import verification_notification_path
+        path = verification_notification_path(self.run, self.case["case_id"], "different-source")
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"case_id": self.case["case_id"], "code_digest": "different-source", "status": "queued"}))
+        with patch("wqb.maintenance_resolution._code_digest", return_value="different-source"):
+            self.assertEqual(read_current_recovery_case(self.run)["notification"]["status"], "queued")
+        with patch("wqb.maintenance_resolution._code_digest", return_value="newer-source"):
+            self.assertEqual(read_current_recovery_case(self.run)["notification"]["status"], "not_requested")
+
+    def test_missing_or_malformed_digest_is_invalid_not_stale(self):
+        """Input: otherwise passed proof with invalid saved hash. Output: assertions. Never trigger stale-source delivery."""
+        approved = approve_repair(self.run, self.case["case_id"], "human-confirmation")
+        with patch("wqb.maintenance_resolution.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "Ran 12 tests in 1s\nOK\n")):
+            verify_and_resolve(self.run, self.case["case_id"], approved["repair_approval"]["approval_id"])
+        path = self.run / "runtime/maintenance_verification" / (self.case["case_id"] + ".json")
+        original = json.loads(path.read_text())
+        for digest in (None, "", "bad", "z" * 64):
+            with self.subTest(digest=digest):
+                path.write_text(json.dumps({**original, "code_digest": digest}))
+                current = read_current_recovery_case(self.run)
+                self.assertEqual(current["verification_error"], "maintenance_verification_invalid")
+                self.assertEqual(current["notification"]["status"], "not_requested")
 
     def test_pause_does_not_cancel_unresolved_code_blocker(self):
         request_runtime_state(self.run, "paused")

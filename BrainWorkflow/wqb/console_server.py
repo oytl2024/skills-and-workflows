@@ -372,14 +372,20 @@ def _render_workflow_progress(state: dict[str, Any]) -> str:
     if case.get("status") == "maintenance_approved":
         notification_text = "<p role='status'>Repair approved; waiting for successful verification. Workflow remains blocked.</p>"
     if case.get("status") == "awaiting_maintenance_confirmation":
-        labels = {"pending": "Waiting for maintenance-chat delivery (event-triggered)",
+        labels = {"not_requested": "No maintenance-chat delivery attempted",
+                  "pending": "Waiting for maintenance-chat delivery (event-triggered)",
                   "claimed": "Delivery uncertain; automatic duplicate delivery disabled",
                   "failed": "Maintenance-chat delivery failed; request preserved locally",
                   "delivery_uncertain": "Delivery uncertain; automatic duplicate delivery disabled",
                   "queued": "Request queued to Codex; awaiting receipt and human confirmation",
                   "notified": "Maintenance chat notified; waiting for human confirmation"}
         label = labels.get((case.get("notification") or {}).get("status"), "Notification state unavailable")
-        notification_text = f"<p role='status'>{escape(label)}. Code repair requires human confirmation.</p>"
+        verification = {"maintenance_verification_stale": "Maintenance verification is outdated for current source",
+                        "maintenance_verification_invalid": "Maintenance verification evidence is incomplete or invalid",
+                        "maintenance_evidence_invalid": "Maintenance case evidence is invalid"}.get(case.get("verification_error"), "")
+        error = str((case.get("notification") or {}).get("error", ""))
+        detail = ". ".join(value for value in (verification, label, error) if value)
+        notification_text = f"<p role='status'>{escape(detail)}. Code repair requires human confirmation.</p>"
     if control.get("desired_state") == "running" and control.get("status") in {"running", "waiting"}:
         return scope_text + '<p>Workflow is running automatically.</p><form method="post" action="/actions/run"><input type="hidden" name="action" value="workflow-stop"><button>Stop workflow</button></form>'
     if allowed["continue_workflow"]:
@@ -1209,6 +1215,8 @@ def _console_state_signature(paths: ConsolePaths) -> str:
         "start_preflight/*.json",
         "console_start/*.json",
         "start_preflight/notifications/*.json",
+        "*/runtime/recovery/*.json",
+        "*/runtime/maintenance_verification/notifications/*.json",
     ]
     tokens = [_file_token(paths.milestone_path), _file_token(paths.todo_path)]
     for pattern in patterns:
@@ -1424,6 +1432,9 @@ def run_console(
     """Input: server config. Output: startup summary. Run the local console until interrupted."""
     paths = default_console_paths(knowledge_root, runs_root)
     server = make_console_server(host, port, paths)
+    from wqb.maintenance_notifications import dispatch_startup_notifications
+    threading.Thread(target=dispatch_startup_notifications, args=(paths.runs_root,),
+                     name="maintenance-startup-notice", daemon=True).start()
     actual_host, actual_port = server.server_address
     url = f"http://{actual_host}:{actual_port}"
     if open_browser:
