@@ -1,5 +1,31 @@
 # 手动清理清单
 
+## 2026-10-21 版本同步与清理复核
+
+本节是当前规则；下文 2026-10-14 的禁止提交/推送仅描述当时授权，不覆盖本次明确授权。新版本 `e975850` 已推送到 `origin/agent/brainworkflow-phase2`，本地与远端完整提交号一致；不强推、不修改默认分支、不删除 Git 历史。
+
+本次普通清理白名单（基准目录仍为本文下述 brain 根目录）：
+
+- `skills-and-workflows/BrainWorkflow/output/structured-template-m1-demo-fixture/coverage.json`
+- `skills-and-workflows/BrainWorkflow/output/structured-template-m1-demo-fixture/design.json`
+- `skills-and-workflows/BrainWorkflow/output/structured-template-m1-demo-fixture/diagnostics.json`
+- `skills-and-workflows/BrainWorkflow/output/structured-template-m1-demo-fixture/drafts.json`
+- `skills-and-workflows/BrainWorkflow/output/structured-template-m1-demo-fixture/experiment.json`
+
+这五份是虚构离线演示生成物，不是真实策略或回测记录；当前源码、测试、规则、知识来源索引未引用这些具体文件。生成器 `scripts/demo_hypothesis_design.py` 已在远端版本保存，保留生成器与测试，仅清理输出。只删除列出的普通文件；若目录出现新增内容、链接或路径越界，停止，不整目录递归清空。
+
+本轮执行状态：带绝对路径、边界和链接核验的 PowerShell 删除命令在创建进程前被执行策略拒绝，五份文件尚未删除。不得改用 Python、其他 shell 或其他接口绕过拒绝；本节提供的是待执行清单，不是清理完成证明。
+
+另外，将用户早已批准且已经物理删除的两个无关技能目录 `skills/chaptered-course-lecture-builder/`、`skills/glimpse/` 的十条删除变更提交并推送；原文件仍可从前一远端提交恢复，不重建这些目录。
+
+明确保留：实际 `knowledge/`、根及产品 `runs/`、原始资料、当前语义 release/历史任务及来源回执、维护证明、`.superpowers/sdd/`、已被文档引用的 source-audit/source-preparation、当前看板依赖、配置和兼容代码。`configs/stage1_usa_d1.yaml` 仍是 CLI 默认且被测试使用，不按旧名称删除。
+
+需要另行具名批准的敏感候选：产品 `.desktop-launch-smoke-20260923/` 内的旧浏览器 profile，以及根 `netstat_ports.txt` 网络诊断。本轮不删除、不读取 Cookie/token 内容、不上传这些资料。
+
+`archive/stage1_legacy_20260712/` 混有旧源码、原始研究、文档、配置和历史运行；其旧源码不全处于共享 Git 的历史中。没有逐文件证明完成吸收、备份及无敏感内容之前，不把整个 archive 认作可删旧版本，也不为了备份将其私有内容上传 GitHub。截图、真实日志和维护审查报告不按日期批量删除。
+
+执行结果与最新待办统一记录在根 `todo.md`。以后每次版本更新均按仓库 `AGENTS.md` 的 `BrainWorkflow Version Sync And Cleanup` 执行，而非按旧日期的清单重复删除。
+
 核验日期：2026-10-14。基准目录：`C:\Users\oytl\Desktop\pyproject\brain`。
 
 本清单用于人工资源管理器操作，不是自动删除脚本。永久删除不会进入回收站；只选下面列明的路径，不要按相似名称批量删除。删除前若出现新增内容、程序占用或敏感文件，停止并重新核验。执行环境拒绝了代理删除命令，本文件不代表删除已完成。

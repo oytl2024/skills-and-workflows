@@ -6,6 +6,15 @@
 - Tests use isolated temporary directories with cleanup, not workspace-root mock/profile directories. Keep generated verification artifacts in the existing output/runs boundary and apply the same isolation to subprocesses.
 - Permanent cleanup must distinguish shared repository projects, credentials/configuration and referenced research evidence from disposable artifacts. Do not infer permission to delete sensitive files or shared projects from a generic cleanup request; confirm the exact scope first.
 
+## BrainWorkflow Version Sync And Cleanup
+
+- Every accepted version update ends with a cleanup pass: verify and commit the new version, push the intended branch without force, verify local/remote commit equality, audit obsolete content, remove only authorized obsolete items, run affected regressions, then commit and push tracked cleanup changes. A failed or divergent push stops deletion; do not merge, rewrite history or change the target branch implicitly.
+- Before deletion, record exact paths, dependency checks, Git recoverability and exclusions in the existing cleanup document and workspace todo.md. Resolve each target inside the workspace; reject links/junctions or unexpected contents. Use native literal-path operations, not cross-shell recursive deletion or wildcard directory sweeps.
+- Keep current runtime dependencies, old-run compatibility readers, Git history, rules/architecture/handoff entries, source knowledge, research identities/checks and recovery/maintenance evidence. A filename containing stage1, legacy, old or a date is not proof that it is unused.
+- Credentials, environment/config secrets, browser profiles/cookies/tokens and potentially sensitive diagnostics require separate explicit approval for the named deletion. Never upload these or private research/raw material merely to satisfy the pre-cleanup Git backup requirement. Unbacked or uniquely referenced evidence remains protected.
+- Routine generated fixtures/caches may be removed only when confirmed reproducible and unreferenced by durable evidence. Cleanup never grants WQB/model calls, research resume, budget renewal or Alpha submission. Record deferred/protected items honestly; do not claim complete cleanup while a required approval is pending.
+- If execution policy rejects deletion, do not retry through another language/tool or escalate scope. Preserve the exact candidate list, record the blocker and finish safe documentation/sync work; physical deletion remains incomplete until an allowed operation is available.
+
 ## Knowledge Age Policy
 
 - User-approved knowledge manifest default is at least 90 days (2026-10-12); central default is BrainWorkflow/wqb/knowledge_age_policy.py. Preserve real capture dates when migrating policy.
