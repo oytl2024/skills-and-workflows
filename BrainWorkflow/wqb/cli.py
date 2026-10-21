@@ -2159,7 +2159,7 @@ def run_field_batch(
     template_source = selection.template_source
     if config.get('scheduled_template') and not v2:
         template_source = 'knowledge_schedule'
-        operator_source = 'knowledge_operator_ledger'
+        operator_source = 'knowledge_legacy_operator_sources'
     knowledge_fields = filter_fields_by_suffix(selection.fields, field_suffix)
     knowledge_field_ids = {str(field.get("id", "")) for field in knowledge_fields}
     if field_cache_path:
@@ -2292,10 +2292,16 @@ def run_field_batch(
     seen_expression_hashes = run_root_expression_hashes(config.get("run_root", "runs"))
     missing_operator_provenance = False
     for candidate in candidates:
+        provenance = []
         if scheduled_template and not v2:
-            provenance = expression_operator_provenance(candidate.expression,
-                config.get('knowledge_root', default_knowledge_root()))
-            if not provenance or any(row.get('source') != 'knowledge_operator_ledger' for row in provenance):
+            try:
+                provenance = expression_operator_provenance(candidate.expression,
+                    config.get('knowledge_root', default_knowledge_root()), legacy_capture=True)
+            except (ValueError, OSError) as error:
+                from wqb.research_planning import ResearchPlanningBlocked
+                raise ResearchPlanningBlocked('scheduled operator provenance invalid: ' + str(error)) from error
+            if not provenance or any(row.get('source') not in {
+                    'knowledge_operator_ledger', 'knowledge_indexed_operator_capture'} for row in provenance):
                 missing_operator_provenance = True
                 continue
         expr_hash = (simulation_identity_hash(candidate.expression, candidate.settings) if scheduled_template or v2
@@ -2325,7 +2331,7 @@ def run_field_batch(
                 "operator_source": operator_source,
                 "template_provenance": scheduled_template or {},
                 "research_round_id": config.get("research_round_id", ""),
-                "operator_provenance": [] if v2 else expression_operator_provenance(
+                "operator_provenance": provenance if scheduled_template and not v2 else [] if v2 else expression_operator_provenance(
                     candidate.expression,
                     config.get("knowledge_root", default_knowledge_root()),
                 ),

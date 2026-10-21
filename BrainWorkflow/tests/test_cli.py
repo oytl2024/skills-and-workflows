@@ -3275,6 +3275,45 @@ class CliTests(unittest.TestCase):
             finally:
                 cleanup_run_dir(run_dir)
 
+    def test_legacy_scheduled_batch_records_indexed_capture_without_live_discovery(self):
+        """Input: legacy template and partial release. Output: None. Publish a local plan with exact captured provenance."""
+        from tests.test_operator_semantics import OperatorSemanticsTests
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            knowledge = root / 'knowledge'
+            relative = OperatorSemanticsTests().markdown_capture(knowledge,
+                '### `vec_count`\n- Source id: `vec_count`\n- Definition: `vec_count(x)`\n')
+            (knowledge / 'machine/operator_ledger.jsonl').write_text('', encoding='utf-8')
+            recorder = RunRecorder(root / 'source')
+            config = load_config('configs/stage1_usa_d1.yaml', overrides={
+                'knowledge_root': str(knowledge), 'run_root': str(root),
+                'max_alphas_per_round': 1, 'allow_live_source_fallback': False,
+                'scheduled_template': {'template_id': 'event_count', 'hypothesis': 'Event counts measure attention.',
+                                       'skeleton': 'vec_count({field})'}})
+            selection = SourceSelection([dict(id='event', type='VECTOR', coverage=0.9)],
+                                        'knowledge', 'code_generator', 'code_templates', [], [])
+            with patch('wqb.cli.resolve_source_inputs', return_value=selection), \
+                    patch('wqb.cli.fetch_data_fields') as fetch, \
+                    patch('wqb.cli.submit_multisimulation', return_value='offline://progress') as submit:
+                run_field_batch(object(), recorder, config, workflow_stage='scout', submit_mode='multi', defer_poll=True)
+            fetch.assert_not_called()
+            submit.assert_called_once()
+            planned = recorder.read_jsonl('planned_candidates.jsonl')
+            self.assertEqual(len(planned), 1)
+            self.assertEqual(planned[0]['operator_provenance'][0]['source'], 'knowledge_indexed_operator_capture')
+            self.assertEqual(planned[0]['operator_source'], 'knowledge_legacy_operator_sources')
+            (knowledge / relative).write_text('tampered', encoding='utf-8')
+            failed = RunRecorder(root / 'failed')
+            with patch('wqb.cli.resolve_source_inputs', return_value=selection), \
+                    patch('wqb.cli.fetch_data_fields') as fetch, \
+                    patch('wqb.cli.submit_multisimulation') as submit:
+                from wqb.research_planning import ResearchPlanningBlocked
+                with self.assertRaisesRegex(ResearchPlanningBlocked, 'scheduled operator provenance invalid:.*content_hash mismatch'):
+                    run_field_batch(object(), failed, config, workflow_stage='scout', submit_mode='multi', defer_poll=True)
+            fetch.assert_not_called()
+            submit.assert_not_called()
+            self.assertEqual(failed.read_jsonl('planned_candidates.jsonl'), [])
+
     def test_run_field_batch_records_operator_provenance_on_planned_candidates(self):
         run_dir = make_run_dir()
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, replace
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
@@ -23,6 +24,7 @@ LEGACY_OPERATOR_SOURCE_PREFIXES = (
 )
 OPERATOR_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 PLATFORM_OPERATOR_FIELDS = {"name", "id", "category", "description", "type", "scope", "level", "documentation"}
+LEGACY_CAPTURE_SOURCE_TYPES = frozenset({'platform_api', 'platform_learn_material'})
 
 
 @dataclass(frozen=True)
@@ -143,14 +145,20 @@ def extract_expression_operators(expression: str) -> list[str]:
     return operators
 
 
-def expression_operator_provenance(expression: str, knowledge_root: str | Path) -> list[dict[str, Any]]:
-    """Input: expression and vault root. Output: operator provenance rows. Link generated code operators to the ledger."""
+def expression_operator_provenance(expression: str, knowledge_root: str | Path, *, legacy_capture: bool = False) -> list[dict[str, Any]]:
+    """Input: expression/root and legacy opt-in bool. Output: provenance dicts. Keep V2 releases separate from legacy captured syntax."""
     ledger_path = existing_machine_resource_path(Path(knowledge_root), "operator_ledger")
     records = {record.operator: record for record in load_operator_semantics(ledger_path)}
+    operators = extract_expression_operators(expression)
+    captures = (_legacy_capture_provenance(Path(knowledge_root), set(operators) - set(records))
+                if legacy_capture and set(operators) - set(records) else {})
     provenance: list[dict[str, Any]] = []
-    for operator in extract_expression_operators(expression):
+    for operator in operators:
         record = records.get(operator)
         if record is None:
+            if operator in captures:
+                provenance.append(captures[operator])
+                continue
             provenance.append(
                 {
                     "operator": operator,
@@ -175,6 +183,67 @@ def expression_operator_provenance(expression: str, knowledge_root: str | Path) 
             }
         )
     return provenance
+
+
+def _legacy_capture_provenance(root: Path, operators: set[str]) -> dict[str, dict]:
+    """Input: vault Path and missing names set[str]. Output: provenance map. Verify indexed platform syntax without granting V2 semantics."""
+    from wqb.semantic_compilation import _material
+    from wqb.knowledge_age_policy import KNOWLEDGE_MAX_AGE_DAYS
+    from wqb.knowledge_contracts import parse_markdown_front_matter
+    from wqb.resource_evidence import _operator_receipt_context
+    index_path = existing_machine_resource_path(root, 'source_index')
+    if not index_path.exists():
+        return {}
+    index = {}
+    for line in index_path.read_text(encoding='utf-8').splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        relative = row['path']
+        if relative in index and index[relative] != row:
+            raise ValueError('conflicting operator source index rows: ' + relative)
+        index[relative] = row
+    platform_sources = {}
+    for relative, source in index.items():
+        if (not relative.startswith('raw/platform/') or 'operator' not in relative.lower()
+                or not relative.endswith('.md') or source.get('source_type') not in LEGACY_CAPTURE_SOURCE_TYPES):
+            continue
+        captured = datetime.fromisoformat(source['captured_at'].replace('Z', '+00:00'))
+        if captured.tzinfo is None:
+            raise ValueError('operator capture requires timezone-aware captured_at')
+        platform_sources[relative] = captured
+    if not platform_sources:
+        return {}
+    newest = max(platform_sources.values())
+    age = (datetime.now(timezone.utc).date() - newest.date()).days
+    if age < 0 or age > KNOWLEDGE_MAX_AGE_DAYS:
+        raise ValueError('operator capture outside knowledge age policy')
+    source_paths = {path for path, captured in platform_sources.items() if captured == newest}
+    selected, dates = {}, {}
+    for row, relative in _indexed_markdown_operator_rows(root, source_paths=source_paths):
+        name = row['name']
+        source = index[relative]
+        if name not in operators or source.get('source_type') not in LEGACY_CAPTURE_SOURCE_TYPES:
+            continue
+        definition = row.get('raw_definition', '')
+        if not re.match(r'^' + re.escape(name) + r'\s*\(', definition):
+            continue
+        verified, text = _material(root, source)
+        _, body = parse_markdown_front_matter(text.replace('\r\n', '\n'))
+        _operator_receipt_context(body, source, text, name)
+        captured = datetime.fromisoformat(source['captured_at'].replace('Z', '+00:00'))
+        if captured.tzinfo is None:
+            raise ValueError('operator capture requires timezone-aware captured_at')
+        if name in dates and captured < dates[name]:
+            continue
+        if name in dates and captured == dates[name] and selected[name]['raw_definition'] != definition:
+            raise ValueError('conflicting operator captures: ' + name)
+        dates[name] = captured
+        selected[name] = dict(operator=name, source='knowledge_indexed_operator_capture',
+            family='', workflow_uses=[], risk_tags=[], repair_levers=[], source_paths=[relative],
+            raw_definition=definition, captured_at=source['captured_at'],
+            source_sha256=verified['file_sha256'])
+    return selected
 
 
 def write_operator_semantics_jsonl(path: Path, records: list[OperatorSemanticRecord]) -> Path:
@@ -290,7 +359,7 @@ def _raw_operator_description(row: dict) -> str:
     return value
 
 
-def _indexed_markdown_operator_rows(root: Path) -> list[tuple[dict, str]]:
+def _indexed_markdown_operator_rows(root: Path, *, source_paths: set[str] | None = None) -> list[tuple[dict, str]]:
     """Input: vault Path. Output: (row dict, path str) list. Verify indexed Markdown before preserving labelled facts."""
     from wqb.knowledge_contracts import parse_markdown_front_matter
     from wqb.semantic_compilation import _material
@@ -303,6 +372,8 @@ def _indexed_markdown_operator_rows(root: Path) -> list[tuple[dict, str]]:
             continue
         indexed = json.loads(line)
         relative = indexed.get('path', '')
+        if source_paths is not None and relative not in source_paths:
+            continue
         if not (isinstance(relative, str) and relative.startswith('raw/platform/')
                 and 'operator' in relative.lower() and relative.endswith('.md')):
             continue

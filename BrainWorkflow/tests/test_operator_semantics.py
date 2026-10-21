@@ -18,6 +18,129 @@ from wqb.operator_semantics import (
 
 
 class OperatorSemanticsTests(unittest.TestCase):
+    def test_legacy_provenance_uses_verified_capture_not_in_new_release(self):
+        """Input: partial published ledger and indexed raw. Output: None. Recover only explicit legacy source facts."""
+        from wqb.semantic_publication import stage_semantic_release, publish_semantic_release
+        body = ('### `rank`\n- Source id: `rank`\n- Definition: `rank(x)`\n'
+                '### `vec_count`\n- Source id: `vec_count`\n- Definition: `vec_count(x)`\n- Description: Number of elements.\n')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'wiki').mkdir()
+            relative = self.markdown_capture(root, body)
+            ledger = root / 'machine/operator_ledger.jsonl'
+            ledger.write_text('', encoding='utf-8')
+            staged = stage_semantic_release(root, dict(validated_operators=[{'operator': 'ts_delta'}],
+                validated_templates=[{'template_id': 'new'}], source_refs=[dict(path=relative,
+                sha256=hashlib.sha256((root / relative).read_bytes()).hexdigest())],
+                wiki_materials={}), '2026-10-15T00:00:00Z')
+            publish_semantic_release(root, staged)
+            self.assertEqual(expression_operator_provenance('vec_count(x)', root)[0]['source'], 'missing_operator_ledger')
+            rows = expression_operator_provenance('rank(ts_delta(vec_count(x),1))', root, legacy_capture=True)
+            self.assertEqual([r['operator'] for r in rows], ['rank', 'ts_delta', 'vec_count'])
+            self.assertEqual(rows[1]['source'], 'knowledge_operator_ledger')
+            row = rows[2]
+            self.assertEqual(row['source'], 'knowledge_indexed_operator_capture')
+            self.assertEqual(row['source_paths'], [relative])
+            self.assertEqual(row['raw_definition'], 'vec_count(x)')
+            self.assertEqual(len(row['source_sha256']), 64)
+            self.assertEqual(row['captured_at'], '2026-10-11T00:00:00Z')
+            self.assertEqual(expression_operator_provenance('vec_count(x)', root)[0]['source'], 'missing_operator_ledger')
+
+    def test_legacy_provenance_rejects_conflicting_index_before_latest_selection(self):
+        """Input: reordered conflicting dated rows. Output: None. Never downgrade to an older source through dict overwrite."""
+        from wqb.knowledge_contracts import render_front_matter
+        body = '### `vec_count`\n- Source id: `vec_count`\n- Definition: `vec_count(x)`\n'
+        for reverse in (False, True):
+            with self.subTest(reverse=reverse), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.markdown_capture(root, body)
+                index = root / 'machine/source_index.jsonl'
+                latest = json.loads(index.read_text(encoding='utf-8'))
+                older = dict(latest, path='raw/platform/operators/2026-10-01/operators.md', captured_at='2026-10-01T00:00:00Z')
+                path = root / older['path']
+                path.parent.mkdir(parents=True)
+                path.write_text(render_front_matter(older) + body, encoding='utf-8')
+                conflict = dict(latest, captured_at='2026-09-01T00:00:00Z')
+                rows = [latest, older, conflict]
+                index.write_text('\n'.join(json.dumps(row) for row in (rows[::-1] if reverse else rows)), encoding='utf-8')
+                with self.assertRaisesRegex(ValueError, 'conflicting operator source index'):
+                    expression_operator_provenance('vec_count(x)', root, legacy_capture=True)
+
+    def test_legacy_provenance_never_falls_back_from_bad_newest_capture(self):
+        """Input: missing or corrupt newest raw plus valid older raw. Output: None. Fail closed rather than downgrade evidence."""
+        from wqb.knowledge_contracts import render_front_matter
+        body = '### `vec_count`\n- Source id: `vec_count`\n- Definition: `vec_count(x)`\n'
+        for missing in (False, True):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                relative = self.markdown_capture(root, body)
+                index = root / 'machine/source_index.jsonl'
+                latest = json.loads(index.read_text(encoding='utf-8'))
+                older = dict(latest, path='raw/platform/operators/2026-10-01/operators.md', captured_at='2026-10-01T00:00:00Z')
+                path = root / older['path']
+                path.parent.mkdir(parents=True)
+                path.write_text(render_front_matter(older) + body, encoding='utf-8')
+                index.write_text(json.dumps(latest) + '\n' + json.dumps(older), encoding='utf-8')
+                if missing:
+                    (root / relative).unlink()
+                else:
+                    (root / relative).write_text('changed', encoding='utf-8')
+                with self.assertRaises((ValueError, OSError)):
+                    expression_operator_provenance('vec_count(x)', root, legacy_capture=True)
+
+    def test_legacy_capture_age_boundary_and_invalid_get_receipt(self):
+        """Input: controlled dates and forged receipt. Output: None. Preserve 90-day policy and audit validation."""
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+        body = '### `vec_count`\n- Source id: `vec_count`\n- Definition: `vec_count(x)`\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            relative = self.markdown_capture(root, body)
+            for today, allowed in (('2027-01-09', True), ('2027-01-10', False), ('2026-10-10', False)):
+                with self.subTest(today=today), patch('wqb.operator_semantics.datetime', wraps=datetime) as clock:
+                    clock.now.return_value = datetime.fromisoformat(today).replace(tzinfo=timezone.utc)
+                    if allowed:
+                        self.assertEqual(expression_operator_provenance('vec_count(x)', root,
+                            legacy_capture=True)[0]['source'], 'knowledge_indexed_operator_capture')
+                    else:
+                        with self.assertRaisesRegex(ValueError, 'knowledge age policy'):
+                            expression_operator_provenance('vec_count(x)', root, legacy_capture=True)
+            self.markdown_capture_existing(root, relative, body + '\n## Raw GET Receipt\n\n```json\n{}\n```\n')
+            with self.assertRaisesRegex(ValueError, 'GET receipt'):
+                expression_operator_provenance('vec_count(x)', root, legacy_capture=True)
+
+    def test_legacy_provenance_rejects_untrusted_or_tampered_capture(self):
+        """Input: untrusted, incomplete or corrupt captures. Output: None. Never promote unsupported operators."""
+        body = '### `vec_count`\n- Source id: `vec_count`\n- Definition: `vec_count(x)`\n'
+        for kind in ('user_provided_reference', 'tampered', 'wrong_signature', 'missing_index'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                relative = self.markdown_capture(root, body, source_type=kind if kind == 'user_provided_reference' else 'platform_api')
+                (root / 'machine/operator_ledger.jsonl').write_text('', encoding='utf-8')
+                if kind == 'tampered':
+                    (root / relative).write_text('changed', encoding='utf-8')
+                elif kind == 'wrong_signature':
+                    # Keep a valid digest while removing the claimed operator signature.
+                    text = body.replace('vec_count(x)', 'rank(x)')
+                    self.markdown_capture_existing(root, relative, text)
+                elif kind == 'missing_index':
+                    (root / 'machine/source_index.jsonl').unlink()
+                if kind == 'tampered':
+                    with self.assertRaises(ValueError):
+                        expression_operator_provenance('vec_count(x)', root, legacy_capture=True)
+                else:
+                    row = expression_operator_provenance('vec_count(x)', root, legacy_capture=True)[0]
+                    self.assertEqual(row['source'], 'missing_operator_ledger')
+
+    def markdown_capture_existing(self, root, relative, body):
+        """Input: root Path, relative path and body str. Output: None. Replace an isolated fixture with consistent hashes."""
+        from wqb.knowledge_contracts import render_front_matter
+        path = root / 'machine/source_index.jsonl'
+        row = json.loads(path.read_text(encoding='utf-8'))
+        row['content_hash'] = hashlib.sha256(body.encode()).hexdigest()
+        (root / relative).write_text(render_front_matter(row) + body, encoding='utf-8')
+        path.write_text(json.dumps(row) + '\n', encoding='utf-8')
+
     def test_legacy_dictionary_and_definition_basis_jsonl_roundtrip(self):
         """Input: legacy and optional basis rows. Output: None. Keep exact legacy shape and lossless JSONL."""
         from tests.test_resource_evidence import definition_basis
