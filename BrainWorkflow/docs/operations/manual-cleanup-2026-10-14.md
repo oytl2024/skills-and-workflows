@@ -127,3 +127,11 @@ skills-and-workflows\BrainWorkflow\NVIDIA Corporation
 告知维护窗口“按 A 删好了”。维护窗口只读确认 A 路径不存在，核对 Git 删除变更属于这份白名单，运行现有入口/架构检查。不自动 commit/push，不修改真实运行，不通过重新生成残留伪造清理完成。
 
 这只是本轮确定可删的清单，不宣称所有历史内容已经消化。未来测试使用可清理的独立临时目录；代码、脚本、文档和生成物分别放回既有目录，禁止新增无关根目录。
+
+## 2026-10-22 Daily Budget Release Audit
+
+- Before cleanup, local HEAD and GitHub branch `agent/brainworkflow-phase2` both equalled `f2000102802f4a3fb472b9b454382c2d9d72d05e`; push succeeded without force.
+- Deletion set: empty. The24 changed product files are current source, regression tests, specification/plan and operator/maintainer documentation. The single new budget owner is imported by runtime, Start, planning, driver and audit consumers; tests cover retained legacy readers. No obsolete standalone implementation was introduced.
+- Protected exact boundaries: outer `AGENTS.md`, `todo.md`, `milestone.md`, `knowledge/`, `runs/`, `archive/`, browser/credential/configuration material, Git history, current launchers and Signboard dependencies. Existing product `output/` and `tests/full-suite-maintenance.log` remain untouched by deletion. New full-suite logs and copied source-change failure receipts remain verification evidence; names/dates alone do not authorize removal.
+- No recursive deletion, sensitive-file deletion, unrelated project cleanup, live research, WQB call, budget renewal or Alpha submission was performed by this audit. Daily policy activation was separately authorized and is recorded under the owning run, not inferred from cleanup.
+- Follow-up verification and loaded-app evidence belong to root todo.md. Record this no-deletion audit in Git after the verified source push; do not manufacture obsolete files merely to produce a cleanup commit.

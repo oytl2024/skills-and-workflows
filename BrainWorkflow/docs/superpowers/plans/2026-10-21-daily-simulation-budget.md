@@ -29,8 +29,10 @@ Final2,164-test offline proof passed with unchanged source digest
 Case `eb829cc7dd4df1c956f6ee5b` resolved; authorized local activation retained
 150 lifetime attempts/64,800s/three recoveries and original intent. Day balance
 150/4,000, remaining3,850; no research or WQB request. Frozen readiness passed;
-Console local snapshot permits Resume/Stop and renders150/4000. Git/deployment
-pending. Fake-clock tests use the real4,000 policy with cheap atomic boundary
+Console local snapshot permits Resume/Stop and renders150/4000. Source commit
+`f200010` synchronized with GitHub; no-deletion audit/63 post-audit tests passed.
+Desktop app opened and loaded-source identity matched; final audit-commit/app
+identity is recorded in root todo.md. Fake-clock tests use4,000 with boundary
 charges, plus actual Repair-scheduler fixtures; they do not issue4,000 requests.
 Fictional acceptance clocks are fixed without weakening production freshness.
 Source-change failures remain preserved. Root todo.md owns current handoff.
@@ -135,9 +137,9 @@ Source-change failures remain preserved. Root todo.md owns current handoff.
 - [x] Inspect current actual run control, worker lock, Stop revision and all blockers before any activation. Do not silently renew a stale maintenance proof: obtain separate human approval if required by the current source-bound contract.
 - [x] Once approved and fully verified, apply local-only, revision-bound daily activation using the Task 2 entry point; current expected baseline is lifetime 150, old cap 180, runtime 64,800s, recoveries 3. If actual state changed, stop and reconcile instead of forcing these values. Persist migration/round-reconciliation evidence, without live research.
 - [x] Verify all frozen resource/readiness gates and the app's next legal transition offline. A source/knowledge block is not repaired by a larger allowance.
-- [ ] Commit/push the intended existing branch without force; verify local and remote equality. Audit cleanup candidates in the existing cleanup record: preserve raw knowledge, research identities, receipts, legacy readers and uniquely referenced historical evidence. Delete only approved obsolete reproducible artifacts; if none exist, record that and do not manufacture cleanup work. Keep pre-existing `output/` and `tests/full-suite-maintenance.log` unless separately audited.
-- [ ] Reload only the owned passive desktop backend, requesting escalation if the sandbox blocks it. Verify loaded commit/source, proof, actual daily/lifetime labels and Start/Stop permissions. Never bypass a denied operation or report an old backend as deployed.
-- [ ] Record final command/results, changed/uncommitted paths, explicit remaining blockers and exact next action in root `todo.md`. Do not resume research or submit Alpha merely to prove the maintenance release works.
+- [x] Commit/push the intended existing branch without force; verify local and remote equality. Audit cleanup candidates in the existing cleanup record: preserve raw knowledge, research identities, receipts, legacy readers and uniquely referenced historical evidence. Delete only approved obsolete reproducible artifacts; if none exist, record that and do not manufacture cleanup work. Keep pre-existing `output/` and `tests/full-suite-maintenance.log` unless separately audited.
+- [x] Reload only the owned passive desktop backend, requesting escalation if the sandbox blocks it. Verify loaded commit/source, proof, actual daily/lifetime labels and Start/Stop permissions. Never bypass a denied operation or report an old backend as deployed.
+- [x] Record final command/results, changed/uncommitted paths, explicit remaining blockers and exact next action in root `todo.md`. Do not resume research or submit Alpha merely to prove the maintenance release works.
 
 ## Execution Choice And Approval Gate
 
