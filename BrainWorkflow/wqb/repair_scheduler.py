@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from wqb.runtime_control import _write, check_submission_allowed, RuntimePaused
+from wqb.runtime_control import _write, check_submission_allowed, RuntimePaused, DailyBudgetExhausted
 from wqb.repair_runtime import RepairProgressPending, RepairRateLimited, RepairResultUnknown
 from wqb.repair_unknown import quarantine_source, record_unknown, local_completion_source
 from wqb.repair_trace import compare_repair_experiment
@@ -186,6 +186,7 @@ def execute_repair_round(root: Path, outcome: dict, executor: object, maximum: i
     if reserved > maximum:
         return {'blocker': 'Repair reservations exceed authorized stage budget'}
     waits, blockers = [], []
+    daily_wait = None
     now = datetime.now(timezone.utc).isoformat()
     for parent in parents:
         check_submission_allowed()
@@ -207,10 +208,20 @@ def execute_repair_round(root: Path, outcome: dict, executor: object, maximum: i
                 waits.append((planning_wait['next_poll_at'], planning_wait['source_run_dir']))
                 continue
             try:
+                from wqb.runtime_control import _read, DAILY_RECONCILE_ENV
+                if _read(root / 'runtime_control.json').get('simulation_budget_mode') == 'daily':
+                    from wqb.daily_simulation_budget import read_daily_budget
+                    budget = read_daily_budget(root)
+                    import os
+                    if not budget['remaining'] or os.environ.get(DAILY_RECONCILE_ENV) == '1':
+                        raise DailyBudgetExhausted(budget)
                 plan = executor.prepare(root, parent, history, maximum - reserved)
                 if getattr(executor, 'supports_ai_planning', False) is True:
                     from wqb.repair_planning import verify_consumed_plan
                     verify_consumed_plan(root, plan)
+            except DailyBudgetExhausted as exc:
+                daily_wait = exc
+                continue
             except RuntimePaused:
                 raise
             except RepairRateLimited as exc:
@@ -342,6 +353,8 @@ def execute_repair_round(root: Path, outcome: dict, executor: object, maximum: i
             attempt['experiment_trace'] = compare_repair_experiment(parent, children[0],
                 attempt.get('plan', {}).get('decision', {}))
             receipt['last_sha256'] = _sha(source)
+        except DailyBudgetExhausted as exc:
+            daily_wait = exc
         except RuntimePaused:
             _write(path, receipt)
             raise
@@ -374,6 +387,10 @@ def execute_repair_round(root: Path, outcome: dict, executor: object, maximum: i
         _write(path, receipt)
     receipt['budget_reserved'] = reserved
     receipt['unknown_result_count'] = sum(a.get('phase') == 'result_unknown' for a in receipt['attempts'])
+    if daily_wait is not None and not blockers:
+        receipt.update(status='paused', recovery_eligible=True, blocker=str(daily_wait))
+        _write(path, receipt)
+        raise daily_wait
     for key in ('rate_limit_retry_at', 'rate_limit_source_run_dir', 'progress_retry_at', 'progress_source_run_dir'):
         receipt.pop(key, None)
     if blockers:

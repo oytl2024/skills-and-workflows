@@ -16,6 +16,14 @@
 
 ## 每天怎么用
 
+### 每日回测额度
+
+新版预算以北京时间（Asia/Shanghai）每天 00:00 重置，工作区内所有受管研究、Scout、Discovery 和 Repair 共用每天 4,000 次 simulation 提交尝试。一次 multisimulation 包含几个子策略就扣几次；查询结果不扣，提交失败或结果未知也不退款。这不是平台承诺的配额，平台 429 仍独立处理。
+
+Workflow Progress 显示 Today（当天用量）、Lifetime attempts（保留的累计用量）和 Next reset。额度不足时自动等待，跨天后在原有时长、恢复次数和 Stop 约束内继续原任务，不需要新增额度按钮。停止后不会因跨天自行开始；应用重启后使用原 Resume workflow。运行时长耗尽仍按下面的时长授权操作处理，不因每日重置而延长。
+
+旧运行必须先由已批准的本地维护迁移，累计历史只保守计入激活日一次，并标明是迁移用量而非伪造当天发生时间。未迁移的旧运行和 original-only 批次仍保留更严格的旧上限与身份范围。部署/迁移验收状态见工作区 todo.md；文档不代表旧运行已激活。
+
 运行时长耗尽时，普通 **Resume workflow** 不会增加预算。请在 **Workflow Progress** 选择新增 6 或 12 小时，再点击 **Authorize extension and resume**。这会保留累计用时、回测次数及其他上限，只增加明确授权的运行时长；旧请求不能覆盖新的 Stop，重复点击不会重复增加额度。维护阻塞仍需先修复并验证。详情见 [Runtime Renewal](runtime-renewal.md)。
 
 1. 选择一张 **Research option** 卡片和可用 scope，点击 **Start workflow**。后台先执行所选 scope 的本地预检；只在缺少可编译字段总账时从已有 raw 修复一次，就绪时不重编。预检通过后才创建研究运行并自动推进。这一选择授予该次研究的受控 live simulation 权限；不会授权联网抓取知识或最终 Alpha 提交。

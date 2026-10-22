@@ -209,6 +209,14 @@ def auto_continue_workflow(
         discovery_executor=(discovery_executor or (DiscoveryRuntimeExecutor(config)
                             if config.get('managed_research_execution') else None)) if enable_live_api else None)
     status = orchestrator.status()
+    if status.get('active') and status.get('run_dir'):
+        from wqb.research_rounds import reconcile_research_budget_wait
+        reconciled = reconcile_research_budget_wait(Path(status['run_dir']), now)
+        if reconciled['status'] == 'daily-budget-wait':
+            return {**status, 'next_action': 'daily-budget-wait',
+                    'daily_simulation_budget': reconciled['daily_simulation_budget']}
+        if reconciled['status'] == 'ready':
+            status = orchestrator.status()
     if status.get("status") == "paused" and str(status.get("pause_reason", "")).startswith("research_"):
         planning = str(status['pause_reason']).startswith('research_planning_blocked:')
         return {**status, "next_action": "research-loop-blocked", "message": status["pause_reason"],
@@ -298,9 +306,17 @@ def auto_continue_workflow(
                 "active_workflow_run_dir": run_dir,
             }
             try:
+                from wqb.daily_simulation_budget import read_daily_budget
+                from wqb.runtime_control import read_runtime_control, DailyBudgetExhausted, DAILY_RECONCILE_ENV
+                if read_runtime_control(run_dir).get('simulation_budget_mode') == 'daily':
+                    budget = read_daily_budget(Path(run_dir), now)
+                    import os
+                    if not budget['remaining'] or os.environ.get(DAILY_RECONCILE_ENV) == '1':
+                        raise DailyBudgetExhausted(budget)
                 if metadata.get('hypothesis_binding_version') == 2:
-                    from wqb.research_planning import prepare_hypothesis_plan
-                    source_config.update(prepare_hypothesis_plan(Path(run_dir), source_config, metadata, now))
+                    from wqb.research_planning import prepare_source_plan
+                    source_config['max_alphas_per_round'] = metadata.get('scheduled_batch_maximum', source_config['max_alphas_per_round'])
+                    source_config.update(prepare_source_plan(Path(run_dir), source_config, metadata, now))
                     metadata = {**metadata, 'hypothesis_bindings': source_config['hypothesis_bindings'],
                                 'ai_plan_receipt': source_config['ai_plan_receipt']}
                 recovery = source_batch_runner(source_config, metadata)

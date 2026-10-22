@@ -4030,6 +4030,12 @@ def main() -> None:
             if result.get("run_dir"):
                 from wqb.runtime_control import request_runtime_state
                 control = request_runtime_state(result["run_dir"], "paused", enable_live_api=bool(args.enable_live_api))
+                from wqb.daily_simulation_budget import activate_daily_policy
+                if not (Path(result['run_dir']) / 'runtime_status.json').exists():
+                    from wqb.runtime_control import update_runtime_status
+                    update_runtime_status(result['run_dir'], simulation_attempts=0)
+                control = activate_daily_policy(Path(result['run_dir']), control['request_revision'],
+                                                'Explicit CLI workflow Start')
                 result = {**result, "runtime_request_revision": control["request_revision"]}
         elif args.command == "workflow-continue":
             result = orchestrator.continue_once(now)

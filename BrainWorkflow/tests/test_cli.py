@@ -4768,7 +4768,9 @@ class WorkflowOrchestratorCliTests(unittest.TestCase):
                     "--knowledge-root", str(Path(tmp) / "knowledge"), "--run-dir", str(Path(tmp) / "runs")]
             with patch("sys.argv", argv), patch("wqb.cli.WorkflowOrchestrator") as orchestrator:
                 orchestrator.return_value.start.return_value = {"run_dir": str(run), "status": "running"}
-                with patch("wqb.runtime_control.request_runtime_state", return_value={"request_revision": "start-revision"}) as persist, redirect_stdout(output):
+                with patch("wqb.runtime_control.request_runtime_state", return_value={"request_revision": "start-revision"}) as persist, patch(
+                    "wqb.daily_simulation_budget.activate_daily_policy", return_value={"request_revision": "start-revision"}
+                ) as activate, redirect_stdout(output):
                     main()
 
         persist.assert_called_once_with(str(run), "paused", enable_live_api=True)

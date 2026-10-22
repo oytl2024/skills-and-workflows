@@ -96,6 +96,7 @@ class OfficialPairedStartTests(unittest.TestCase):
             self.assertEqual(snapshot['research_policy'], dict(paired_scout=True))
             self.assertEqual(len(validate_operational_resource_context(snapshot)['experiments']), 1)
             self.assertEqual(read_runtime_control(run)['desired_state'], 'paused')
+            self.assertEqual(read_runtime_control(run)['simulation_budget_mode'], 'daily')
 
 
 class BackgroundStartServerTests(unittest.TestCase):
@@ -310,6 +311,8 @@ class BackgroundStartWorkerTests(unittest.TestCase):
         self.assertEqual(request['research_policy'], dict(paired_scout=True))
         config.write_text(json.dumps(dict(research_policy=dict(paired_scout=False))), encoding='utf-8')
         run = self.paths.runs_root / 'paired'
+        run.mkdir(parents=True, exist_ok=True)
+        (run / 'run_manifest.json').write_text(json.dumps({'run_id': run.name}), encoding='utf-8')
         with patch.object(self.worker, 'prepare_start', return_value=dict(passed=True)) as prepare, patch.object(
                 console_server, '_validate_option_data_coverage') as coverage, patch.object(
                 self.worker.WorkflowOrchestrator, 'start', return_value=dict(run_dir=str(run))) as start:
@@ -500,6 +503,8 @@ class BackgroundStartWorkerTests(unittest.TestCase):
 
     def test_success_creates_paused_mission_and_revision_once(self):
         run_dir = self.paths.runs_root / "created"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / 'run_manifest.json').write_text(json.dumps({'run_id': run_dir.name}), encoding='utf-8')
         with patch.object(self.worker, "prepare_start", return_value={"passed": True, "receipt_path": "local.json"}), patch.object(
             self.worker.WorkflowOrchestrator, "start", return_value={"run_dir": str(run_dir), "run_id": "created"}
         ) as create:
@@ -513,6 +518,8 @@ class BackgroundStartWorkerTests(unittest.TestCase):
     def test_cancel_after_creation_invalidates_runtime_revision(self):
         from wqb.runtime_control import read_runtime_control
         run_dir = self.paths.runs_root / "created"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / 'run_manifest.json').write_text(json.dumps({'run_id': run_dir.name}), encoding='utf-8')
         with patch.object(self.worker, "prepare_start", return_value={"passed": True}), patch.object(
             self.worker.WorkflowOrchestrator, "start", return_value={"run_dir": str(run_dir)}
         ):

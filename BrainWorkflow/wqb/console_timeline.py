@@ -305,9 +305,15 @@ def select_current_work(state: dict[str, Any], timeline: list[dict[str, Any]]) -
     handoff = state.get('research_handoff') or {}
     from wqb.runtime_boundaries import RESOURCE_ACTIONS
     runtime = state.get('runtime_control') or {}
+    daily = runtime.get('daily_simulation_budget') or {}
+    obsolete_reasons = {'research_simulation_budget_exhausted'}
+    if 'max_rounds' not in runtime:
+        obsolete_reasons.add('research_round_budget_exhausted')
+    obsolete_round = bool(daily and rounds.get('stop_reason') in obsolete_reasons)
+    obsolete_handoff = bool(daily and handoff.get('stop_reason') in obsolete_reasons)
     if runtime.get('status') == 'blocked' and runtime.get('reason') in RESOURCE_ACTIONS:
         return runtime_current_work(state)
-    if (rounds.get('status') == 'blocked' and rounds.get('stop_reason') != 'user_paused') or handoff.get('status') == 'blocked':
+    if (rounds.get('status') == 'blocked' and rounds.get('stop_reason') != 'user_paused' and not obsolete_round) or (handoff.get('status') == 'blocked' and not obsolete_handoff):
         reason = rounds.get('stop_reason') or handoff.get('stop_reason')
         return {'title': 'Research loop paused', 'status': 'blocked',
                 'next_action': 'research-loop-blocked',
@@ -327,6 +333,22 @@ def select_current_work(state: dict[str, Any], timeline: list[dict[str, Any]]) -
                             f"Maintenance message delivery: {delivery}", approval,
                             'Runtime renewal does not resolve this fault.',
                             str((control.get('last_result') or {}).get('pause_reason', control.get('reason', '')))],
+                'evidence_paths': []}
+    if daily:
+        readiness_work = readiness_blocker_current_work(state)
+        if readiness_work is not None:
+            return readiness_work
+    if (daily and not runtime.get('invalid')
+            and runtime.get('status') not in {'waiting_for_user', 'completed', 'completed_with_warnings', 'aborted'}
+            and not (state.get('active_workflow') or {}).get('waiting_for_user')) and (runtime.get('reason') == 'daily_budget_exhausted'
+            or daily.get('remaining') == 0):
+        stopped = runtime.get('desired_state') != 'running'
+        stale = (runtime_current_work(state) or {}).get('status') == 'stale'
+        return {'title': 'Daily simulation allowance', 'status': 'paused' if stopped else 'stale' if stale else 'waiting',
+                'next_action': 'workflow-auto-continue' if stopped or stale else 'daily-budget-wait',
+                'details': [f"Today: {daily['used']} / {daily['limit']} ({daily['budget_date']} Asia/Shanghai)",
+                    f"Lifetime attempts: {daily['lifetime_attempts']}", f"Next reset: {daily['next_reset_at']}",
+                    'Stop remains in effect.' if stopped else 'Waiting automatically within existing runtime limits.'],
                 'evidence_paths': []}
     scope = control.get('original_batch_recovery') or {}
     if scope.get('authorized'):

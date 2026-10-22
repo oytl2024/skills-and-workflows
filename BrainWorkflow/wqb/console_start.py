@@ -190,6 +190,12 @@ def execute_start(paths, form: dict, request_id: str) -> dict:
                 # Persist the mission before publishing paused runtime intent.
                 row = _write_request(paths.runs_root, {**row, **result, "status": "committing"})
                 control = request_runtime_state(result["run_dir"], "paused", enable_live_api=selection["enable_live_api"])
+                from wqb.daily_simulation_budget import activate_daily_policy
+                if not (Path(result['run_dir']) / 'runtime_status.json').exists():
+                    from wqb.runtime_control import update_runtime_status
+                    update_runtime_status(result['run_dir'], simulation_attempts=0)
+                control = activate_daily_policy(Path(result['run_dir']), control['request_revision'],
+                                                'Console Start ' + request_id)
                 return _write_request(paths.runs_root, {**row, "status": "completed", "passed": True,
                                                       "runtime_request_revision": control["request_revision"]})
             except Exception as error:

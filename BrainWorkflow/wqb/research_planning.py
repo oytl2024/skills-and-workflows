@@ -153,7 +153,7 @@ def prepare_paired_hypothesis_plan(run: Path, config: dict, metadata: dict, now:
             raise ValueError('invalid paired allowed references')
         identity = dict(round_id=metadata.get('research_round_id', 'round-0001'),
             manifest_sha256=hashlib.sha256(raw).hexdigest(), settings=settings, allowed_refs=allowed,
-            requested_maximum=config['max_alphas_per_round'])
+            requested_maximum=metadata.get('scheduled_batch_maximum', config['max_alphas_per_round']))
         slot = hashlib.sha256(json.dumps([identity['round_id'], allowed], sort_keys=True).encode()).hexdigest()
         receipt = run / 'runtime/research_plans' / ('paired-' + slot + '.json')
         sidecar_path = receipt.with_suffix('.experiments.json')
@@ -188,6 +188,16 @@ def prepare_paired_hypothesis_plan(run: Path, config: dict, metadata: dict, now:
             # Measurements are not inferred from correlation/check caches or unknown historical periods.
             selection = select_experiment_batch(snapshot, experiments, maximum, measurements)
             selected = selection['selected']
+            if not selected and saved is None:
+                from wqb.runtime_control import _read, DailyBudgetExhausted
+                if _read(run / 'runtime_control.json').get('simulation_budget_mode') == 'daily':
+                    larger = select_experiment_batch(snapshot, experiments, 30, measurements)
+                    if larger['selected']:
+                        from wqb.daily_simulation_budget import read_daily_budget
+                        costs = [sum(simulation_identity_hash(arm['binding']['bound_expression'], arm['settings'])
+                                     not in measurements for arm in experiment['arms']) for experiment in experiments]
+                        required = min(cost for cost in costs if cost > 0)
+                        raise DailyBudgetExhausted({**read_daily_budget(run, now), 'required_count': required})
             sidecar = dict(schema_version=1, manifest_sha256=identity['manifest_sha256'],
                 experiments=selection['experiments'], arms=selection['sidecars'])
             if saved is None:
@@ -395,6 +405,25 @@ def _write_hypothesis_brief(run: Path, evidence: Path, snapshot: dict, identity:
     return path
 
 
+def _daily_replay_maximum(run: Path, saved: dict | None, maximum: int, ceiling: int) -> int:
+    """Input: run/receipt/current max/frozen ceiling. Output: int. Retain an existing plan's reservation across daily balance changes."""
+    from wqb.runtime_control import _read
+    if _read(run / 'runtime_control.json').get('simulation_budget_mode') != 'daily':
+        return maximum
+    if saved is None:
+        from wqb.runtime_control import DAILY_RECONCILE_ENV
+        import os
+        if not maximum or os.environ.get(DAILY_RECONCILE_ENV) == '1':
+            from wqb.daily_simulation_budget import read_daily_budget
+            from wqb.runtime_control import DailyBudgetExhausted
+            raise DailyBudgetExhausted(read_daily_budget(run))
+        return maximum
+    reserved = saved.get('identity', {}).get('maximum')
+    if type(reserved) is not int or not 0 < reserved <= min(30, ceiling):
+        raise ResearchPlanningBlocked('invalid frozen daily plan reservation')
+    return reserved
+
+
 def hypothesis_authorized_maximum(run: Path, requested: int) -> int:
     """Input: run Path/requested int. Output: capped int. Respect persisted remaining authority without reserving or modifying it."""
     from wqb.research_workflow import cap_simulation_count
@@ -407,6 +436,9 @@ def hypothesis_authorized_maximum(run: Path, requested: int) -> int:
         if control.get('desired_state') != 'running':
             from wqb.runtime_control import RuntimePaused
             raise RuntimePaused('user_paused')
+        if control.get('simulation_budget_mode') == 'daily':
+            from wqb.daily_simulation_budget import remaining_submission_allowance
+            return min(maximum, remaining_submission_allowance(run))
         status = json.loads((run / 'runtime_status.json').read_text(encoding='utf-8'))
         limit, used = control.get('max_simulations'), status.get('simulation_attempts')
         if type(limit) is not int or type(used) is not int or limit < 0 or used < 0:
@@ -450,6 +482,8 @@ def prepare_hypothesis_discovery_plan(run: Path, config: dict, metadata: dict, n
     receipt = run / 'runtime/research_plans' / ('discovery-' + slot + '.json')
     with json_lock_transition_guard(receipt, 5.0, 0.05, 'Discovery hypothesis plan busy'):
         saved = json.loads(receipt.read_text(encoding='utf-8')) if receipt.exists() else None
+        maximum = _daily_replay_maximum(run, saved, maximum, metadata.get('scheduled_batch_maximum', 30))
+        identity['maximum'] = maximum
         if saved is not None:
             if saved.get('identity') != identity or saved.get('status') not in ('ready', 'exhausted'):
                 raise ResearchPlanningBlocked('Discovery frozen plan changed')
@@ -518,6 +552,8 @@ def prepare_hypothesis_plan(run: Path, config: dict, metadata: dict, now: str) -
         receipt = run / 'runtime/research_plans' / ('hypothesis-' + slot + '.json')
         with json_lock_transition_guard(receipt, 5.0, 0.05, 'hypothesis plan busy'):
             saved = json.loads(receipt.read_text(encoding='utf-8')) if receipt.exists() else None
+            maximum = _daily_replay_maximum(run, saved, maximum, metadata.get('scheduled_batch_maximum', config['max_alphas_per_round']))
+            identity['maximum'] = maximum
             from wqb.cli import run_root_expression_hashes, simulation_identity_hash
             excluded = (saved.get('identity', {}).get('excluded_simulation_hashes', []) if saved is not None else
                         sorted(run_root_expression_hashes(config['run_root'])) if config.get('run_root') else [])

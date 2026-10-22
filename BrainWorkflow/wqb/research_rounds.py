@@ -63,8 +63,10 @@ def mission_round_authorized(run: Path) -> bool:
         return False
 
 
-def research_round_limit(control: dict) -> int:
-    """Input: validated runtime control dict. Output: int. Share derived round ceiling without enlarging explicit limits."""
+def research_round_limit(control: dict) -> int | None:
+    """Input: validated runtime dict. Output: explicit/legacy int or None. Daily quota never implies a lifetime round ceiling."""
+    if control.get('simulation_budget_mode') == 'daily':
+        return control.get('max_rounds')
     maximum = control['max_simulations']
     ceiling = max(1, (maximum + SCOUT_CANDIDATE_COUNT - 1) // SCOUT_CANDIDATE_COUNT)
     return min(control.get('max_rounds', ceiling), ceiling)
@@ -345,7 +347,8 @@ def release_verified_partial_budget_stop(run: Path, case_id: str, now: str) -> b
                 return False
             used = max(usage, state.budget_used, sum(row['budget_reserved'] for row in ledger['rounds']))
             if (used >= control['max_simulations']
-                    or max(1, len(ledger['rounds'])) >= research_round_limit(control)
+                    or (research_round_limit(control) is not None
+                        and max(1, len(ledger['rounds'])) >= research_round_limit(control))
                     or _source_reconciliation_required(run)):
                 return False
             schedule = _read(run / 'stages/schedule/research_schedule.json')
@@ -365,6 +368,50 @@ def release_verified_partial_budget_stop(run: Path, case_id: str, now: str) -> b
             write_run_state(run / STATE_FILENAME, replace(state, stages=stages,
                 pause_reason='Verified remaining simulation budget is available', updated_at=now))
             return True
+
+
+def reconcile_research_budget_wait(run: Path, now: str) -> dict:
+    """Input: owning run Path/ISO time. Output: decision dict. Release only activation-bound obsolete budget stops, without changing intent."""
+    from wqb.daily_simulation_budget import read_daily_budget
+    from wqb.recovery_cases import read_current_recovery_case, MAINTENANCE_BLOCKING_STATUSES
+    run = Path(run)
+    unchanged = {'status': 'unchanged'}
+    if not (run / STATE_FILENAME).is_file():
+        return unchanged
+    with json_lock_transition_guard(run / 'runtime/research_rounds', ROUND_LOCK_TIMEOUT_SECONDS,
+                                    ROUND_LOCK_SLEEP_SECONDS, 'daily round reconciliation busy'):
+        with json_lock_transition_guard(run / 'runtime/control_intent', ROUND_LOCK_TIMEOUT_SECONDS,
+                                        ROUND_LOCK_SLEEP_SECONDS, 'daily round intent busy'):
+            control = _read(run / 'runtime_control.json')
+            if (control.get('simulation_budget_mode') != 'daily' or control.get('desired_state') != 'running'
+                    or not mission_round_authorized(run)
+                    or read_current_recovery_case(run).get('status') in MAINTENANCE_BLOCKING_STATUSES):
+                return unchanged
+            state = load_run_state(run / STATE_FILENAME)
+            recognized = {'research_simulation_budget_exhausted', 'research_round_budget_exhausted'}
+            if state.status != 'paused' or state.pause_reason not in recognized:
+                return unchanged
+            if state.pause_reason == 'research_round_budget_exhausted' and control.get('max_rounds') is not None:
+                return unchanged
+            receipt = _read(run / 'runtime/daily_budget_activation.json')
+            if receipt.get('activation_id') != control.get('daily_budget_activation_id') or receipt.get('status') != 'applied':
+                return unchanged
+            ledger = _read(run / ROUND_STATE_FILENAME)
+            if ledger.get('run_id') != run.name or ledger.get('stop_reason') != state.pause_reason:
+                return unchanged
+            budget = read_daily_budget(run, now)
+            if budget['remaining'] <= 0:
+                return {'status': 'daily-budget-wait', 'daily_simulation_budget': budget}
+            if _source_reconciliation_required(run):
+                return unchanged
+            stages = dict(state.stages)
+            stages[state.current_stage] = replace(stages[state.current_stage], blocker='')
+            ledger.update(status='ready', stop_reason='', updated_at=now,
+                          daily_activation_id=receipt['activation_id'])
+            _write(run / ROUND_STATE_FILENAME, ledger)
+            write_run_state(run / STATE_FILENAME, replace(state, status='running', pause_reason='',
+                stages=stages, updated_at=now))
+            return {'status': 'ready', 'daily_simulation_budget': budget}
 
 
 def advance_research_round(run: Path, now: str, result: dict) -> dict:
@@ -413,9 +460,16 @@ def _advance_unlocked(run: Path, now: str, result: dict) -> dict:
     max_rounds = research_round_limit(control)
     used = max(usage, state.budget_used, sum(row['budget_reserved'] for row in ledger['rounds']))
     next_batch_cap = min(SCOUT_CANDIDATE_COUNT, maximum - used)
+    if control.get('simulation_budget_mode') == 'daily':
+        from wqb.daily_simulation_budget import remaining_submission_allowance
+        next_batch_cap = min(SCOUT_CANDIDATE_COUNT, remaining_submission_allowance(run, now))
     if next_batch_cap <= 0:
+        if control.get('simulation_budget_mode') == 'daily':
+            from wqb.daily_simulation_budget import read_daily_budget
+            from wqb.runtime_control import DailyBudgetExhausted
+            raise DailyBudgetExhausted(read_daily_budget(run, now))
         return _stop(run, ledger, 'research_simulation_budget_exhausted', now)
-    if max(1, len(ledger['rounds'])) >= max_rounds:
+    if max_rounds is not None and max(1, len(ledger['rounds'])) >= max_rounds:
         return _stop(run, ledger, 'research_round_budget_exhausted', now)
     schedule = _read(run / 'stages/schedule/research_schedule.json')
     manifest = _read(run / 'run_manifest.json')

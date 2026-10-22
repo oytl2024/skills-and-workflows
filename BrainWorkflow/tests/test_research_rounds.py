@@ -60,6 +60,31 @@ def round_fixture(root: Path, stage: str = 'triage') -> tuple:
 
 
 class ResearchRoundTests(unittest.TestCase):
+    def test_daily_activation_reconciles_only_obsolete_budget_marker(self):
+        from wqb.daily_simulation_budget import activate_daily_policy
+        from wqb.runtime_control import read_runtime_control
+        with tempfile.TemporaryDirectory() as tmp:
+            _, run = round_fixture(Path(tmp))
+            control = read_runtime_control(run)
+            activate_daily_policy(run, control['request_revision'], 'approved migration', '2026-10-21T01:00:00Z')
+            state = load_run_state(run / 'run_state.json')
+            write_run_state(run / 'run_state.json', replace(state, status='paused',
+                pause_reason='research_simulation_budget_exhausted'))
+            write_json(run / 'research_rounds.json', {'schema_version': 1, 'run_id': run.name,
+                'status': 'blocked', 'current_round_id': 'round-0001', 'rounds': [],
+                'stop_reason': 'research_simulation_budget_exhausted'})
+            active = json.loads((run / 'runtime_control.json').read_text())
+            write_json(run / 'runtime_control.json', {**active, 'desired_state': 'paused', 'request_revision': 'new-stop'})
+            self.assertEqual(research_rounds.reconcile_research_budget_wait(run, '2026-10-22T01:00:00Z')['status'], 'unchanged')
+            self.assertEqual(load_run_state(run / 'run_state.json').status, 'paused')
+            write_json(run / 'runtime_control.json', active)
+            before = (run / 'runtime_control.json').read_bytes()
+            result = research_rounds.reconcile_research_budget_wait(run, '2026-10-22T01:00:00Z')
+            self.assertEqual(result['status'], 'ready')
+            self.assertEqual(load_run_state(run / 'run_state.json').status, 'running')
+            self.assertEqual((run / 'runtime_control.json').read_bytes(), before)
+            self.assertEqual(research_rounds.reconcile_research_budget_wait(run, '2026-10-22T01:00:00Z')['status'], 'unchanged')
+
     def test_verified_legacy_budget_stop_releases_without_resume_or_quota_change(self):
         """Input: verified repair and obsolete full-batch stop. Output: assertions. Allow legal partial planning while preserving Stop."""
         with tempfile.TemporaryDirectory() as tmp:

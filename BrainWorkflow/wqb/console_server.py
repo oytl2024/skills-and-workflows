@@ -311,8 +311,12 @@ def _workflow_action_state(state: dict[str, Any]) -> dict[str, bool]:
     if control.get('reason') in RESOURCE_ACTIONS and control.get('status') == 'blocked':
         maintenance_blocked = True
     confirmation_required = ((control.get("recovery_case") or {}).get("status") in MAINTENANCE_BLOCKING_STATUSES
-                             or bool(control.get("legacy_authority_required")))
+                             or bool(control.get("legacy_authority_required")) or bool(control.get('invalid')))
     worker_running = control.get("desired_state") == "running" and control.get("status") in {"running", "waiting"}
+    if control.get('daily_simulation_budget'):
+        from wqb.console_timeline import runtime_current_work
+        if (runtime_current_work(state) or {}).get('status') == 'stale':
+            worker_running = False
     original_finished = (scope.get('authorized') is True and type(scope.get('planned')) is int
                          and scope['planned'] > 0 and scope.get('remaining') == 0
                          and scope.get('checked', 0) >= scope['planned'] and not worker_running)
@@ -352,6 +356,12 @@ def _render_workflow_progress(state: dict[str, Any]) -> str:
                   f"{int(scope.get('remaining', 0))} remaining. Resume automatically maintains knowledge, "
                   "waits for cooldown and recovers existing work. No new research or Alpha submission.</p>"
                   if scope.get('authorized') else '')
+    daily = control.get('daily_simulation_budget') or {}
+    if daily:
+        scope_text = (f"<p>Today: {escape(str(daily['used']))} / {escape(str(daily['limit']))} "
+                      f"({escape(str(daily['budget_date']))} Asia/Shanghai). "
+                      f"Lifetime attempts: {escape(str(daily['lifetime_attempts']))}. "
+                      f"Next reset: {escape(str(daily['next_reset_at']))}.</p>" + scope_text)
     if control.get("legacy_authority_required"):
         blocker_reason = "Runtime authority required; legacy run needs reconciliation. Defaults cannot authorize Resume."
     case = control.get("recovery_case") or {}
@@ -386,7 +396,7 @@ def _render_workflow_progress(state: dict[str, Any]) -> str:
         error = str((case.get("notification") or {}).get("error", ""))
         detail = ". ".join(value for value in (verification, label, error) if value)
         notification_text = f"<p role='status'>{escape(detail)}. Code repair requires human confirmation.</p>"
-    if control.get("desired_state") == "running" and control.get("status") in {"running", "waiting"}:
+    if not allowed['continue_workflow'] and control.get("desired_state") == "running" and control.get("status") in {"running", "waiting"}:
         return scope_text + '<p>Workflow is running automatically.</p><form method="post" action="/actions/run"><input type="hidden" name="action" value="workflow-stop"><button>Stop workflow</button></form>'
     if allowed["continue_workflow"]:
         continue_control = f"""
@@ -436,6 +446,9 @@ def _workflow_action_hash(state: dict[str, Any]) -> str:
         "desired_state": control.get("desired_state"),
         "runtime_boundary_reason": control.get('reason') if control.get('status') == 'blocked' else '',
         "legacy_authority_required": control.get("legacy_authority_required"),
+        "daily_budget_invalid": bool(control.get('invalid')),
+        "daily_budget": {key: (control.get('daily_simulation_budget') or {}).get(key)
+                         for key in ('policy_id', 'budget_date', 'limit', 'used', 'remaining')},
         "original_batch_scope_id": control.get("original_batch_scope_id"),
         "maintenance_case": {key: (control.get("recovery_case") or {}).get(key) for key in ("case_id", "status")},
         "source_action": bridge.get("action"),

@@ -8,7 +8,7 @@ import sys
 import time
 from typing import Any, Callable
 
-from wqb.runtime_control import CONTROL_ENV, DEADLINE_ENV, RuntimePaused, RuntimeBudgetExhausted, read_runtime_control, has_runtime_authority, update_runtime_status, utc_now
+from wqb.runtime_control import CONTROL_ENV, DEADLINE_ENV, DAILY_RECONCILE_ENV, RuntimePaused, RuntimeBudgetExhausted, DailyBudgetExhausted, read_runtime_control, has_runtime_authority, update_runtime_status, utc_now, _read, _write
 from wqb.source_run_lock import acquire_source_run_lock, release_source_run_lock
 from wqb.ai_checkpoints import schedule_run_checkpoint
 from wqb.recovery_cases import classify_blocker, ensure_recovery_case, advance_scripted_recovery, read_current_recovery_case, MAINTENANCE_BLOCKING_STATUSES
@@ -20,6 +20,7 @@ from wqb.runtime_boundaries import RESOURCE_ACTIONS
 DEFAULT_NO_PROGRESS_LIMIT = 5
 DEFAULT_MAX_STEPS = 1000
 WAIT_SLICE_SECONDS = 1.0
+DAILY_RECONCILE_SECONDS = 60.0
 
 
 def resolve_ai_executor_argv(config: dict[str, Any]) -> list[str]:
@@ -32,6 +33,8 @@ def resolve_ai_executor_argv(config: dict[str, Any]) -> list[str]:
 
 def _repair_cooldown_result(run: Path, result: dict[str, Any], now: str) -> dict[str, Any]:
     """Input: active run and step result. Output: result. Surface durable Repair cooldown to the driver."""
+    if result.get('next_action') == 'daily-budget-wait':
+        return result
     if result.get("current_stage") not in {"repair", "batch_generation", "backtest"} or result.get("status") != "paused":
         return result
     if result.get('pause_reason') in {'checked research differs from its import receipt',
@@ -80,6 +83,45 @@ def _seconds_until(target: str, now: str) -> float:
         return max(0.0, (end - current).total_seconds())
     except (TypeError, ValueError):
         return 0.0
+
+
+def _daily_wait_result(run: Path, result: dict, now: str) -> dict | None:
+    """Input: owning run/result/time. Output: wait dict or None. Recheck persisted waits without model/platform work."""
+    from wqb.daily_simulation_budget import read_daily_budget
+    path = run / 'runtime/daily_budget_wait.json'
+    saved = _read(path)
+    if saved.get('status') != 'waiting':
+        return None
+    budget = read_daily_budget(run, now)
+    required = saved.get('required_count', 1)
+    if type(required) is not int or required < 1 or saved.get('policy_id') != budget['policy_id']:
+        raise ValueError('invalid daily budget wait evidence')
+    if budget['remaining'] >= required:
+        _write(path, {**saved, 'status': 'ready', 'ready_at': now})
+        return None
+    return {**result, 'next_action': 'daily-budget-wait',
+            'daily_simulation_budget': {**budget, 'required_count': required}}
+
+
+def _daily_reconciliation_due(run: Path, stage: str, now: str) -> bool:
+    """Input: run/stage/time. Output: bool. Permit paced recovery of existing identities only, never a fresh research plan."""
+    saved = _read(run / 'runtime/daily_budget_wait.json')
+    if saved.get('last_reconciled_at') and _seconds_until(now, saved['last_reconciled_at']) < DAILY_RECONCILE_SECONDS:
+        return False
+    if stage == 'repair':
+        receipt = _read(run / 'stages/repair/repair_execution.json')
+        return any(attempt.get('phase') == 'waiting' and attempt.get('next_poll_at')
+                   and _seconds_until(attempt['next_poll_at'], now) == 0 for attempt in receipt.get('attempts', []))
+    if stage in {'batch_generation', 'backtest'}:
+        name = 'discovery_execution.json' if stage == 'batch_generation' else 'check_recovery.json'
+        receipt = _read(run / 'stages' / stage / name)
+        wake = receipt.get('progress_retry_at') or receipt.get('rate_limit_retry_at')
+        return bool(receipt.get('recovery_eligible') is True and wake and _seconds_until(wake, now) == 0)
+    if stage == 'scout_seed':
+        from wqb.source_bridge import inspect_scout_seed_source_bridge
+        decision = inspect_scout_seed_source_bridge(run.parent, str(run), now)
+        return decision.action in {'complete_in_flight', 'import_existing', 'import_research_outcome'}
+    return False
 
 
 def run_workflow_driver(
@@ -137,7 +179,22 @@ def run_workflow_driver(
                 break
             update_runtime_status(run, status="running", next_wake_at="", elapsed_seconds=elapsed)
             try:
-                result = step()
+                waiting = _daily_wait_result(run, result, now_func())
+                reconciliation_only = waiting is not None and _daily_reconciliation_due(run, str(result.get('current_stage', '')), now_func())
+                if reconciliation_only:
+                    wait_path = run / 'runtime/daily_budget_wait.json'
+                    _write(wait_path, {**_read(wait_path), 'last_reconciled_at': now_func()})
+                    prior_reconcile = os.environ.get(DAILY_RECONCILE_ENV)
+                    os.environ[DAILY_RECONCILE_ENV] = '1'
+                    try:
+                        result = step()
+                    finally:
+                        if prior_reconcile is None:
+                            os.environ.pop(DAILY_RECONCILE_ENV, None)
+                        else:
+                            os.environ[DAILY_RECONCILE_ENV] = prior_reconcile
+                else:
+                    result = waiting if waiting is not None else step()
             except RateLimitRecoveryRequired as error:
                 result = {**result, "next_action": "maintenance-blocker", "source_bridge": {
                     "source_run_dir": error.source_run_dir, "metadata": {
@@ -145,13 +202,23 @@ def run_workflow_driver(
             except RuntimeBudgetExhausted:
                 runtime_status, reason = 'blocked', 'runtime_budget_exhausted'
                 break
+            except DailyBudgetExhausted as error:
+                budget = error.budget
+                prior_wait = _read(run / 'runtime/daily_budget_wait.json')
+                _write(run / 'runtime/daily_budget_wait.json', {
+                    **prior_wait,
+                    'status': 'waiting', 'policy_id': budget['policy_id'],
+                    'budget_date': budget['budget_date'], 'next_reset_at': budget['next_reset_at'],
+                    'required_count': max(prior_wait.get('required_count', 1), budget.get('required_count', 1)),
+                    'created_at': prior_wait.get('created_at', now_func())})
+                result = {**result, 'next_action': 'daily-budget-wait', 'daily_simulation_budget': budget}
             except RuntimePaused as error:
                 runtime_status = "paused" if read_runtime_control(run).get("desired_state") == "paused" else "blocked"
                 reason = ('research_simulation_budget_exhausted'
                           if runtime_status == 'blocked' and str(error) == 'simulation attempt budget exhausted' else str(error))
                 break
             result = _repair_cooldown_result(run, result, now_func())
-            if not (config.get('managed_research_execution') and result.get('current_stage') == 'scout_seed'):
+            if not reconciliation_only and result.get('next_action') != 'daily-budget-wait' and not (config.get('managed_research_execution') and result.get('current_stage') == 'scout_seed'):
                 try:
                     schedule_run_checkpoint(run, result, now_func(), resolve_ai_executor_argv(config))
                 except RuntimeBudgetExhausted:
@@ -171,6 +238,29 @@ def run_workflow_driver(
             bridge = result.get("source_bridge") or {}
             metadata = bridge.get("metadata") or {}
             action = str(result.get("next_action", ""))
+            if action == 'daily-budget-wait':
+                budget = result['daily_simulation_budget']
+                wake = budget['next_reset_at']
+                update_runtime_status(run, status='waiting', reason='daily_budget_exhausted', next_wake_at=wake)
+                while _seconds_until(wake, now_func()) > 0:
+                    current = read_runtime_control(run)
+                    if current.get('invalid'):
+                        raise ValueError('daily budget authority became invalid during wait')
+                    if (current.get('desired_state') != 'running'
+                            or read_current_recovery_case(run).get('status') in MAINTENANCE_BLOCKING_STATUSES
+                            or elapsed_before + _seconds_until(now_func(), start) >= float(current['max_runtime_seconds'])):
+                        break
+                    if _daily_reconciliation_due(run, str(result.get('current_stage', '')), now_func()):
+                        break
+                    part = min(WAIT_SLICE_SECONDS, _seconds_until(wake, now_func()))
+                    reserved_elapsed = elapsed_before + _seconds_until(now_func(), start) + part
+                    update_runtime_status(run, elapsed_seconds=reserved_elapsed)
+                    try:
+                        sleep_func(part)
+                    finally:
+                        update_runtime_status(run, elapsed_seconds=max(reserved_elapsed,
+                            elapsed_before + _seconds_until(now_func(), start)))
+                continue
             recoverable_rate_limit = action == "maintenance-blocker" and metadata.get("operator_acknowledgement_required") is True
             if action in {"rate-limit-wait", "source-lock-wait", "simulation-progress-wait"} or recoverable_rate_limit:
                 wake = str(metadata.get("retry_at", ""))

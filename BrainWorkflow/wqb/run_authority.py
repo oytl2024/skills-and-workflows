@@ -72,6 +72,14 @@ def inspect_run_authority(run_dir: Path) -> dict:
     evidence.update(distinct_submitted_candidates=len(candidates), distinct_progress_urls=len(progress))
     maximum = control.get('max_simulations')
     used = worker.get('simulation_attempts', 0)
+    daily_budget = None
+    if control.get('simulation_budget_mode') == 'daily':
+        from wqb.daily_simulation_budget import read_daily_budget
+        try:
+            daily_budget = read_daily_budget(run)
+            used = daily_budget['lifetime_attempts']
+        except (ValueError, OSError, TypeError):
+            errors.append(str(control_path))
     valid = (runtime_authority_is_complete(control)
              and type(used) is int and used >= 0)
     status = 'runtime_authority_present' if valid else 'runtime_authority_required'
@@ -81,7 +89,7 @@ def inspect_run_authority(run_dir: Path) -> dict:
         status = 'runtime_authority_required'
     if status == 'runtime_authority_present' and len(candidates) > used:
         status = 'accounting_reconciliation_required'
-    if status == 'runtime_authority_present' and 'simulation_attempts' not in worker:
+    if status == 'runtime_authority_present' and 'simulation_attempts' not in worker and daily_budget is None:
         status = 'accounting_reconciliation_required'
     if errors:
         status = 'invalid_runtime_authority' if str(control_path) in errors else 'evidence_invalid'
@@ -89,8 +97,11 @@ def inspect_run_authority(run_dir: Path) -> dict:
             'planning_estimates': {key: schedule.get(key) for key in ('simulation_budget', 'api_budget')},
             'runtime_authority': {key: control.get(key) for key in
                                   ('desired_state', 'enable_live_api', 'max_simulations', 'request_revision')},
-            'recorded_attempts': worker.get('simulation_attempts') if type(used) is int else None,
-            'remaining_simulations': max(0, maximum - used) if status == 'runtime_authority_present' else None,
+            'recorded_attempts': (used if daily_budget is not None else worker.get('simulation_attempts'))
+                                 if type(used) is int else None,
+            **({'daily_simulation_budget': daily_budget} if daily_budget is not None else {}),
+            'remaining_simulations': (daily_budget['remaining'] if daily_budget is not None else max(0, maximum - used))
+                                    if status == 'runtime_authority_present' else None,
             'source_evidence': evidence, 'platform_quota': None, 'evidence_errors': errors,
             'limitations': ['Planning estimates are not enforced runtime limits or live authority.',
                             'Event rows, distinct candidates and progress URLs are different counts, not HTTP requests.',

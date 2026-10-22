@@ -13,6 +13,7 @@ from wqb.lockfile import json_lock_transition_guard
 
 CONTROL_ENV = "BRAIN_WORKFLOW_CONTROL_PATH"
 DEADLINE_ENV = 'BRAIN_WORKFLOW_RUNTIME_DEADLINE'
+DAILY_RECONCILE_ENV = 'BRAIN_WORKFLOW_DAILY_RECONCILE_ONLY'
 DEFAULT_MAX_SIMULATIONS = 150
 DEFAULT_MAX_RUNTIME_SECONDS = 21600
 DEFAULT_MAX_RECOVERIES = 3
@@ -28,6 +29,15 @@ class RuntimePaused(RuntimeError):
 
 class RuntimeBudgetExhausted(RuntimePaused):
     """Input: runtime expiry. Output: exception. Stop model/request work without renewing authority."""
+
+
+class DailyBudgetExhausted(RuntimePaused):
+    """A recoverable calendar-day wait, not renewal authority or a code fault."""
+
+    def __init__(self, budget: dict):
+        """Input: validated daily budget dict. Output: exception. Carry the shared balance and reset time."""
+        super().__init__('daily simulation allowance exhausted')
+        self.budget = budget
 
 
 def utc_now() -> str:
@@ -70,6 +80,18 @@ def read_runtime_control(run_dir: str | Path) -> dict[str, Any]:
     status = _read(Path(run_dir) / "runtime_status.json")
     heartbeat = _read(Path(run_dir) / 'runtime_heartbeat.json')
     merged = {**status, **({'heartbeat_at': heartbeat['heartbeat_at']} if heartbeat.get('heartbeat_at') else {}), **request}
+    if request.get('simulation_budget_mode') == 'daily':
+        try:
+            from wqb.daily_simulation_budget import read_daily_budget
+            budget = read_daily_budget(Path(run_dir))
+            merged.update(daily_simulation_budget=budget, simulation_attempts=budget['lifetime_attempts'])
+            obsolete = merged.get('reason') == 'research_simulation_budget_exhausted' or (
+                merged.get('reason') == 'research_round_budget_exhausted' and 'max_rounds' not in request)
+            if merged.get('status') == 'blocked' and obsolete:
+                merged.update(status='paused', reason='daily_budget_ready' if budget['remaining'] else 'daily_budget_exhausted')
+        except (ValueError, OSError, TypeError) as error:
+            merged.update(invalid=True, status='blocked', reason='daily_budget_accounting_invalid',
+                          daily_budget_error=str(error))
     renewals = request.get('runtime_renewals') or []
     if (isinstance(renewals, list) and renewals and isinstance(renewals[-1], dict)
             and merged.get('status') == 'blocked' and merged.get('reason') == 'runtime_budget_exhausted'):
@@ -146,6 +168,10 @@ def start_runtime_heartbeat(run_dir: Path, interval_seconds: float = HEARTBEAT_I
 
 def runtime_authority_is_complete(control: dict[str, Any]) -> bool:
     """Input: persisted intent dict. Output: bool. Reject partial or legacy intent as live authority."""
+    mode = control.get('simulation_budget_mode')
+    if mode not in (None, 'daily') or mode == 'daily' and not all(
+            isinstance(control.get(key), str) and control[key] for key in ('daily_budget_policy_id', 'daily_budget_activation_id')):
+        return False
     return (not control.get('invalid') and not control.get('legacy_authority_required')
             and control.get('desired_state') in {'running', 'paused'}
             and isinstance(control.get('enable_live_api'), bool)
@@ -159,6 +185,12 @@ def has_runtime_authority(run_dir: str | Path) -> bool:
     intent = _read(runtime_control_path(run_dir))
     if not runtime_authority_is_complete(intent):
         return False
+    if intent.get('simulation_budget_mode') == 'daily':
+        from wqb.daily_simulation_budget import read_daily_budget
+        try:
+            read_daily_budget(Path(run_dir))
+        except (ValueError, OSError, TypeError):
+            return False
     if intent.get('original_batch_scope_id'):
         from wqb.original_batch_recovery import read_original_batch
         try:
@@ -243,10 +275,24 @@ def update_runtime_status(run_dir: str | Path, **fields: Any) -> dict[str, Any]:
 
 
 def check_submission_allowed(payload_count: int = 0) -> None:
+    """Input: new simulation count int. Output: None. Serialize accounting with explicit migration, never with GETs."""
+    run = os.environ.get(CONTROL_ENV, '')
+    if run and payload_count:
+        from wqb.daily_simulation_budget import policy_transition_gate
+        with json_lock_transition_guard(Path(run) / 'runtime/submission_accounting',
+                SUBMISSION_GATE_TIMEOUT_SECONDS, SUBMISSION_GATE_SLEEP_SECONDS, 'submission accounting busy'):
+            with policy_transition_gate(Path(run).parent):
+                return _check_submission_allowed(payload_count)
+    return _check_submission_allowed(payload_count)
+
+
+def _check_submission_allowed(payload_count: int = 0) -> None:
     """Input: new simulation count int. Output: none or RuntimePaused. Enforce persisted pause and budget."""
     run_dir = os.environ.get(CONTROL_ENV, "")
     if not run_dir:
         return
+    if type(payload_count) is not int or payload_count < 0:
+        raise ValueError('simulation payload count must be a nonnegative integer')
     control = read_runtime_control(run_dir)
     if not has_runtime_authority(run_dir):
         raise RuntimePaused("runtime authority required; partial or legacy intent cannot authorize submission")
@@ -256,12 +302,25 @@ def check_submission_allowed(payload_count: int = 0) -> None:
         raise RuntimeBudgetExhausted('runtime_budget_exhausted')
     if not control.get("enable_live_api"):
         raise RuntimePaused("live API permission required")
+    if payload_count and os.environ.get(DAILY_RECONCILE_ENV) == '1':
+        from wqb.daily_simulation_budget import read_daily_budget
+        raise DailyBudgetExhausted({**read_daily_budget(Path(run_dir)), 'required_count': payload_count})
     used = int(control.get("simulation_attempts", 0))
     limit = int(control.get("max_simulations", DEFAULT_MAX_SIMULATIONS))
-    if used + payload_count > limit:
+    if control.get('simulation_budget_mode') != 'daily' and used + payload_count > limit:
         raise RuntimePaused("simulation attempt budget exhausted")
     if payload_count:
-        update_runtime_status(run_dir, simulation_attempts=used + payload_count)
+        from wqb.daily_simulation_budget import (has_shared_policy, charge_daily_budget,
+            read_daily_budget, reconcile_lifetime_attempts, DailyBudgetUnavailable)
+        if has_shared_policy(Path(run_dir)):
+            budget = read_daily_budget(Path(run_dir))
+            try:
+                charge_daily_budget(Path(run_dir), payload_count)
+            except DailyBudgetUnavailable as error:
+                raise DailyBudgetExhausted(error.budget) from error
+            reconcile_lifetime_attempts(Path(run_dir))
+        else:
+            update_runtime_status(run_dir, simulation_attempts=used + payload_count)
 
 
 def cooperative_sleep(seconds: float) -> None:

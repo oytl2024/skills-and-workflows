@@ -476,6 +476,10 @@ def _execute_discovery(root: Path, outcome: dict, executor: Callable) -> dict:
         return receipt
     except Exception as exc:
         from wqb.research_planning import ResearchVariantsExhausted
+        from wqb.runtime_control import DailyBudgetExhausted
+        if isinstance(exc, DailyBudgetExhausted):
+            _write(path, receipt)
+            raise
         if isinstance(exc, ResearchVariantsExhausted):
             receipt.update(status='completed', output_sha256=current, children=[], blocker='', recovery_eligible=False,
                            discovery_exhausted=True, reason=str(exc))

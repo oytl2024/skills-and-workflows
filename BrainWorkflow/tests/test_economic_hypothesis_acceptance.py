@@ -281,6 +281,17 @@ class EconomicHypothesisAcceptanceTests(unittest.TestCase):
         network = patch('requests.sessions.Session.request', side_effect=AssertionError('Real HTTP forbidden in Task7 acceptance'))
         network.start()
         self.addCleanup(network.stop)
+        from wqb.run_readiness import evaluate_run_readiness
+        def scenario_readiness(*args, **kwargs):
+            """Input: actual readiness arguments. Output: real report. Freeze only the fictional scenario date, never bypass validation."""
+            kwargs.setdefault('today_value', NOW[:10])
+            return evaluate_run_readiness(*args, **kwargs)
+        readiness_clock = patch('wqb.workflow_stage_adapters.evaluate_run_readiness', side_effect=scenario_readiness)
+        readiness_clock.start()
+        self.addCleanup(readiness_clock.stop)
+        source_clock = patch('wqb.cli.evaluate_run_readiness', side_effect=scenario_readiness)
+        source_clock.start()
+        self.addCleanup(source_clock.stop)
         fixture = test_orchestrator.WorkflowOrchestratorTests()
         self.paths = fixture.paths(self.root)
         self.knowledge = self.paths.knowledge_root
