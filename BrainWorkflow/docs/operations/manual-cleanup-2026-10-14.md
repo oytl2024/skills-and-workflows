@@ -135,3 +135,24 @@ skills-and-workflows\BrainWorkflow\NVIDIA Corporation
 - Protected exact boundaries: outer `AGENTS.md`, `todo.md`, `milestone.md`, `knowledge/`, `runs/`, `archive/`, browser/credential/configuration material, Git history, current launchers and Signboard dependencies. Existing product `output/` and `tests/full-suite-maintenance.log` remain untouched by deletion. New full-suite logs and copied source-change failure receipts remain verification evidence; names/dates alone do not authorize removal.
 - No recursive deletion, sensitive-file deletion, unrelated project cleanup, live research, WQB call, budget renewal or Alpha submission was performed by this audit. Daily policy activation was separately authorized and is recorded under the owning run, not inferred from cleanup.
 - Follow-up verification and loaded-app evidence belong to root todo.md. Record this no-deletion audit in Git after the verified source push; do not manufacture obsolete files merely to produce a cleanup commit.
+
+## 2026-10-23 Preplanned Desktop Integration Audit
+
+- Verified source sync: local and remote `agent/brainworkflow-phase2` both
+  `e05d2e2af8a6ea160776d6fb8d948312de26aeea`; push succeeded without force.
+- Deletion set: empty. New `wqb` modules are imported by Start, runtime, Console
+  or the packaged entry; legacy readers remain necessary for old runs. The
+  frontend and build scripts are current dependencies, not duplicate products.
+- Protected exact boundaries: outer `AGENTS.md`, `todo.md`, `milestone.md`,
+  `knowledge/`, `runs/`, `archive/`, current launchers, credentials/configuration,
+  profiles, Signboard dependencies, Git history and unrelated `output/` plus
+  `tests/full-suite-maintenance.log`. No sensitive/private evidence was staged.
+- `output/desktop-application/20261023-095722-9119`,
+  `20261023-105748-7249` and `20261023-110338-1094` remain referenced by local
+  build/native-smoke reports. They are verification evidence, not audited
+  disposable candidates. `frontend/dist` and local build dependencies remain
+  necessary for reproducible packaging; generated outputs are excluded from Git.
+- Stable offline suite:2569 tests,3 skips,373.910s; frontend15 tests/typecheck/build
+  pass. Final native fixture verifies source81b029b1662c734f3294fb9f403f359fe52950c1d8769ce9cc57d6d23cb73ee5.
+  This audit does not grant deployment, old-proof renewal, research resume,
+  platform/model calls, quota changes or Alpha submission.
