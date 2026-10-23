@@ -207,7 +207,8 @@ def auto_continue_workflow(
     from wqb.discovery_runtime import DiscoveryRuntimeExecutor
     orchestrator = WorkflowOrchestrator(paths, repair_executor=repair_executor if enable_live_api else None,
         discovery_executor=(discovery_executor or (DiscoveryRuntimeExecutor(config)
-                            if config.get('managed_research_execution') else None)) if enable_live_api else None)
+                            if config.get('managed_research_execution') else None)) if enable_live_api else None,
+        **({'bound_run_dir': Path(config['bound_group_lane'])} if config.get('bound_group_lane') else {}))
     status = orchestrator.status()
     if status.get('active') and status.get('run_dir'):
         from wqb.research_rounds import reconcile_research_budget_wait
@@ -231,6 +232,23 @@ def auto_continue_workflow(
     if status.get("waiting_for_user") or status.get("status") == "waiting_for_user":
         return {**status, "message": "User approval is required before automatic progress."}
     if active_run_needs_scout_seed_candidates(status):
+        from wqb.research_seed_stage import preplanned_research_enabled
+        if preplanned_research_enabled(Path(status['run_dir'])):
+            from wqb.tree_runtime import continue_tree
+            try:
+                progress = continue_tree(Path(status['run_dir']), config, now,
+                    enable_live_api=enable_live_api, source_batch_runner=source_batch_runner,
+                    complete_in_flight_runner=complete_in_flight_runner,
+                    retry_planned_runner=retry_planned_runner)
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                return _planning_blocked_result(orchestrator, Path(status['run_dir']), now,
+                                                'Preplanned tree evidence invalid: ' + str(error))
+            if progress.get('tree_complete'):
+                resumed = orchestrator.resume(now)
+                if resumed.get('status') == 'running':
+                    return {**orchestrator.continue_once(now), 'tree': progress['tree']}
+                return {**resumed, 'tree': progress['tree']}
+            return {**status, **progress}
         from wqb.research_rounds import rotate_exhausted_scout_plan
         try:
             rotate_exhausted_scout_plan(Path(status['run_dir']), now)

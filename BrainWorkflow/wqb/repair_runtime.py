@@ -182,6 +182,13 @@ class RepairRuntimeExecutor:
     def prepare(self, root: Path, parent: dict, history: list[dict], allowance: int) -> dict:
         """Input: run/parent/history/allowance. Output: AI plan. Recover exact local settings before judgment."""
         from wqb.repair_planning import prepare_repair_decision
+        manifest_path = Path(root) / 'run_manifest.json'
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.exists() else {}
+        if manifest.get('start_snapshot', {}).get('research_policy', {}).get('deterministic_repair') is True:
+            from wqb.runtime_control import check_submission_allowed
+            from wqb.repair_search import prepare_persisted_search
+            check_submission_allowed()
+            return prepare_persisted_search(root, parent, history, allowance)
         if not parent.get('settings'):
             try:
                 parent = recover_parent_settings(root, parent, None)

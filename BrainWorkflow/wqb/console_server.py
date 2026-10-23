@@ -6,12 +6,14 @@ import hashlib
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import mimetypes
 from pathlib import Path
 import subprocess
 import threading
 import time
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
+from uuid import uuid4
 import webbrowser
 
 from wqb.console_context import record_console_job_context
@@ -70,6 +72,8 @@ CONSOLE_STREAM_SECONDS = 60.0
 AUTO_CONTINUE_JOB_LOCK = threading.Lock()
 START_JOB_LOCK = threading.Lock()
 CODE_COMMIT_CACHE = ""
+APPLICATION_BODY_TIMEOUT_SECONDS = 5.0
+APPLICATION_STATIC_MAX_BYTES = 16 * 1024 * 1024
 
 
 def _fallback_option_id(index: int) -> str:
@@ -1054,6 +1058,9 @@ def _complete_start_job(paths: ConsolePaths, completed: ConsoleJob) -> None:
     current = read_start_request(paths.runs_root)
     if not isinstance(receipt, dict) or receipt.get("passed") is not True or receipt.get("status") != "completed":
         return
+    if receipt.get('group_dir'):
+        _complete_preplanned_start(paths, completed, receipt)
+        return
     revision = receipt.get("runtime_request_revision")
     if (not isinstance(revision, str) or not revision or current.get("status") != "completed"
             or current.get("request_id") != receipt.get("request_id")
@@ -1063,6 +1070,44 @@ def _complete_start_job(paths: ConsolePaths, completed: ConsoleJob) -> None:
     if read_runtime_control(receipt["run_dir"]).get("request_revision") != revision:
         return
     run_console_action(paths, {"action": "workflow-auto-continue", "expected_runtime_revision": revision})
+
+
+def _complete_preplanned_start(paths: ConsolePaths, completed: ConsoleJob, receipt: dict) -> None:
+    """Input: paths/completed job/receipt dict. Output: None; dispatch original prepared group once, never a legacy run."""
+    from wqb.console_start import read_start_request, start_request_guard, _write_request
+    from wqb.console_api import _safe
+    from wqb.orchestrator import OrchestratorPaths
+    from wqb.research_group import read_group
+    from wqb.research_group_driver import start_group_workers
+    with start_request_guard(paths.runs_root):
+        row = read_start_request(paths.runs_root)
+        if (row.get('status') != 'completed' or row.get('job_id') != completed.job_id
+                or row.get('request_id') != receipt.get('request_id') or row.get('group_dispatch')
+                or not row.get('preplanned_config') or row.get('group_dir') != receipt['group_dir']
+                or not row.get('group_request_revision')
+                or row['group_request_revision'] != receipt.get('group_request_revision')):
+            return
+        group = _safe(paths.runs_root, Path(row['group_dir']))
+        current = read_group(group)
+        if current['desired_state'] != 'paused' or current['request_revision'] != row['group_request_revision']:
+            return
+        # Write-ahead: a lost process/callback acknowledgment must never launch again.
+        _write_request(paths.runs_root, {**row, 'group_dispatch': {'status': 'unknown',
+            'expected_revision': row['group_request_revision']}})
+    runtime_paths = OrchestratorPaths(paths.project_root, paths.workflow_root, paths.knowledge_root, paths.runs_root)
+    try:
+        result = start_group_workers(runtime_paths, group, expected_revision=row['group_request_revision'],
+                                     config=row['preplanned_config'])
+        uncertain = any(w.get('status') in {'launching', 'unknown'} for w in result.get('workers', []))
+        dispatch = dict(status='unknown' if uncertain else 'acknowledged',
+            expected_revision=row['group_request_revision'], request_revision=result['request_revision'])
+    except Exception:
+        dispatch = dict(status='unknown', expected_revision=row['group_request_revision'],
+                        reason='Group dispatch outcome uncertain; inspect durable workers, never replay')
+    with start_request_guard(paths.runs_root):
+        current = read_start_request(paths.runs_root)
+        if current.get('request_id') == row['request_id'] and current.get('status') == 'completed':
+            _write_request(paths.runs_root, {**current, 'group_dispatch': dispatch})
 
 
 def _run_console_action_unlocked(paths: ConsolePaths, form: dict[str, Any], action: str) -> Any:
@@ -1289,13 +1334,200 @@ def _load_runtime_snapshot(server: Any, paths: ConsolePaths) -> dict[str, Any]:
         with server.console_state_cache_lock:
             base = server.console_state_cache.get('state') or {}
         state = {**base, **load_runtime_state(paths)}
+        # Option Cards are one small artifact, not a cold knowledge-ledger compilation.
+        option_path = existing_decision_artifact_path(paths.knowledge_root, 'research_option_cards.jsonl')
+        from wqb.console_api import MAX_ARTIFACT_BYTES, _safe
+        _safe(paths.knowledge_root, option_path)
+        if option_path.exists() and option_path.stat().st_size > MAX_ARTIFACT_BYTES:
+            raise ValueError('Option Cards exceed application read limit')
+        state['option_cards'] = _option_rows(paths)
         state['timeline'] = build_timeline_rows(state)
         state['current_work'] = select_current_work(state, state['timeline'])
         cached.update(state=state, loaded_at=now)
         return state
 
 
+def _application_snapshot(server: Any, paths: ConsolePaths) -> dict[str, Any]:
+    """Input: server/ConsolePaths. Output: whole sequenced dict; serialize projection across readers."""
+    from wqb.console_api import project_application, project_command_statuses
+    with server.application_snapshot_lock:
+        server.application_sequence += 1
+        payload = project_application(paths, _load_runtime_snapshot(server, paths),
+                                      server.application_epoch, server.application_sequence)
+        payload['command_statuses'] = project_command_statuses(paths)
+        return payload
+
+
+def _application_runtime_error(server: Any) -> dict[str, Any]:
+    """Input: local server. Output: sequenced error dict; never label stale state as healthy."""
+    with server.application_snapshot_lock:
+        server.application_sequence += 1
+        return {'event': 'runtime-error', 'server_epoch': server.application_epoch,
+                'sequence': server.application_sequence, 'message': 'Local runtime snapshot unavailable'}
+
+
+def _fresh_application_state(server: Any, paths: ConsolePaths) -> dict[str, Any]:
+    """Input: server/paths. Output: hot Console dict; bypass TTL for command authorization."""
+    with server.console_runtime_lock:
+        server.console_runtime_cache['state'] = None
+    return _load_runtime_snapshot(server, paths)
+
+
+def _run_application_command(server: Any, paths: ConsolePaths, command: dict, state: dict) -> dict:
+    """Input: server/paths/command/observed state. Output: existing action job acknowledgement dict."""
+    from wqb.console_api import project_application
+    fresh = _fresh_application_state(server, paths)
+    current = project_application(paths, fresh, '', 0)
+    if (command['expected_revision'] != current['request_revision']
+            or ('group_id' in command and command['group_id'] != (current['group'] or {}).get('group_id'))
+            or not current['allowed_actions'][command['action']]):
+        return {'status': 'refused', 'message': 'Workflow changed before dispatch; resnapshot required'}
+    group_id = (current['group'] or {}).get('group_id')
+    if group_id and group_id != 'none' and not group_id.startswith('legacy:'):
+        from wqb.console_api import _safe
+        from wqb.research_group import read_group, stop_group
+        from wqb.research_group_driver import start_group_workers
+        from wqb.orchestrator import OrchestratorPaths
+        from wqb.console_start import load_start_config
+        group = _safe(paths.runs_root, paths.runs_root / 'research_groups' / group_id)
+        revision = current['group_request_revision']
+        if read_group(group)['request_revision'] != revision:
+            return {'status': 'refused', 'message': 'Group changed before dispatch; resnapshot required'}
+        # The API revision includes Console state; only the authenticated intent revision is a group CAS.
+        if command['action'] == 'stop':
+            result = stop_group(group, expected_revision=revision)
+        else:
+            if 'selected_option_id' in command:
+                return {'status': 'refused', 'message': 'Group Start resumes frozen authority, not a new option'}
+            runtime_paths = OrchestratorPaths(paths.project_root, paths.workflow_root,
+                                              paths.knowledge_root, paths.runs_root)
+            result = start_group_workers(runtime_paths, group, expected_revision=revision,
+                                         config=load_start_config(paths))
+        _invalidate_cached_console_state(server)
+        workers = result.get('workers', [])
+        uncertain = any(worker.get('status') in {'launching', 'unknown'} for worker in workers)
+        return {'status': 'unknown' if uncertain else 'accepted',
+                'message': ('Group dispatch outcome uncertain; inspect durable workers, never replay'
+                            if uncertain else 'Group intent acknowledged; inspect authoritative state')}
+    allowed = _workflow_action_state(fresh)
+    action = 'workflow-stop' if command['action'] == 'stop' else (
+        'workflow-start-from-option' if allowed['start_workflow'] else 'workflow-auto-continue')
+    form = {'action': action, 'state_hash': _workflow_action_hash(fresh),
+            'expected_runtime_revision': (fresh.get('runtime_control') or {}).get('request_revision', '')}
+    if 'selected_option_id' in command:
+        form['selected_option_id'] = command['selected_option_id']
+    try:
+        if action == 'workflow-start-from-option':
+            from wqb.console_start import application_start_form
+            form.update(application_start_form(paths, str(command.get('selected_option_id', ''))))
+        assert_workflow_action_current(form, fresh)
+    except ValueError as error:
+        return {'status': 'refused', 'message': str(error)}
+    # Exceptions after entering the handler are uncertain, not permission to retry.
+    job = run_console_action(paths, form)
+    return {'status': job.status, 'job_id': job.job_id,
+            'message': getattr(job, 'error', '') or getattr(job, 'status_message', '')}
+
+
 class ConsoleRequestHandler(BaseHTTPRequestHandler):
+    def _send_application_events(self, paths: ConsolePaths) -> None:
+        """Input: ConsolePaths. Output: None; send whole snapshots, heartbeats and explicit runtime errors."""
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Accel-Buffering', 'no')
+        self.end_headers()
+        started, last_hash = time.monotonic(), None
+        try:
+            while time.monotonic() - started < CONSOLE_STREAM_SECONDS:
+                try:
+                    payload = _application_snapshot(self.server, paths)
+                    signature = _state_hash({key: value for key, value in payload.items()
+                                             if key not in {'sequence', 'evidence_at'}})
+                    event = 'snapshot' if signature != last_hash else 'heartbeat'
+                    last_hash = signature
+                except Exception:
+                    event, payload = 'runtime-error', _application_runtime_error(self.server)
+                    last_hash = None
+                self.wfile.write(f'event: {event}\ndata: {json.dumps(payload, allow_nan=False)}\n\n'.encode('utf-8'))
+                self.wfile.flush()
+                time.sleep(CONSOLE_EVENT_INTERVAL_SECONDS)
+        except (OSError, ConnectionError):
+            pass
+
+    def _send_application_static(self, path: str, paths: ConsolePaths) -> None:
+        """Input: URL path str/ConsolePaths. Output: None; serve built dist files only, without links."""
+        from wqb.console_api import _safe
+        try:
+            decoded = unquote(path, errors='strict')
+            if '\\' in decoded or '\x00' in decoded or any(part in {'.', '..'} for part in decoded.split('/')):
+                raise ValueError('invalid asset path')
+            dist = _safe(paths.workflow_root, paths.workflow_root / 'frontend/dist')
+            index = _safe(dist, dist / 'index.html')
+            if not index.is_file():
+                raise ValueError('frontend not built')
+            if decoded == '/app':
+                # The built frontend uses relative assets; keep them under /app/assets/.
+                self.send_response(307)
+                self.send_header('Location', '/app/')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                return
+            if decoded in {'/app', '/app/'}:
+                target = index
+            elif decoded.startswith('/app/assets/'):
+                target = _safe(dist, dist / decoded.removeprefix('/app/'))
+            else:
+                raise ValueError('not a built asset')
+            with target.open('rb') as handle:
+                body = handle.read(APPLICATION_STATIC_MAX_BYTES + 1)
+            if len(body) > APPLICATION_STATIC_MAX_BYTES:
+                raise ValueError('asset too large')
+        except (OSError, ValueError, UnicodeError):
+            self._send_json({'error': 'Built application asset not found'}, status=404)
+            return
+        self.send_response(200)
+        self.send_header('Content-Type', mimetypes.guess_type(target.name)[0] or 'application/octet-stream')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _post_application_command(self, paths: ConsolePaths) -> None:
+        """Input: ConsolePaths. Output: JSON reply; bound JSON body and delegate idempotence/authority."""
+        from wqb.console_api import MAX_COMMAND_BYTES, _reject_constant, submit_command
+        error = {'command_id': None, 'status': 'refused', 'job_id': None}
+        if self.headers.get_content_type() != 'application/json':
+            self._send_json(error | {'message': 'JSON content type required'}, status=415)
+            return
+        try:
+            lengths = self.headers.get_all('Content-Length') or []
+            if (self.headers.get('Transfer-Encoding') or len(lengths) != 1
+                    or not lengths[0].isascii() or not lengths[0].isdigit()):
+                raise ValueError('One explicit Content-Length required')
+            length = int(lengths[0])
+            if length > MAX_COMMAND_BYTES:
+                self._send_json(error | {'message': 'Command body too large'}, status=413)
+                return
+            self.connection.settimeout(APPLICATION_BODY_TIMEOUT_SECONDS)
+            raw = self.rfile.read(length)
+            if len(raw) != length:
+                raise ValueError('Incomplete JSON body')
+            command = json.loads(raw.decode('utf-8'), parse_constant=_reject_constant)
+            if not isinstance(command, dict):
+                raise ValueError('Command must be a JSON object')
+        except (OSError, ValueError, UnicodeError, RecursionError):
+            self._send_json(error | {'message': 'Invalid or incomplete JSON command'}, status=400)
+            return
+        reply = submit_command(paths, command,
+            state_reader=lambda: _fresh_application_state(self.server, paths),
+            action_runner=lambda command, state: _run_application_command(self.server, paths, command, state))
+        _invalidate_cached_console_state(self.server)
+        with self.server.console_runtime_lock:
+            self.server.console_runtime_cache['state'] = None
+        self._send_json(reply)
+
     def _send_events(self, paths: ConsolePaths) -> None:
         """Input: ConsolePaths. Output: None. Stream local snapshots and heartbeats; reconnect periodically."""
         self.send_response(200)
@@ -1350,6 +1582,28 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
         """Input: HTTP GET. Output: response. Route read-only console pages."""
         parsed = urlparse(self.path)
         paths: ConsolePaths = self.server.console_paths  # type: ignore[attr-defined]
+        if parsed.path.startswith('/api/application/'):
+            expected_host = f'{self.server.server_address[0]}:{self.server.server_address[1]}'
+            origin_header = self.headers.get('Origin')
+            origin = urlparse(origin_header or '')
+            if (self.headers.get('Host') != expected_host or
+                    (origin_header is not None and (origin.scheme != 'http' or origin.netloc != expected_host))):
+                self._send_json({'error': 'Foreign application read refused'}, status=403)
+                return
+        if parsed.path == '/app' or parsed.path.startswith('/app/'):
+            self._send_application_static(parsed.path, paths)
+            return
+        if parsed.path == '/api/application/snapshot':
+            try:
+                payload = _application_snapshot(self.server, paths)
+            except Exception:
+                self._send_json(_application_runtime_error(self.server), status=503)
+                return
+            self._send_json(payload)
+            return
+        if parsed.path == '/api/application/events':
+            self._send_application_events(paths)
+            return
         if parsed.path == '/api/health':
             self._send_json({
                 'app': 'BrainWorkflow',
@@ -1388,7 +1642,25 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
         origin = urlparse(self.headers.get("Origin", ""))
         if (self.headers.get("Host") != expected_host or origin.scheme != "http"
                 or origin.netloc != expected_host):
+            if parsed.path == '/api/application/commands':
+                # Drain only bounded rejected bodies so Windows does not reset
+                # the connection before the JSON refusal reaches the caller.
+                from wqb.console_api import MAX_COMMAND_BYTES
+                length = self.headers.get('Content-Length', '')
+                self.close_connection = True
+                if length.isdigit() and int(length) <= MAX_COMMAND_BYTES:
+                    self.connection.settimeout(2)
+                    try:
+                        self.rfile.read(int(length))
+                    except OSError:
+                        pass
+                self._send_json({'command_id': None, 'status': 'refused', 'job_id': None,
+                                 'message': 'Foreign POST origin refused'}, status=403)
+                return
             self._send_html("<html><body>Foreign POST origin refused.</body></html>", status=403)
+            return
+        if parsed.path == '/api/application/commands':
+            self._post_application_command(paths)
             return
         form = self._read_form()
         try:
@@ -1432,6 +1704,9 @@ def make_console_server(host: str, port: int, paths: ConsolePaths) -> ThreadingH
     server.console_state_cache_lock = threading.Lock()  # type: ignore[attr-defined]
     server.console_runtime_lock = threading.Lock()
     server.console_runtime_cache = {'state': None, 'loaded_at': 0.0}
+    server.application_epoch = uuid4().hex
+    server.application_sequence = 0
+    server.application_snapshot_lock = threading.Lock()
     return server
 
 

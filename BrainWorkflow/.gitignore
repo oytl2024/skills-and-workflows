@@ -35,3 +35,9 @@ management/signboard-window.png
 # Local historical handoffs can contain private platform context; keep them off GitHub.
 docs/archive/project-recovery/*.md
 !docs/archive/project-recovery/README.md
+
+# Product frontend outputs and isolated desktop build dependencies.
+frontend/node_modules/
+frontend/dist/
+output/desktop-build-deps/
+output/desktop-validation/

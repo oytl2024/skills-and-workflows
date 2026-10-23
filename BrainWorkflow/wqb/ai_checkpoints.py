@@ -162,6 +162,9 @@ def run_ai_checkpoint(
     checkpoint = next((row for row in load_ai_checkpoints(decisions_dir) if row["checkpoint_id"] == checkpoint_id), None)
     if checkpoint is None:
         raise ValueError(f"Unknown AI checkpoint: {checkpoint_id}")
+    if checkpoint.get('status') in {'unknown', 'running'} or (
+            checkpoint['checkpoint_type'] == 'initial_research_plan' and checkpoint.get('status') != 'pending'):
+        return checkpoint
     if not executor_argv:
         return {"checkpoint_id": checkpoint_id, "status": "pending", "reason": "executor-not-configured"}
     if checkpoint["status"] == "completed":
@@ -179,6 +182,14 @@ def run_ai_checkpoint(
     _append_checkpoint_event(decisions_dir, running)
     argv = [str(input_path) if arg == "{input}" else str(output_path) if arg == "{output}" else arg for arg in executor_argv]
     try:
+        if checkpoint['checkpoint_type'] == 'initial_research_plan':
+            from wqb.initial_model_worker import _authenticated_task
+            from wqb.initial_research_planning import TASK_PATH
+            from wqb.semantic_compilation import _check_schema
+            run = Path(decisions_dir).resolve().parent.parent
+            initial_task = _authenticated_task(run)
+            if checkpoint['evidence_paths'] != [TASK_PATH]:
+                raise ValueError('initial planning checkpoint evidence mismatch')
         if cancellation_check is not None:
             result = _run_cancellable(argv, timeout_seconds, cancellation_check, cancel_on_pause)
         else:
@@ -191,6 +202,12 @@ def run_ai_checkpoint(
         if not isinstance(output, dict) or not output.get("summary"):
             raise ValueError("AI executor output must be JSON with nonempty summary")
         final = {**running, "status": "completed", "summary": str(output["summary"])}
+        if checkpoint['checkpoint_type'] == 'initial_research_plan':
+            task = _authenticated_task(run)
+            if task != initial_task:
+                raise ValueError('initial planning task changed during executor run')
+            _check_schema(task['brief']['output_schema'], output)
+            final.update(output)
         if checkpoint['checkpoint_type'] == 'semantic_compile':
             from wqb.semantic_compilation import validate_semantic_output
             validate_semantic_output(output)

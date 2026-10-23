@@ -4,6 +4,40 @@ This document is for future Codex sessions and human maintainers. It replaces de
 
 ## First Files To Read
 
+### Preplanned Desktop Integration (2026-10-23)
+
+Read the outer workspace `milestone.md` and Latest handoff in `todo.md` first.
+The 2026-10-22 research and desktop plans govern the opt-in implementation.
+`console_start` freezes selected scope and delegates to `preplanned_start`;
+`initial_model_worker` runs one readonly structured task per lane. `research_tree`
+and `tree_runtime` consume the frozen tree through existing CLI transport and
+gate Seed on cumulative authenticated evidence. `research_group_driver` owns
+worker lifecycle; `research_group` shares Stop, time, daily accounting and fair
+POST admission. No alternate Orchestrator state machine is introduced.
+
+New Start uses `research_policy.preplanned_tree_version=1`; legacy runs never
+adopt it. Exact-scope raw certification, measured report periods and source hashes
+remain mandatory. Optional `repair_search_policy` supports source-bound finite
+setting experiments; missing traits do not justify invented cadence or exposure.
+Arbitrary Start-supplied transforms remain unsupported. Empty rules are explicit
+deterministic exhaustion, not a claim of economic falsification.
+
+Build with `scripts/build_desktop.ps1` after the frontend typecheck/tests/build.
+The package contains immutable product code/assets, not private knowledge,
+credentials or runs. Native smoke must use isolated roots and compare the loaded
+source revision, not merely test an older EXE. Closing the view is not Stop.
+Frontend fixture latency and real durable localhost command latency are separate
+measurements; neither establishes live platform throughput.
+
+Known transport limitation: Requests timeout bounds inactivity, not a hard total
+response wall clock. A trickling remote response may delay fence acknowledgment;
+durable Stop still persists, and unknown POST outcomes cannot be blindly replayed.
+Hard network cancellation requires a separately verified transport change, not a
+quota increase or timer that releases an actively sending POST fence.
+
+No real deployment, legacy proof renewal or research resume is certified by this
+offline integration. Exact current acceptance/build paths are in root `todo.md`.
+
 Read these before changing behavior:
 
 1. `README.md`

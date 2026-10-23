@@ -136,11 +136,17 @@ def run_workflow_driver(
     """Input: paths/config, one-step runner, optional clock/status. Output: result dict. Drive durably to a real boundary."""
     if status_reader is None:
         from wqb.orchestrator import WorkflowOrchestrator
-        status_reader = WorkflowOrchestrator(paths).status
+        lane = config.get('bound_group_lane')
+        status_reader = WorkflowOrchestrator(paths, bound_run_dir=Path(lane) if lane else None).status
     initial = status_reader()
     if not initial.get("active") or not initial.get("run_dir"):
         return {**initial, "runtime_status": "idle"}
     run = Path(initial["run_dir"])
+    from wqb.research_group import require_group_running, group_for_run
+    grouped = group_for_run(run) is not None
+    lane = config.get('bound_group_lane')
+    if lane and Path(lane).resolve() != run.resolve():
+        raise ValueError('driver lane run identity mismatch')
     existing_case = read_current_recovery_case(run)
     if existing_case.get("status") in MAINTENANCE_BLOCKING_STATUSES:
         return {**initial, "runtime_status": "blocked", "runtime_reason": "maintenance_confirmation_required"}
@@ -166,6 +172,12 @@ def run_workflow_driver(
     os.environ[DEADLINE_ENV] = str(time.monotonic() + max(0, float(stored.get('max_runtime_seconds', 21600)) - elapsed_before))
     try:
         for _ in range(int(config.get("runtime_max_steps", DEFAULT_MAX_STEPS))):
+            try:
+                require_group_running(run)
+            except RuntimePaused as error:
+                runtime_status = 'paused' if str(error) == 'research group is paused' else 'blocked'
+                reason = 'runtime_budget_exhausted' if isinstance(error, RuntimeBudgetExhausted) else str(error)
+                break
             if read_current_recovery_case(run).get("status") in MAINTENANCE_BLOCKING_STATUSES:
                 runtime_status, reason = "blocked", "maintenance_confirmation_required"
                 break
@@ -195,10 +207,18 @@ def run_workflow_driver(
                             os.environ[DAILY_RECONCILE_ENV] = prior_reconcile
                 else:
                     result = waiting if waiting is not None else step()
+                if (grouped and not result.get('run_dir') or
+                        result.get('run_dir') and Path(result['run_dir']).resolve() != run.resolve()):
+                    raise ValueError('driver lane result run identity mismatch')
+                require_group_running(run)
             except RateLimitRecoveryRequired as error:
-                result = {**result, "next_action": "maintenance-blocker", "source_bridge": {
+                from wqb.rate_limit_state import read_rate_limit_state, MAX_CONSECUTIVE_429
+                rate_state = read_rate_limit_state(Path(error.source_run_dir) / 'rate_limit_state.json')
+                threshold = MAX_CONSECUTIVE_429 - int(getattr(error, 'simulation_submit', True))
+                needs_lease = int(rate_state.get('consecutive_429_count', 0)) >= threshold
+                result = {**result, "next_action": "maintenance-blocker" if needs_lease else 'rate-limit-wait', "source_bridge": {
                     "source_run_dir": error.source_run_dir, "metadata": {
-                        "retry_at": error.retry_at, "operator_acknowledgement_required": True}}}
+                        "retry_at": error.retry_at, "operator_acknowledgement_required": needs_lease}}}
             except RuntimeBudgetExhausted:
                 runtime_status, reason = 'blocked', 'runtime_budget_exhausted'
                 break
@@ -213,12 +233,16 @@ def run_workflow_driver(
                     'created_at': prior_wait.get('created_at', now_func())})
                 result = {**result, 'next_action': 'daily-budget-wait', 'daily_simulation_budget': budget}
             except RuntimePaused as error:
-                runtime_status = "paused" if read_runtime_control(run).get("desired_state") == "paused" else "blocked"
+                runtime_status = "paused" if (read_runtime_control(run).get("desired_state") == "paused"
+                                              or str(error) == 'research group is paused') else "blocked"
                 reason = ('research_simulation_budget_exhausted'
                           if runtime_status == 'blocked' and str(error) == 'simulation attempt budget exhausted' else str(error))
                 break
             result = _repair_cooldown_result(run, result, now_func())
-            if not reconciliation_only and result.get('next_action') != 'daily-budget-wait' and not (config.get('managed_research_execution') and result.get('current_stage') == 'scout_seed'):
+            if (not reconciliation_only and result.get('next_action') not in {
+                    'daily-budget-wait', 'rate-limit-wait', 'source-lock-wait', 'simulation-progress-wait'}
+                    and not (result.get('source_bridge', {}).get('metadata', {}).get('operator_acknowledgement_required'))
+                    and not (config.get('managed_research_execution') and result.get('current_stage') == 'scout_seed')):
                 try:
                     schedule_run_checkpoint(run, result, now_func(), resolve_ai_executor_argv(config))
                 except RuntimeBudgetExhausted:
@@ -243,6 +267,10 @@ def run_workflow_driver(
                 wake = budget['next_reset_at']
                 update_runtime_status(run, status='waiting', reason='daily_budget_exhausted', next_wake_at=wake)
                 while _seconds_until(wake, now_func()) > 0:
+                    try:
+                        require_group_running(run)
+                    except RuntimePaused:
+                        break
                     current = read_runtime_control(run)
                     if current.get('invalid'):
                         raise ValueError('daily budget authority became invalid during wait')
@@ -267,11 +295,19 @@ def run_workflow_driver(
                 update_runtime_status(run, status="waiting", next_wake_at=wake,
                                       reason="simulation_processing" if action == 'simulation-progress-wait' else "platform_cooldown")
                 while _seconds_until(wake, now_func()) > 0:
+                    try:
+                        require_group_running(run)
+                    except RuntimePaused:
+                        break
                     if read_runtime_control(run).get("desired_state") != "running":
                         break
                     if elapsed_before + _seconds_until(now_func(), start) >= float(control.get("max_runtime_seconds", 21600)):
                         break
                     sleep_func(min(WAIT_SLICE_SECONDS, _seconds_until(wake, now_func())))
+                try:
+                    require_group_running(run)
+                except RuntimePaused:
+                    continue
                 if read_runtime_control(run).get("desired_state") != "running":
                     continue
                 if elapsed_before + _seconds_until(now_func(), start) >= float(control.get("max_runtime_seconds", 21600)):
@@ -282,13 +318,17 @@ def run_workflow_driver(
                     if used >= int(control.get("max_recoveries", 3)) or not control.get("enable_live_api"):
                         runtime_status, reason = "blocked", "automatic_recovery_budget_exhausted"
                         break
-                    from wqb.rate_limit_state import authorize_bounded_retry
+                    from wqb.research_group import authorize_group_retry
                     source = str(bridge.get("source_run_dir", ""))
                     if not source:
                         runtime_status, reason = "blocked", "missing_recovery_source"
                         break
+                    try:
+                        authorize_group_retry(run, Path(source), now_func())
+                    except RuntimePaused as error:
+                        runtime_status, reason = 'blocked', str(error)
+                        break
                     update_runtime_status(run, recovery_attempts=used + 1, recovery_rate_limit_source=source)
-                    authorize_bounded_retry(source, now_func())
                 sleep_func(WAIT_SLICE_SECONDS)
                 continue
             if action in {"maintenance-blocker", "readiness-blocked", "enable-live-api-required", "source-batch-runner-missing",

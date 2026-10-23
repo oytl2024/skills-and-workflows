@@ -54,9 +54,24 @@ def release_verified_planning_stop(run: Path, case_id: str, now: str) -> bool:
 
 def prepare_source_plan(run: Path, config: dict, metadata: dict, now: str) -> dict:
     """Input: active run Path, config/metadata dicts, time str. Output: config patch bound to a validated planning receipt."""
+    from wqb.research_seed_stage import preplanned_research_enabled
+    receipt_name = Path(config.get('ai_plan_receipt', '')).name
+    if preplanned_research_enabled(run) or receipt_name.startswith('tree-plan-'):
+        try:
+            from wqb.research_tree import source_tree_patch
+            return source_tree_patch(run, config)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise ResearchPlanningBlocked('invalid frozen tree source plan: ' + str(error)) from error
     manifest_path = Path(run) / 'run_manifest.json'
     if manifest_path.exists():
         snapshot = json.loads(manifest_path.read_text(encoding='utf-8')).get('start_snapshot', {})
+        from wqb.exploration_eligibility import exploration_scout_enabled, validate_operational_exploration
+        if exploration_scout_enabled(snapshot.get('research_policy')):
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+            try:
+                validate_operational_exploration(run, Path(manifest['knowledge_root']), snapshot)
+            except (OSError, ValueError, KeyError) as error:
+                raise ResearchPlanningBlocked('exploration source certification failed: ' + str(error)) from error
         from wqb.hypothesis_selection import paired_scout_enabled, validate_operational_resource_context
         discovery = metadata.get('workflow_stage') == 'discovery' or metadata.get('template_provenance', {}).get('seed_expression')
         if (paired_scout_enabled(snapshot.get('research_policy')) and not discovery

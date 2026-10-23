@@ -541,7 +541,7 @@ def _persist_binding(
     return path
 
 
-def _decision_for_source(source: Path, now: str) -> SourceBridgeDecision | None:
+def _decision_for_source(source: Path, now: str, *, require_complete_batch: bool = False) -> SourceBridgeDecision | None:
     """Input: one compatible source and timestamp. Output: recovery decision or none. Classify durable source evidence."""
     events_path = source / "simulation_events.jsonl"
     uncertain = uncertain_submission_hashes(_read_jsonl(events_path))
@@ -552,7 +552,9 @@ def _decision_for_source(source: Path, now: str) -> SourceBridgeDecision | None:
             {"uncertain_expression_hashes": sorted(uncertain)},
         )
     candidate_path = source / "candidates.csv"
-    if _candidate_file_valid(source):
+    complete = not _has_in_flight_simulation(events_path) and not _planned_candidate_state(source)[1]
+    can_import = not require_complete_batch or complete
+    if _candidate_file_valid(source) and can_import:
         return SourceBridgeDecision(
             "import_existing",
             "valid source candidates found",
@@ -560,7 +562,7 @@ def _decision_for_source(source: Path, now: str) -> SourceBridgeDecision | None:
             str(source),
             [str(candidate_path)],
         )
-    if candidate_path.exists():
+    if candidate_path.exists() and not _candidate_file_valid(source):
         return SourceBridgeDecision(
             "maintenance_blocker",
             "source candidates artifact is invalid",
@@ -576,7 +578,7 @@ def _decision_for_source(source: Path, now: str) -> SourceBridgeDecision | None:
     _, unresolved = _planned_candidate_state(source)
     if (outcome["outcome"] in {"repairable_signal", "qualified", "no_signal"}
             and not _has_in_flight_simulation(events_path)
-            and (outcome["outcome"] != "no_signal" or not unresolved)):
+            and (outcome["outcome"] != "no_signal" or not unresolved) and can_import):
         return SourceBridgeDecision(
             "import_research_outcome", "checked source research ready for triage",
             source.name, str(source), [str(source / "all_alphas.jsonl")],

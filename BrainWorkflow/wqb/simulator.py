@@ -1,14 +1,24 @@
 import time
+import os
+from pathlib import Path
 from typing import Any
 
 import requests
 
-from wqb.runtime_control import check_submission_allowed, cooperative_sleep
+from wqb.runtime_control import CONTROL_ENV, check_submission_allowed, cooperative_sleep
 from wqb.simulation_request_policy import next_poll_delay
 
 
 MAX_SIMULATION_POLL_RETRY_AFTER_POLLS = 120
 MAX_SIMULATION_POLL_RETRY_AFTER_WAIT_SECONDS = 900.0
+
+
+def _check_simulation_budget(count: int) -> None:
+    """Input: payload count int. Output: None; grouped accounting occurs inside the actual client POST fence."""
+    from wqb.research_group import group_for_run
+    run = os.environ.get(CONTROL_ENV)
+    grouped = run and group_for_run(Path(run)) is not None
+    check_submission_allowed(0 if grouped else count)
 
 
 class SimulationPollTimeout(requests.exceptions.Timeout):
@@ -38,7 +48,7 @@ def submit_simulation(client, payload: dict[str, Any]) -> str:
     """Input: WQB client and simulation payload. Output: progress URL. Submit one simulation."""
     from wqb.original_batch_recovery import validate_original_payloads
     validate_original_payloads(payload)
-    check_submission_allowed(1)
+    _check_simulation_budget(1)
     response = client.post_json("/simulations", payload)
     location = response.headers.get("Location")
     if not location:
@@ -52,7 +62,7 @@ def submit_multisimulation(client, payloads: list[dict[str, Any]]) -> str:
         raise ValueError("multisimulation requires at least one payload")
     from wqb.original_batch_recovery import validate_original_payloads
     validate_original_payloads(payloads)
-    check_submission_allowed(len(payloads))
+    _check_simulation_budget(len(payloads))
     response = client.post_json("/simulations", payloads)
     location = response.headers.get("Location")
     if not location:

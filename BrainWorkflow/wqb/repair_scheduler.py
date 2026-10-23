@@ -15,6 +15,50 @@ from wqb.repair_identity import verified_platform_alias, matching_simulation_row
 REPAIR_STALL_NOTICE_SECONDS = 1800
 
 
+def _root_parent_key(attempt: dict) -> list:
+    """Input: attempt dict. Output: logical root identity list; old attempts retain original keys."""
+    return attempt.get('root_parent_key', [attempt['parent_alpha_id'], attempt['parent_expression_hash']])
+
+
+def _compare_attempt(parent: dict, child: dict, plan: dict, root: Path | None = None) -> dict:
+    """Input: measured parent/child/plan dicts. Output: versioned comparison without changing evidence."""
+    if plan.get('planner_kind') != 'deterministic':
+        return compare_repair_experiment(parent, child, plan.get('decision', {}))
+    from wqb.seed_policy import compare_versions
+    decision = plan['decision']
+    policy = {key: decision[key] for key in ('target_metric', 'target_direction', 'edit', 'value')}
+    policy['turnover_max'] = .40
+    if decision['edit'] == 'transform':
+        from wqb.repair_search import verify_persisted_search
+        if root is None:
+            raise ValueError('transform comparison requires owning run')
+        verify_persisted_search(root, plan)
+        evidence = json.loads(Path(plan['receipt_path']).with_suffix('.input.json').read_text(encoding='utf-8'))
+        return compare_versions(parent, child, policy,
+                                frozen_search={key: evidence[key] for key in ('policy', 'history')})
+    return compare_versions(parent, child, policy)
+
+
+def _accepted_parent(root: Path, initial: dict, attempts: list) -> dict:
+    """Input: run Path, root measured row and attempts list. Output: recomputed accepted incumbent row."""
+    from wqb.repair_planning import verify_consumed_plan
+    current = initial
+    for attempt in attempts:
+        plan = attempt.get('plan', {})
+        if plan.get('planner_kind') != 'deterministic' or attempt.get('phase') != 'checked':
+            continue
+        verify_consumed_plan(root, plan)
+        children = attempt.get('children', [])
+        if not children:
+            continue
+        if (len(children) != 1 or attempt['parent_alpha_id'] != current['alpha_id']
+                or attempt['parent_expression_hash'] != current['expression_hash']):
+            raise ValueError('deterministic Repair incumbent lineage changed')
+        if _compare_attempt(current, children[0], plan, root).get('outcome') == 'accepted':
+            current = children[0]
+    return current
+
+
 def _record_alias(receipt: dict, saved: dict, child: dict) -> None:
     """Input: mutable scheduler receipt and checked rows. Output: None. Preserve both exact lineage/evidence hashes without duplicate publication."""
     alias = {'alpha_id': child['alpha_id'], 'parent_alpha_id': child.get('parent_alpha_id'),
@@ -193,13 +237,21 @@ def execute_repair_round(root: Path, outcome: dict, executor: object, maximum: i
         key = [parent['alpha_id'], parent['expression_hash']]
         if key in receipt['stopped_parents']:
             continue
-        attempts = [a for a in receipt['attempts'] if [a['parent_alpha_id'], a['parent_expression_hash']] == key]
+        attempts = [a for a in receipt['attempts'] if _root_parent_key(a) == key]
         if any(a.get('phase') == 'result_unknown' for a in attempts):
             continue
         history = [child for a in attempts for child in a.get('children', [])]
         if any(row.get('hard_pass') is True for row in history):
             continue
         attempt = next((a for a in attempts if a['phase'] != 'checked'), None)
+        if any(a.get('plan', {}).get('planner_kind') == 'deterministic' for a in attempts):
+            try:
+                parent = _accepted_parent(root, parent, attempts)
+            except (ValueError, OSError) as exc:
+                blockers.append('Repair incumbent evidence invalid: ' + str(exc))
+                continue
+            receipt.setdefault('incumbents', {})[key[1]] = {
+                'alpha_id': parent['alpha_id'], 'expression_hash': parent['expression_hash']}
         if attempt is None:
             if reserved >= maximum:
                 continue
@@ -266,14 +318,17 @@ def execute_repair_round(root: Path, outcome: dict, executor: object, maximum: i
             if duplicate_rows and duplicate_rows[0].get('hard_pass') is False:
                 saved = duplicate_rows[0]
                 child = {**saved, 'expression_hash': plan['variants'][0]['expression_hash'],
-                         'parent_alpha_id': key[0], 'parent_expression_hash': key[1]}
+                         'parent_alpha_id': parent['alpha_id'], 'parent_expression_hash': parent['expression_hash']}
                 _record_alias(receipt, saved, child)
-                receipt['attempts'].append({'parent_alpha_id': key[0], 'parent_expression_hash': key[1],
+                cached_attempt = {'parent_alpha_id': parent['alpha_id'], 'parent_expression_hash': parent['expression_hash'],
                     'max_simulations': 0, 'plan': plan, 'actions': [], 'phase': 'checked',
                     'status': 'completed', 'children': [child], 'legacy': False,
                     'reused_existing_simulation': True,
                     'reused_source_sha256': hashlib.sha256(json.dumps(saved, sort_keys=True).encode()).hexdigest(),
-                    'experiment_trace': compare_repair_experiment(parent, child, plan.get('decision', {}))})
+                    'experiment_trace': _compare_attempt(parent, child, plan, root)}
+                if plan.get('planner_kind') == 'deterministic':
+                    cached_attempt['root_parent_key'] = key
+                receipt['attempts'].append(cached_attempt)
                 _write(path, receipt)
                 continue
             if duplicate_rows:
@@ -286,9 +341,11 @@ def execute_repair_round(root: Path, outcome: dict, executor: object, maximum: i
                     'evidence_digest': plan['evidence_digest'], 'reason': 'duplicate_global_expression'})
                 _write(path, receipt)
                 continue
-            attempt = {'parent_alpha_id': key[0], 'parent_expression_hash': key[1], 'max_simulations': 1,
+            attempt = {'parent_alpha_id': parent['alpha_id'], 'parent_expression_hash': parent['expression_hash'], 'max_simulations': 1,
                        'plan': plan, 'actions': [{'ai_plan': plan}], 'phase': 'ready', 'status': 'started',
                        'children': [], 'legacy': False}
+            if plan.get('planner_kind') == 'deterministic':
+                attempt['root_parent_key'] = key
             receipt['attempts'].append(attempt)
             reserved += 1
             _write(path, receipt)
@@ -315,8 +372,7 @@ def execute_repair_round(root: Path, outcome: dict, executor: object, maximum: i
                     for child, matches in pairs:
                         _record_alias(receipt, matches[0], child)
                     attempt.update(phase='checked', status='completed', children=checked)
-                    attempt['experiment_trace'] = compare_repair_experiment(parent, checked[0],
-                        attempt.get('plan', {}).get('decision', {}))
+                    attempt['experiment_trace'] = _compare_attempt(parent, checked[0], attempt.get('plan', {}), root)
                     attempt.pop('blocker', None)
                     _write(path, receipt)
                     continue
@@ -332,8 +388,8 @@ def execute_repair_round(root: Path, outcome: dict, executor: object, maximum: i
             if not children or len(children) != len(returned) or len(children) > attempt['max_simulations']:
                 raise ValueError('Repair executor returned incomplete checked children')
             for child in children:
-                if (child.get('parent_alpha_id') != key[0] or child.get('parent_expression_hash') != key[1]
-                        or child['expression_hash'] == key[1] or child['alpha_id'] == key[0]):
+                if (child.get('parent_alpha_id') != parent['alpha_id'] or child.get('parent_expression_hash') != parent['expression_hash']
+                        or child['expression_hash'] == parent['expression_hash'] or child['alpha_id'] == parent['alpha_id']):
                     raise ValueError('Repair child lineage mismatch')
                 if child.get('pending') and research_benchmark_label(child, root) == 'pending_review':
                     raise ValueError('Repair child checks are incomplete; saved identity requires check recovery')
@@ -350,8 +406,11 @@ def execute_repair_round(root: Path, outcome: dict, executor: object, maximum: i
                         handle.write(json.dumps(child) + '\n')
                     known.append(child)
             attempt.update(phase='checked', status='completed', children=children)
-            attempt['experiment_trace'] = compare_repair_experiment(parent, children[0],
-                attempt.get('plan', {}).get('decision', {}))
+            attempt['experiment_trace'] = _compare_attempt(parent, children[0], attempt.get('plan', {}), root)
+            if attempt.get('plan', {}).get('planner_kind') == 'deterministic':
+                incumbent = children[0] if attempt['experiment_trace']['outcome'] == 'accepted' else parent
+                receipt.setdefault('incumbents', {})[key[1]] = {
+                    'alpha_id': incumbent['alpha_id'], 'expression_hash': incumbent['expression_hash']}
             receipt['last_sha256'] = _sha(source)
         except DailyBudgetExhausted as exc:
             daily_wait = exc
@@ -401,8 +460,8 @@ def execute_repair_round(root: Path, outcome: dict, executor: object, maximum: i
                        progress_retry_at=wake, progress_source_run_dir=source_dir)
     elif reserved < maximum and any([p['alpha_id'], p['expression_hash']] not in receipt['stopped_parents']
             and not any(a.get('phase') == 'result_unknown' for a in receipt['attempts']
-                        if a['parent_alpha_id'] == p['alpha_id'] and a['parent_expression_hash'] == p['expression_hash'])
-            and not any(c.get('hard_pass') for a in receipt['attempts'] if a['parent_alpha_id'] == p['alpha_id']
+                        if _root_parent_key(a) == [p['alpha_id'], p['expression_hash']])
+            and not any(c.get('hard_pass') for a in receipt['attempts'] if _root_parent_key(a) == [p['alpha_id'], p['expression_hash']]
                         for c in a.get('children', [])) for p in parents):
         receipt.update(status='paused', recovery_eligible=True, blocker='Repair next measured comparison is ready',
                        progress_retry_at=now, progress_source_run_dir=str(path.parent))

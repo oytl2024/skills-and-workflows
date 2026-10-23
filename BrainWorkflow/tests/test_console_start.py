@@ -99,6 +99,150 @@ class OfficialPairedStartTests(unittest.TestCase):
             self.assertEqual(read_runtime_control(run)['simulation_budget_mode'], 'daily')
 
 
+class PreplannedConsoleStartTests(unittest.TestCase):
+    def setUp(self):
+        """Input: none. Output: isolated real composer fixture and explicit nonlive Console configuration."""
+        from tests.test_preplanned_start import PreplannedStartTests
+        from wqb.console_state import ConsolePaths
+        self.case = PreplannedStartTests()
+        self.case.setUp()
+        self.addCleanup(self.case.doCleanups)
+        notify = patch('wqb.preflight_notifications.notify_preflight_blocker', return_value={'status': 'queued'})
+        notify.start()
+        self.addCleanup(notify.stop)
+        root = self.case.root
+        self.paths = ConsolePaths(root, root / 'product', self.case.paths.knowledge_root,
+            self.case.paths.run_root, root / 'milestone.md', root / 'todo.md', root / 'runs/console_jobs')
+        self.config = dict(self.case.config, research_policy=dict(preplanned_tree_version=1),
+            ai_executor='codex', live_api_enabled=False, max_runtime_seconds=3600, max_recoveries=3,
+            api_key='never-persist', password='never-persist')
+        config = self.paths.workflow_root / 'configs/workflow_local.json'
+        config.parent.mkdir(parents=True)
+        config.write_text(json.dumps(self.config), encoding='utf-8')
+        option = console_server.existing_decision_artifact_path(self.paths.knowledge_root, 'research_option_cards.jsonl')
+        option.parent.mkdir(parents=True, exist_ok=True)
+        option.write_text(json.dumps(self.case.option) + '\n', encoding='utf-8')
+        self.form = dict(FORM, selected_option_id=self.case.option['option_id'], enable_live_api=False,
+            selected_region=self.case.scope['region'], selected_delay=self.case.scope['delay'],
+            selected_universe=self.case.scope['universe'])
+
+    def test_optin_real_composer_uses_factory_exact_brief_and_paused_group(self):
+        """Input: real source resources/mock factory. Output: prepared paused group, no old mission or live calls."""
+        from wqb import console_start as worker
+        from wqb.initial_research_planning import TASK_PATH
+        from wqb.research_group import read_group
+        request = worker.register_start(self.paths, self.form, 'preplanned-job')
+        seen = []
+
+        def factory(run, config):
+            """Input: owning Path/config dict. Output: fake exact persisted-brief runner."""
+            self.assertEqual(config['ai_executor'], 'codex')
+            def model(brief):
+                """Input: persisted brief dict. Output: fictional strict planning answer."""
+                task = json.loads((run / TASK_PATH).read_text(encoding='utf-8'))
+                self.assertEqual(brief, task['brief'])
+                self.assertNotIn('worker_context', brief)
+                seen.append(run)
+                return self.case.runner(brief)
+            return model
+
+        with patch('wqb.initial_model_worker.create_initial_model_runner', side_effect=factory), \
+             patch.object(worker, 'prepare_start', side_effect=AssertionError('legacy preflight used')), \
+             patch.object(worker.WorkflowOrchestrator, 'start', side_effect=AssertionError('legacy mission used')):
+            result = worker.execute_start(self.paths, self.form, request['request_id'])
+        self.assertTrue(result['passed'], result)
+        self.assertEqual(len(seen), 1)
+        group = read_group(Path(result['group_dir']))
+        self.assertEqual(group['desired_state'], 'paused')
+        self.assertEqual(result['group_request_revision'], group['request_revision'])
+        self.assertEqual(result['request_id'], request['request_id'])
+        self.assertFalse(group['authority']['enable_live_api'])
+        self.assertFalse((self.paths.runs_root / 'active_run.json').exists())
+        for path in self.paths.runs_root.rglob('*.json'):
+            self.assertNotIn('never-persist', path.read_text(encoding='utf-8'), str(path))
+
+    def test_stop_inside_model_cancels_original_request_and_never_publishes(self):
+        """Input: Stop racing model return. Output: cancelled Start and paused group, never runtime publication."""
+        from wqb import console_start as worker
+        request = worker.register_start(self.paths, self.form, 'stop-model')
+        def model(brief):
+            """Input: exact brief. Output: fake answer after durable Stop."""
+            worker.cancel_start(self.paths.runs_root)
+            return self.case.runner(brief)
+        with patch('wqb.initial_model_worker.create_initial_model_runner', return_value=model):
+            result = worker.execute_start(self.paths, self.form, request['request_id'])
+        self.assertEqual(result['status'], 'cancelled', result)
+        self.assertFalse((self.paths.runs_root / 'active_research_group.json').exists())
+        from wqb.research_group import read_group
+        group = read_group(Path(result['group_dir']))
+        self.assertEqual(group['desired_state'], 'paused')
+        self.assertNotEqual(group['request_revision'], result['group_request_revision'])
+
+    def test_missing_period_blocks_before_model_and_feature_flag_is_strict(self):
+        """Input: incomplete or invalid opt-in config. Output: no model call or legacy fallback."""
+        from wqb import console_start as worker
+        path = self.paths.workflow_root / 'configs/workflow_local.json'
+        self.config.pop('measurement_period')
+        path.write_text(json.dumps(self.config), encoding='utf-8')
+        request = worker.register_start(self.paths, self.form, 'missing-period')
+        with patch('wqb.initial_model_worker.create_initial_model_runner') as factory:
+            result = worker.execute_start(self.paths, self.form, request['request_id'])
+        self.assertEqual(result['status'], 'blocked', result)
+        self.assertIn('measurement_period', result['error'])
+        factory.assert_not_called()
+        self.config['research_policy']['preplanned_tree_version'] = True
+        path.write_text(json.dumps(self.config), encoding='utf-8')
+        with self.assertRaises(ValueError):
+            worker.register_start(self.paths, self.form, 'bad-version')
+
+    def test_completed_group_callback_is_revision_bound_and_uncertain_dispatch_never_replays(self):
+        """Input: real local preparation/lost worker ack. Output: one dispatch preserving original revision and Stop."""
+        from wqb import console_start as worker
+        from wqb.console_jobs import create_job
+        job = create_job(self.paths.job_root, FORM['action'], ['fake-preparation'], self.paths.workflow_root)
+        request = worker.register_start(self.paths, self.form, job.job_id)
+        # A later global config change cannot widen the accepted request.
+        config_path = self.paths.workflow_root / 'configs/workflow_local.json'
+        config_path.write_text(json.dumps(dict(self.config, live_api_enabled=True)), encoding='utf-8')
+        with patch('wqb.initial_model_worker.create_initial_model_runner', return_value=self.case.runner):
+            result = worker.execute_start(self.paths, self.form, request['request_id'])
+        self.assertTrue(result['passed'], result)
+        Path(job.stdout_path).write_text(json.dumps(result), encoding='utf-8')
+        completed = finish_job(job, 'completed', exit_code=0)
+        with patch.object(console_server, '_record_async_console_job_context'), \
+             patch('wqb.research_group_driver.start_group_workers', side_effect=OSError('lost-ack')) as dispatch:
+            console_server._complete_start_job(self.paths, completed)
+            console_server._complete_start_job(self.paths, completed)
+            self.assertEqual(dispatch.call_count, 1)
+            self.assertEqual(dispatch.call_args.kwargs['expected_revision'], result['group_request_revision'])
+            self.assertFalse(dispatch.call_args.kwargs['config']['live_api_enabled'])
+            persisted = worker.read_start_request(self.paths.runs_root)
+            self.assertEqual(persisted['group_dispatch']['status'], 'unknown')
+            self.assertEqual(persisted['group_request_revision'], result['group_request_revision'])
+            worker.cancel_start(self.paths.runs_root)
+            console_server._complete_start_job(self.paths, completed)
+            self.assertEqual(dispatch.call_count, 1)
+
+    def test_stop_after_preparation_blocks_success_callback(self):
+        """Input: completed prep followed by Stop. Output: callback never starts a lane or legacy workflow."""
+        from wqb import console_start as worker
+        from wqb.console_jobs import create_job
+        job = create_job(self.paths.job_root, FORM['action'], ['fake-preparation'], self.paths.workflow_root)
+        request = worker.register_start(self.paths, self.form, job.job_id)
+        with patch('wqb.initial_model_worker.create_initial_model_runner', return_value=self.case.runner):
+            result = worker.execute_start(self.paths, self.form, request['request_id'])
+        self.assertTrue(result['passed'], result)
+        Path(job.stdout_path).write_text(json.dumps(result), encoding='utf-8')
+        completed = finish_job(job, 'completed', exit_code=0)
+        worker.cancel_start(self.paths.runs_root)
+        with patch.object(console_server, '_record_async_console_job_context'), \
+             patch('wqb.research_group_driver.start_group_workers') as dispatch, \
+             patch.object(console_server, 'run_console_action') as legacy:
+            console_server._complete_start_job(self.paths, completed)
+        dispatch.assert_not_called()
+        legacy.assert_not_called()
+
+
 class BackgroundStartServerTests(unittest.TestCase):
     def test_command_defers_readiness_and_coverage_to_background_module(self):
         with tempfile.TemporaryDirectory() as tmp:

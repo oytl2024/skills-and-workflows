@@ -16,6 +16,7 @@ from wqb.console_progress import probe_data_capture_progress, process_is_alive
 from wqb.console_state import ConsolePaths
 from wqb.knowledge_paths import decision_artifacts_root
 from wqb.runtime_control import DEFAULT_MAX_RUNTIME_SECONDS
+from wqb.desktop_application import packaged_worker_command
 
 
 DEFAULT_TIMEOUT_SECONDS = 3600
@@ -129,6 +130,7 @@ def create_job(
     now: str | None = None,
 ) -> ConsoleJob:
     """Input: job root, action, command, cwd, metadata. Output: ConsoleJob. Create a durable queued job."""
+    command = packaged_worker_command([str(item) for item in command])
     created = now or _now()
     job_id = f"{created[:10].replace('-', '')}-{str(action).replace('_', '-')}-{uuid4().hex[:8]}"
     job_dir = Path(job_root) / job_id
@@ -188,7 +190,7 @@ def run_job(job: ConsoleJob, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> 
     _write_job(running)
     try:
         result = subprocess.run(
-            running.command,
+            packaged_worker_command(running.command),
             cwd=running.cwd,
             capture_output=True,
             text=True,
@@ -312,7 +314,7 @@ def start_job_async(
     stderr_handle = stderr_path.open("w", encoding="utf-8")
     try:
         process = subprocess.Popen(
-            job.command,
+            packaged_worker_command(job.command),
             cwd=job.cwd,
             stdout=stdout_handle,
             stderr=stderr_handle,

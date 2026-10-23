@@ -66,6 +66,11 @@ def validate_operational_resource_context(snapshot: dict) -> dict:
     """
     if not isinstance(snapshot, dict):
         raise ValueError('operational snapshot must be a dict')
+    from wqb.exploration_eligibility import exploration_scout_enabled, validate_exploration_snapshot
+    if exploration_scout_enabled(snapshot.get('research_policy')):
+        return validate_exploration_snapshot(snapshot)
+    if 'exploration_context' in snapshot:
+        raise ValueError('exploration context requires explicit exploration policy')
     if not paired_scout_enabled(snapshot.get('research_policy')):
         require_legacy_resource_snapshot(snapshot)
         if 'operational_resource_context' in snapshot:
@@ -354,7 +359,10 @@ def _validate_candidate(snapshot: dict, candidate: dict, *, operational_context:
         raise ValueError('unknown or ambiguous frozen hypothesis/template/version')
     template = matches[0]
     semantic = semantic_fields_from_dict(template)
-    if (semantic.get('binding_version') != 2 or semantic.get('semantic_status') != 'reviewed'
+    exploration_templates = (operational_context or {}).get('exploration_template_ids', [])
+    exploration_eligible = (template['template_id'] in exploration_templates
+                            and semantic.get('semantic_status') == 'unreviewed')
+    if (semantic.get('binding_version') != 2 or (semantic.get('semantic_status') != 'reviewed' and not exploration_eligible)
             or not semantic.get('hypothesis_card') or not semantic.get('input_slots')
             or (not semantic.get('operator_roles') and not paired_scout_enabled(snapshot.get('research_policy')))):
         raise ValueError('requires reviewed v2 card, slots and operator roles')

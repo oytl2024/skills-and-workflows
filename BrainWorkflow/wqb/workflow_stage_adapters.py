@@ -199,6 +199,15 @@ def advance_post_schedule_stage(
     if stage_name not in POST_SCHEDULE_STAGES:
         raise ValueError(f"unsupported post-schedule stage: {stage_name}")
     root = Path(run_dir)
+    if stage_name == 'scout_seed':
+        from wqb.research_seed_stage import preplanned_research_enabled
+        if preplanned_research_enabled(root):
+            try:
+                from wqb.tree_runtime import verify_tree_results
+                verify_tree_results(root)
+            except (OSError, ValueError, KeyError, TypeError, StopIteration) as error:
+                return dict(stage=stage_name, status='paused',
+                            blocker='checked research results require completed tree: ' + str(error), evidence_paths=[])
     check_receipt_path = root / 'stages/backtest/check_recovery.json'
     if check_receipt_path.exists() and (root / 'all_alphas.jsonl').exists():
         saved_checks = json.loads(check_receipt_path.read_text(encoding='utf-8'))
@@ -431,6 +440,11 @@ def _write_qualified_candidates(root: Path, rows: list[dict]) -> None:
 def _execute_discovery(root: Path, outcome: dict, executor: Callable) -> dict:
     """Input: run Path, research outcome, executor. Output: receipt. Lock a measured seed and execute bounded Discovery once."""
     from wqb.runtime_control import _write
+    from wqb.research_seed_stage import preplanned_research_enabled, prepare_seed_selection
+    if preplanned_research_enabled(root):
+        selection = prepare_seed_selection(root, outcome['rows'])
+        return dict(status='completed', execution='preplanned_seed_selection',
+                    seed_count=len(selection['selected']), discovery_exhausted=not selection['selected'])
     path = root / 'stages/batch_generation/discovery_execution.json'
     current = _sha256_file(root / 'all_alphas.jsonl')
     receipt = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
@@ -498,6 +512,12 @@ def _execute_discovery(root: Path, outcome: dict, executor: Callable) -> dict:
 def _execute_repair(root: Path, outcome: dict, executor: RepairExecutor | None, maximum: int) -> dict:
     """Input: run Path, outcome dict, optional executor, int budget. Output: receipt dict. Execute bounded repair once."""
     path = root / "stages" / "repair" / "repair_execution.json"
+    from wqb.research_seed_stage import preplanned_research_enabled, prepare_seed_selection
+    if preplanned_research_enabled(root):
+        selection = prepare_seed_selection(root, outcome['rows'])
+        if not selection['seed_rows']:
+            return dict(status='completed', execution='no_eligible_seeds', blocker='')
+        outcome = {**outcome, 'rows': selection['seed_rows']}
     if executor is None:
         return {"blocker": "repair executor is required for checked repairable signals"}
     if type(maximum) is not int or maximum < 1:

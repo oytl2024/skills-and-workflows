@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
 import os
@@ -204,13 +205,17 @@ def has_runtime_authority(run_dir: str | Path) -> bool:
     return True
 
 
-def submission_request_gate(run_dir: str | Path):
-    """Input: run directory. Output: OS lock context. Serialize simulation POST with pause acknowledgement."""
-    return json_lock_transition_guard(
-        Path(run_dir) / "runtime" / "submission_post",
-        SUBMISSION_GATE_TIMEOUT_SECONDS, SUBMISSION_GATE_SLEEP_SECONDS,
-        "simulation submission gate busy",
-    )
+@contextmanager
+def submission_request_gate(run_dir: str | Path, *, fair: bool = False):
+    """Input: run directory/actual POST bool. Output: OS fence; control writes bypass fair admission."""
+    from wqb.research_group import group_submission_gate
+    with group_submission_gate(Path(run_dir), fair=fair):
+        with json_lock_transition_guard(
+            Path(run_dir) / "runtime" / "submission_post",
+            SUBMISSION_GATE_TIMEOUT_SECONDS, SUBMISSION_GATE_SLEEP_SECONDS,
+            "simulation submission gate busy",
+        ):
+            yield
 
 
 def request_runtime_state(
@@ -291,6 +296,8 @@ def _check_submission_allowed(payload_count: int = 0) -> None:
     run_dir = os.environ.get(CONTROL_ENV, "")
     if not run_dir:
         return
+    from wqb.research_group import require_group_running
+    require_group_running(Path(run_dir))
     if type(payload_count) is not int or payload_count < 0:
         raise ValueError('simulation payload count must be a nonnegative integer')
     control = read_runtime_control(run_dir)

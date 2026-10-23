@@ -49,10 +49,22 @@ documented evidence_refs}; context_bindings_digest is SHA256 of its canonical
 JSON. All declared roles must be consumed across the experiment. Receipts are
 returned JSON, not published state; Task5 must preserve/check these digests.
 Negation orients BOTH arms for negative direction;
-unknown direction rejects. Observable conditions are proxy-only, never filters,
+unknown direction rejects. Version 1 observable conditions are proxy-only, never filters,
 and their roles must be actual inputs in every arm. Unidentifiable conditions,
 VECTOR (schema has no reduction intent), unused roles and unsupported meanings
 reject. Interpretive conditions remain interpretive in the attachment.
+
+Explicit design v2 adds a finite conditioned feature, lowered only as
+if_else(greater|less(condition_role, threshold), value_role, 0). It requires
+directly sourced MATRIX mask comparisons with FLOAT threshold, and selection
+with MATRIX condition/value and FLOAT fallback. Integer numeric widening is
+owned by the existing binder; no broadcast, BOOLEAN conversion or inferred
+operator definition is added. CONDITION_OPERATOR_CONTRACTS lists the accepted
+meanings, not claims about live official availability; exact documented typed
+facts and valid provenance must independently support every call. Unsupported
+platform definitions reject rather than being reinterpreted. V2 arms each have
+condition_filter_applied; the experiment flag means at least one arm is filtered,
+not that every arm is filtered. V1 output shape and identities remain unchanged.
 
 Operators require exact documented signatures without optional hidden arguments.
 Version 1 accepted meanings are the sentences in OPERATOR_CONTRACTS (case,
@@ -97,6 +109,19 @@ OPERATOR_CONTRACTS = {
         {'ranks x within each group', 'ranks each element within its group'}),
     'group_neutralize': (['MATRIX', 'GROUP'], ['MATRIX', 'GROUP'],
         {'subtracts the group mean from x', 'subtracts the mean of each group from x'}),
+}
+CONDITION_OPERATOR_CONTRACTS = {
+    'greater': (['MATRIX'], ['MATRIX', 'FLOAT'],
+        {'returns a matrix mask of 1 where x is greater than threshold and 0 otherwise'}),
+    'less': (['MATRIX'], ['MATRIX', 'FLOAT'],
+        {'returns a matrix mask of 1 where x is less than threshold and 0 otherwise'}),
+    'if_else': (['MATRIX', 'MATRIX'], ['MATRIX', 'MATRIX', 'FLOAT'],
+        {'returns value where condition is nonzero and otherwise returns fallback'}),
+}
+CONDITION_PARAMETER_NAMES = {
+    'greater': ['x', 'threshold'],
+    'less': ['x', 'threshold'],
+    'if_else': ['condition', 'value', 'fallback'],
 }
 
 
@@ -197,6 +222,14 @@ def _lower(feature: dict, orientation: int) -> tuple[str, set[str], str | None]:
         group = feature['group_role']['role']
         roles.add(group)
         args.append(ast.Name(id='__binding_slot_' + group, ctx=ast.Load()))
+    elif kind == 'conditioned':
+        operator = 'if_else'
+        condition = feature['condition_role']['role']
+        roles.add(condition)
+        predicate = ast.Call(func=ast.Name(id=feature['comparator'], ctx=ast.Load()),
+            args=[ast.Name(id='__binding_slot_' + condition, ctx=ast.Load()),
+                  ast.Constant(value=feature['threshold'])], keywords=[])
+        args = [predicate, node, ast.Constant(value=0)]
     if operator:
         node = ast.Call(func=ast.Name(id=operator, ctx=ast.Load()), args=args, keywords=[])
     if orientation == -1:
@@ -223,14 +256,16 @@ def _operator(name: str, rows: list[dict], pack: dict) -> None:
         if not _coverage_operator_supported(row, pack['source_texts'], source_index=pack['source_index'],
                                             resource_contract_version=version):
             raise ValueError('definition differs from exact sourced operator facts')
-        inputs, types, meanings = OPERATOR_CONTRACTS[name]
+        conditional = name in CONDITION_OPERATOR_CONTRACTS
+        inputs, types, meanings = (CONDITION_OPERATOR_CONTRACTS if conditional else OPERATOR_CONTRACTS)[name]
         meaning = ' '.join(definition['description'].lower().strip().rstrip('.').split())
         if (definition['input_types'] != inputs or definition['output_type'] != 'MATRIX'
                 or [p['type'] for p in definition['parameters']] != types
                 or any(not p['required'] or 'default' in p for p in definition['parameters'])
-                or (version == 1 and meaning not in meanings)):
+                or (conditional and [p['name'] for p in definition['parameters']] != CONDITION_PARAMETER_NAMES[name])
+                or ((version == 1 or conditional) and meaning not in meanings)):
             raise ValueError('unsupported documented signature or meaning for ' + name)
-        if version == 2:
+        if version == 2 and not conditional:
             receipt = resolve_operator_definition(row, pack['source_index'], pack['source_texts'],
                                                  resource_contract_version=2)
             rule_meaning = OPERATOR_RULES[name]['meaning']
@@ -363,15 +398,23 @@ def compile_design(design: dict, resources: dict, scope: dict) -> dict:
         exp = normalized['experiment_plan']
         features = [dict(feature=exp['baseline'], rationale=normalized['operator_rationale'])] + exp['treatments']
         drafts, arms, fingerprints, union_bindings = [], [], set(), {}
-        context = dict(design=normalized, resources=data, scope=scope, compiler_version=contract.COMPILER_VERSION)
+        compiler_version = (contract.CONDITION_COMPILER_VERSION if normalized['design_version'] == 2
+                            else contract.COMPILER_VERSION)
+        context = dict(design=normalized, resources=data, scope=scope, compiler_version=compiler_version)
         digest = _digest(context)
         for index, construction in enumerate(features):
             skeleton, used, operator = _lower(construction['feature'], orientation)
-            if not set(normalized['conditions']['observable_roles']) <= used:
+            conditioned = construction['feature']['kind'] == 'conditioned'
+            if normalized['design_version'] == 1 and not set(normalized['conditions']['observable_roles']) <= used:
                 _fail('unsupported_feature', 'conditions.observable_roles',
                       'condition proxies must be consumed in every arm; proxies are not predicates')
             if operator:
                 _operator(operator, data['operator_rows'], pack)
+            operators = [operator] if operator else []
+            if conditioned:
+                comparator = construction['feature']['comparator']
+                _operator(comparator, data['operator_rows'], pack)
+                operators.append(comparator)
             slots = [dict(r, role=r['name'], reduction=None) for r in normalized['field_roles'] if r['name'] in used]
             card = dict(data_meaning=normalized['data_meaning'], mechanism=normalized['economic_rationale'],
                 conditions=normalized['conditions']['description'], alternative=normalized['alternative_explanation'],
@@ -382,15 +425,15 @@ def compile_design(design: dict, resources: dict, scope: dict) -> dict:
                 hypothesis=normalized['economic_rationale'], skeleton=skeleton,
                 required_field_types=sorted({r['field_type'] for r in slots}),
                 compatible_semantic_tags=sorted({s for r in slots for s in r['required_semantics']}),
-                operator_tags=[operator] if operator else [], status='scout_only', correlation_risk='unknown',
+                operator_tags=operators, status='scout_only', correlation_risk='unknown',
                 repair_levers=[], source_paths=sorted(pack['source_index']),
                 compatible_regions=[scope['region']], compatible_delays=[scope['delay']],
                 compatible_universes=[scope['universe']], intended_direction=direction,
                 template_family=normalized['mechanism_family'], semantic_version=2, semantic_status='unreviewed',
                 hypothesis_id=normalized['design_id'], hypothesis_version=normalized['design_version'], binding_version=2))
             template.update(input_slots=slots, hypothesis_card=card, evidence_refs=deepcopy(normalized['evidence_refs']),
-                operator_roles=[dict(operator=operator, role=construction['feature']['kind'],
-                    purpose=normalized['operator_rationale'])] if operator else [])
+                operator_roles=[dict(operator=name, role=construction['feature']['kind'],
+                    purpose=normalized['operator_rationale']) for name in operators])
             template = template_record_to_dict(template_record_from_dict(template))
             binding = _binding(template, data, pack, scope)
             template['evidence_refs'] = _evidence(normalized, binding, data, pack, scope)
@@ -408,6 +451,8 @@ def compile_design(design: dict, resources: dict, scope: dict) -> dict:
             drafts.append(template)
             arms.append(dict(arm_id='baseline' if index == 0 else 'treatment', template_id=template['template_id'],
                 **deepcopy(construction), settings=deepcopy(data['settings']), scope=deepcopy(scope), binding=binding))
+            if normalized['design_version'] == 2:
+                arms[-1]['condition_filter_applied'] = conditioned
         if set(union_bindings) != {r['name'] for r in normalized['field_roles']}:
             _fail('unsupported_feature', 'experiment_plan', 'all declared roles must be consumed across the experiment')
         context_bindings = {}
@@ -417,11 +462,12 @@ def compile_design(design: dict, resources: dict, scope: dict) -> dict:
                              data, pack, scope)
             context_bindings[name] = dict(deepcopy(chosen), source_paths=sorted(row['source_paths']), evidence_refs=refs)
         experiment = dict(experiment_id='experiment_' + digest, design_id=normalized['design_id'],
-            compiler_version=contract.COMPILER_VERSION, compilation_digest=digest,
+            compiler_version=compiler_version, compilation_digest=digest,
             baseline_template_id=drafts[0]['template_id'], arms=arms, changed_dimension='feature',
             controls=deepcopy(exp['controls']), rejection_criteria=exp['rejection_criteria'],
             inconclusive_criteria=exp['inconclusive_criteria'], conditions=deepcopy(normalized['conditions']),
-            condition_filter_applied=False, prediction_direction=direction, orientation=orientation,
+            condition_filter_applied=any(arm.get('condition_filter_applied', False) for arm in arms),
+            prediction_direction=direction, orientation=orientation,
             context_bindings=context_bindings, context_bindings_digest=_digest(context_bindings))
         if resource_contract_version(data) == 2:
             experiment['resource_contract_version'] = 2

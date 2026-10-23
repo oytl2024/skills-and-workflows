@@ -122,12 +122,14 @@ class WorkflowOrchestrator:
         self, paths: OrchestratorPaths, *, repair_executor: RepairExecutor | None = None,
         discovery_executor=None,
         repair_max_simulations: int = DEFAULT_REPAIR_MAX_SIMULATIONS,
+        bound_run_dir: Path | None = None,
     ) -> None:
         """Input: paths, optional repair callable, int budget. Output: controller over durable files."""
         self.paths = paths
         self.repair_executor = repair_executor
         self.discovery_executor = discovery_executor
         self.repair_max_simulations = repair_max_simulations
+        self.bound_run_dir = bound_run_dir
 
     def start(
         self,
@@ -1197,6 +1199,9 @@ class WorkflowOrchestrator:
 
     def _active_discovery(self) -> WorkflowStateDiscovery:
         """Input: none. Output: discovery result. Repair official state and pointer only after read-only recovery."""
+        if self.bound_run_dir is not None:
+            from wqb.research_group import discover_group_lane
+            return discover_group_lane(self.paths.run_root, self.bound_run_dir)
         discovery = discover_active_workflow(self.paths.run_root)
         if (
             discovery.state is None

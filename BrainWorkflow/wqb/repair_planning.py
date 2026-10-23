@@ -286,6 +286,9 @@ def prepare_repair_decision(run: Path, parent: dict, history: list[dict], allowa
 
 def verify_consumed_plan(run: Path, plan: dict) -> dict:
     """Input: run Path and scheduled plan dict. Output: verified receipt. Reconcile lifecycle only, never payload edits."""
+    if plan.get('planner_kind') == 'deterministic':
+        from wqb.repair_search import verify_persisted_search
+        return verify_persisted_search(run, plan)
     digest = str(plan.get('evidence_digest', ''))
     if len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest):
         raise RepairPlanningBlocked('AI Repair evidence digest invalid')

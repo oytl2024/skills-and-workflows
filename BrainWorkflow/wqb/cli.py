@@ -127,6 +127,10 @@ def default_orchestrator_paths(config: dict[str, Any]) -> OrchestratorPaths:
 def make_run_dir(config: dict[str, Any]) -> Path:
     """Input: run config. Output: run directory path. Create a timestamped run location."""
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if config.get('active_workflow_run_dir'):
+        from wqb.research_seed_stage import preplanned_research_enabled
+        if preplanned_research_enabled(Path(config['active_workflow_run_dir'])):
+            run_id += '-' + uuid4().hex
     return Path(config["run_root"]) / run_id
 
 
@@ -457,6 +461,9 @@ def _live_gate_kwargs(config: dict[str, Any], run_dir: Path) -> dict[str, Any]:
                     or Path(manifest['knowledge_root']).resolve() != Path(result['knowledge_root']).resolve()):
                 raise ValueError('source readiness manifest identity/root mismatch')
             snapshot = manifest['start_snapshot']
+            from wqb.exploration_eligibility import exploration_scout_enabled, validate_operational_exploration
+            if exploration_scout_enabled(snapshot.get('research_policy')):
+                validate_operational_exploration(active, Path(result['knowledge_root']), snapshot)
             scope = {key: result[key] for key in ('region', 'delay', 'universe')}
             _snapshot_schedule_inputs(snapshot, manifest['selected_option_id'], scope)
             if any(manifest['selected_scope'][key] != scope[key] for key in scope):
