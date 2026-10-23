@@ -1,0 +1,684 @@
+from dataclasses import replace
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from wqb.workflow_state import (
+    WorkflowStateError,
+    WorkflowStageState,
+    blocking_terminal_issues,
+    create_initial_state,
+    diagnose_state_consistency,
+    discover_active_workflow,
+    load_active_run,
+    load_run_state,
+    transition_run_state,
+    write_active_run,
+    write_run_state,
+)
+from wqb.workflow_events import append_workflow_event
+
+
+class WorkflowStateTests(unittest.TestCase):
+    def write_inconsistent_terminal_checkpoint(self, root: Path, run_id: str = "run1") -> Path:
+        """Input: run root and id. Output: run dir Path. Persist checkpoint-only contradictory terminal state."""
+        run_dir = root / run_id
+        run_dir.mkdir(parents=True)
+        state = create_initial_state(run_id, run_dir, "Power Pool", "2026-07-12T00:00:00Z")
+        terminal_state = replace(
+            state,
+            status="completed",
+            current_stage="complete",
+            last_completed_stage="research_record_sync",
+            research_record_synced=True,
+        )
+        (run_dir / "research_record.json").write_text(
+            json.dumps({"run_id": run_id}), encoding="utf-8"
+        )
+        write_run_state(run_dir / "run_state.json", terminal_state)
+        (run_dir / "run_state.json").unlink()
+        return run_dir
+
+    def test_initial_state_contains_all_stages_and_next_action(self):
+        state = create_initial_state("run1", "runs/run1", "Power Pool", "2026-07-12T00:00:00Z")
+
+        self.assertEqual(state.run_id, "run1")
+        self.assertEqual(state.status, "created")
+        self.assertEqual(state.current_stage, "objective_selected")
+        self.assertEqual(state.next_action, "workflow-start")
+        self.assertEqual(state.stages["schedule"].status, "not_started")
+
+    def test_transition_rejects_illegal_jump_from_created_to_completed(self):
+        state = create_initial_state("run1", "runs/run1", "Power Pool", "2026-07-12T00:00:00Z")
+
+        with self.assertRaisesRegex(WorkflowStateError, "illegal run status transition"):
+            transition_run_state(state, "completed")
+
+    def test_state_write_and_load_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "run_state.json"
+            state = create_initial_state("run1", Path(tmp), "Power Pool", "2026-07-12T00:00:00Z")
+            write_run_state(path, state)
+            loaded = load_run_state(path)
+
+        self.assertEqual(loaded.run_id, "run1")
+        self.assertEqual(loaded.objective, "Power Pool")
+
+    def test_active_run_pointer_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_active_run(tmp, "run1", Path(tmp) / "run1")
+            active = load_active_run(tmp)
+
+        self.assertEqual(active["run_id"], "run1")
+
+    def test_consistency_detects_candidate_queue_without_approval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "approved_candidates.jsonl").write_text('{"candidate_id":"c1"}\n', encoding="utf-8")
+            issues = diagnose_state_consistency(root)
+
+        self.assertIn("candidate_queue_without_approval", issues)
+
+    def test_load_rejects_semantically_invalid_state_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "run_state.json"
+            state = create_initial_state("run1", tmp, "Power Pool", "2026-07-12T00:00:00Z")
+            write_run_state(path, state)
+            valid = json.loads(path.read_text(encoding="utf-8"))
+            corruptions = (
+                ("run status", lambda row: row.update(status="unknown")),
+                ("current stage", lambda row: row.update(current_stage="unknown")),
+                ("last stage", lambda row: row.update(last_completed_stage="unknown")),
+                ("stage name", lambda row: row["stages"].update(unknown={"name": "unknown"})),
+                ("stage row name", lambda row: row["stages"]["schedule"].update(name="triage")),
+                ("stage status", lambda row: row["stages"]["schedule"].update(status="unknown")),
+            )
+
+            for label, mutate in corruptions:
+                with self.subTest(label=label):
+                    row = json.loads(json.dumps(valid))
+                    mutate(row)
+                    path.write_text(json.dumps(row), encoding="utf-8")
+                    with self.assertRaises(WorkflowStateError):
+                        load_run_state(path)
+
+    def test_consistency_detects_exact_approval_queue_identity_mismatch(self):
+        approval = {
+            "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+            "expression_hash": "h1", "source_run_id": "run1",
+        }
+        queued = dict(approval, expression_hash="h2", status="queued")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "approval.jsonl").write_text(json.dumps(approval) + "\n", encoding="utf-8")
+            (root / "approved_candidates.jsonl").write_text(json.dumps(queued) + "\n", encoding="utf-8")
+            issues = diagnose_state_consistency(root)
+
+        self.assertIn("candidate_queue_approval_identity_mismatch:c1:1:h2", issues)
+
+    def test_consistency_compares_approval_and_queue_to_candidate_gate_full_identity(self):
+        gate = {
+            "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+            "expression_hash": "h1", "source_run_id": "run1",
+        }
+        mutations = (
+            ("candidate_id", "c2"),
+            ("platform_alpha_id", "a2"),
+            ("version", 2),
+            ("expression_hash", "h2"),
+            ("source_run_id", "run2"),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                persisted = dict(gate, **{field: value})
+                (root / "candidate_gate.json").write_text(
+                    json.dumps([gate]), encoding="utf-8"
+                )
+                (root / "approval.jsonl").write_text(
+                    json.dumps(persisted) + "\n", encoding="utf-8"
+                )
+                (root / "approved_candidates.jsonl").write_text(
+                    json.dumps(dict(persisted, status="queued")) + "\n", encoding="utf-8"
+                )
+
+                issues = diagnose_state_consistency(root)
+
+                self.assertTrue(
+                    any(issue.startswith("approval_candidate_gate_identity_mismatch:") for issue in issues)
+                )
+                self.assertTrue(
+                    any(issue.startswith("candidate_queue_gate_identity_mismatch:") for issue in issues)
+                )
+
+    def test_consistency_reports_malformed_json_and_trailing_jsonl_without_raising(self):
+        valid = {
+            "candidate_id": "c1", "platform_alpha_id": "a1", "version": 1,
+            "expression_hash": "h1", "source_run_id": "run1",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "candidate_gate.json").write_text("{broken", encoding="utf-8")
+            (root / "approval.jsonl").write_text(
+                json.dumps(valid) + '\n{"candidate_id":', encoding="utf-8"
+            )
+            (root / "approved_candidates.jsonl").write_text(
+                json.dumps(dict(valid, status="queued")) + '\n{"candidate_id":',
+                encoding="utf-8",
+            )
+            (root / "research_record.json").write_text("{broken", encoding="utf-8")
+            (root / "run_state.json").write_text("{broken", encoding="utf-8")
+
+            issues = diagnose_state_consistency(root)
+
+        self.assertIn("malformed_json:candidate_gate.json", issues)
+        self.assertIn("malformed_jsonl:approval.jsonl:2", issues)
+        self.assertIn("malformed_jsonl:approved_candidates.jsonl:2", issues)
+        self.assertIn("malformed_json:research_record.json", issues)
+        self.assertIn("malformed_json:run_state.json", issues)
+
+    def test_consistency_reports_malformed_workflow_event_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = create_initial_state("run1", root, "Power Pool", "2026-07-12T00:00:00Z")
+            write_run_state(root / "run_state.json", state)
+            (root / "workflow_events.jsonl").write_text(
+                json.dumps(
+                    {
+                        "event_type": "workflow_created",
+                        "occurred_at": "2026-07-12T00:00:00Z",
+                        "payload": {"run_id": "run1"},
+                    }
+                )
+                + "\n{broken\n",
+                encoding="utf-8",
+            )
+
+            issues = diagnose_state_consistency(root)
+
+        self.assertIn("malformed_workflow_events", issues)
+
+    def test_consistency_reports_malformed_workflow_event_utf8(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = create_initial_state("run1", root, "Power Pool", "2026-07-12T00:00:00Z")
+            write_run_state(root / "run_state.json", state)
+            (root / "workflow_events.jsonl").write_bytes(
+                b'{"event_type":"workflow_created","occurred_at":"2026-07-12T00:00:00Z","payload":{}}\n\xff\n'
+            )
+
+            issues = diagnose_state_consistency(root)
+
+        self.assertIn("malformed_workflow_events", issues)
+
+    def test_consistency_requires_schedule_evidence_and_existing_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = create_initial_state("run1", root, "Power Pool", "2026-07-12T00:00:00Z")
+            stages = dict(state.stages)
+            stages["schedule"] = WorkflowStageState(name="schedule", status="completed")
+            write_run_state(root / "run_state.json", replace(state, stages=stages))
+            empty_issues = diagnose_state_consistency(root)
+
+            stages["schedule"] = WorkflowStageState(
+                name="schedule", status="completed", evidence_paths=["stages/schedule/missing.json"]
+            )
+            write_run_state(root / "run_state.json", replace(state, stages=stages))
+            missing_issues = diagnose_state_consistency(root)
+
+        self.assertIn("completed_stage_without_evidence:schedule", empty_issues)
+        self.assertIn(
+            "missing_stage_evidence:schedule:stages/schedule/missing.json", missing_issues
+        )
+
+    def test_discovery_diagnoses_non_object_active_pointer_without_writes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            root.mkdir()
+            pointer_path = root / "active_run.json"
+            pointer_path.write_text("[]", encoding="utf-8")
+            before = pointer_path.read_bytes()
+
+            discovery = discover_active_workflow(root)
+
+            self.assertIsNone(discovery.state)
+            self.assertIn("active_run_invalid", discovery.diagnostics)
+            self.assertEqual(pointer_path.read_bytes(), before)
+
+    def test_discovery_reports_missing_state_for_canonical_active_pointer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            write_active_run(root, "run1", run_dir)
+            before = (root / "active_run.json").read_bytes()
+
+            discovery = discover_active_workflow(root)
+
+            self.assertIsNone(discovery.state)
+            self.assertEqual(discovery.run_dir, run_dir)
+            self.assertEqual(discovery.run_id, "run1")
+            self.assertEqual(discovery.diagnostics, ["run_state_missing"])
+            self.assertEqual((root / "active_run.json").read_bytes(), before)
+
+    def test_discovery_reports_multiple_nonterminal_runs_without_selecting_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            for run_id in ("run1", "run2"):
+                run_dir = root / run_id
+                run_dir.mkdir(parents=True)
+                write_run_state(
+                    run_dir / "run_state.json",
+                    create_initial_state(
+                        run_id, run_dir, "Power Pool", "2026-07-12T00:00:00Z"
+                    ),
+                )
+
+            discovery = discover_active_workflow(root)
+
+            self.assertIsNone(discovery.state)
+            self.assertIsNone(discovery.run_dir)
+            self.assertIn("multiple_active_runs", discovery.diagnostics)
+            self.assertFalse((root / "active_run.json").exists())
+
+    def test_discovery_reports_sibling_active_run_despite_valid_pointer_without_writes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dirs = {}
+            for run_id in ("run1", "run2"):
+                run_dir = root / run_id
+                run_dir.mkdir(parents=True)
+                run_dirs[run_id] = run_dir
+                write_run_state(
+                    run_dir / "run_state.json",
+                    create_initial_state(
+                        run_id, run_dir, "Power Pool", "2026-07-12T00:00:00Z"
+                    ),
+                )
+            write_active_run(root, "run1", run_dirs["run1"])
+            pointer_before = (root / "active_run.json").read_bytes()
+
+            discovery = discover_active_workflow(root)
+            pointer_unchanged = (root / "active_run.json").read_bytes() == pointer_before
+
+        self.assertIsNone(discovery.state)
+        self.assertIsNone(discovery.run_dir)
+        self.assertIn("multiple_active_runs", discovery.diagnostics)
+        self.assertTrue(pointer_unchanged)
+
+    def test_write_state_creates_checkpoint_and_discovery_recovers_damaged_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            state_path = run_dir / "run_state.json"
+            state = create_initial_state(
+                "run1", run_dir, "Power Pool", "2026-07-12T00:00:00Z"
+            )
+            write_run_state(state_path, state)
+            checkpoint_path = run_dir / "run_state_checkpoint.json"
+            checkpoint_state = load_run_state(checkpoint_path)
+            state_path.write_text("{broken", encoding="utf-8")
+            write_active_run(root, "run1", run_dir)
+
+            discovery = discover_active_workflow(root)
+
+        self.assertEqual(checkpoint_state, state)
+        self.assertEqual(discovery.state, state)
+        self.assertTrue(discovery.recovered)
+        self.assertIn("run_state_recovered_from_checkpoint", discovery.diagnostics)
+
+    def test_pointer_terminal_checkpoint_without_official_state_is_damaged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = self.write_inconsistent_terminal_checkpoint(root)
+            write_active_run(root, "run1", run_dir)
+            pointer_before = (root / "active_run.json").read_bytes()
+
+            discovery = discover_active_workflow(root)
+            pointer_unchanged = (root / "active_run.json").read_bytes() == pointer_before
+
+        self.assertIsNone(discovery.state)
+        self.assertEqual(discovery.run_dir, run_dir)
+        self.assertIn("terminal_state_inconsistent", discovery.diagnostics)
+        self.assertIn("terminal_state_incomplete_stages", discovery.diagnostics)
+        self.assertTrue(pointer_unchanged)
+
+    def test_scanned_terminal_checkpoint_without_official_state_is_damaged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = self.write_inconsistent_terminal_checkpoint(root)
+
+            discovery = discover_active_workflow(root)
+            active_exists = (root / "active_run.json").exists()
+
+        self.assertIsNone(discovery.state)
+        self.assertEqual(discovery.run_dir, run_dir)
+        self.assertIn("terminal_state_inconsistent", discovery.diagnostics)
+        self.assertIn("terminal_state_incomplete_stages", discovery.diagnostics)
+        self.assertFalse(active_exists)
+
+    def test_discovery_recovers_minimal_state_from_creation_event_when_state_and_checkpoint_are_damaged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run_state.json").write_text("{broken", encoding="utf-8")
+            (run_dir / "run_state_checkpoint.json").write_text("{broken", encoding="utf-8")
+            append_workflow_event(
+                run_dir,
+                "workflow_created",
+                {
+                    "run_id": "run1",
+                    "objective": "Power Pool",
+                    "selected_option_id": "option-1",
+                    "created_at": "2026-07-12T00:00:00Z",
+                },
+                "2026-07-12T00:00:00Z",
+            )
+            write_active_run(root, "run1", run_dir)
+
+            discovery = discover_active_workflow(root)
+
+        self.assertIsNotNone(discovery.state)
+        self.assertEqual(discovery.state.run_id, "run1")
+        self.assertEqual(discovery.state.status, "created")
+        self.assertEqual(discovery.state.current_stage, "objective_selected")
+        self.assertEqual(discovery.state.stages["objective_selected"].status, "completed")
+        self.assertTrue(discovery.recovered)
+        self.assertIn("run_state_recovered_from_events", discovery.diagnostics)
+
+    def test_discovery_keeps_damaged_state_when_later_event_row_is_malformed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run_state.json").write_text("{broken", encoding="utf-8")
+            (run_dir / "run_state_checkpoint.json").write_text("{broken", encoding="utf-8")
+            append_workflow_event(
+                run_dir,
+                "workflow_created",
+                {"run_id": "run1", "objective": "Power Pool", "created_at": "2026-07-12T00:00:00Z"},
+                "2026-07-12T00:00:00Z",
+            )
+            with (run_dir / "workflow_events.jsonl").open("ab") as handle:
+                handle.write(b'{"event_type":"stage_completed"\n')
+            write_active_run(root, "run1", run_dir)
+
+            discovery = discover_active_workflow(root)
+
+        self.assertIsNone(discovery.state)
+        self.assertEqual(discovery.run_dir, run_dir)
+        self.assertIn("run_state_invalid_with_malformed_events", discovery.diagnostics)
+
+    def test_discovery_keeps_damaged_state_when_events_prove_later_progress(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run_state.json").write_text("{broken", encoding="utf-8")
+            (run_dir / "run_state_checkpoint.json").write_text("{broken", encoding="utf-8")
+            append_workflow_event(
+                run_dir,
+                "workflow_created",
+                {"run_id": "run1", "objective": "Power Pool", "created_at": "2026-07-12T00:00:00Z"},
+                "2026-07-12T00:00:00Z",
+            )
+            append_workflow_event(
+                run_dir,
+                "stage_completed",
+                {"stage": "schedule"},
+                "2026-07-12T00:01:00Z",
+            )
+            write_active_run(root, "run1", run_dir)
+
+            discovery = discover_active_workflow(root)
+
+        self.assertIsNone(discovery.state)
+        self.assertEqual(discovery.run_dir, run_dir)
+        self.assertIn("run_state_invalid_with_events", discovery.diagnostics)
+
+    def test_discovery_recovers_valid_sibling_when_pointer_target_is_damaged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            damaged = root / "damaged"
+            sibling = root / "run1"
+            damaged.mkdir(parents=True)
+            sibling.mkdir()
+            (damaged / "run_state.json").write_text("{broken", encoding="utf-8")
+            (damaged / "run_state_checkpoint.json").write_text("{broken", encoding="utf-8")
+            write_run_state(
+                sibling / "run_state.json",
+                create_initial_state("run1", sibling, "Power Pool", "2026-07-12T00:00:00Z"),
+            )
+            write_active_run(root, "damaged", damaged)
+
+            discovery = discover_active_workflow(root)
+
+        self.assertEqual(discovery.state.run_id, "run1")
+        self.assertTrue(discovery.recovered)
+        self.assertIn("run_state_invalid", discovery.diagnostics)
+
+    def test_discovery_rejects_checkpoint_with_mismatched_run_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            state_path = run_dir / "run_state.json"
+            write_run_state(
+                state_path,
+                create_initial_state(
+                    "run1", run_dir, "Power Pool", "2026-07-12T00:00:00Z"
+                ),
+            )
+            checkpoint_path = run_dir / "run_state_checkpoint.json"
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            checkpoint["run_id"] = "other-run"
+            checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+            state_path.write_text("{broken", encoding="utf-8")
+            write_active_run(root, "run1", run_dir)
+
+            discovery = discover_active_workflow(root)
+
+        self.assertIsNone(discovery.state)
+        self.assertFalse(discovery.recovered)
+        self.assertIn("run_state_run_id_mismatch", discovery.diagnostics)
+
+    def test_discovery_rejects_out_of_root_active_pointer_without_writes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            outside = Path(tmp) / "outside" / "run1"
+            outside.mkdir(parents=True)
+            root.mkdir()
+            write_run_state(
+                outside / "run_state.json",
+                create_initial_state(
+                    "run1", outside, "Power Pool", "2026-07-12T00:00:00Z"
+                ),
+            )
+            write_active_run(root, "run1", outside)
+            before = {
+                "pointer": (root / "active_run.json").read_bytes(),
+                "state": (outside / "run_state.json").read_bytes(),
+            }
+
+            discovery = discover_active_workflow(root)
+
+            self.assertIsNone(discovery.state)
+            self.assertIn("active_run_outside_run_root", discovery.diagnostics)
+            self.assertEqual((root / "active_run.json").read_bytes(), before["pointer"])
+            self.assertEqual((outside / "run_state.json").read_bytes(), before["state"])
+
+    def test_discovery_rejects_pointer_and_state_directory_mismatches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            mismatched_dir = root / "run2"
+            write_run_state(
+                run_dir / "run_state.json",
+                create_initial_state(
+                    "run1", mismatched_dir, "Power Pool", "2026-07-12T00:00:00Z"
+                ),
+            )
+            write_active_run(root, "run1", run_dir)
+            before = {
+                "pointer": (root / "active_run.json").read_bytes(),
+                "state": (run_dir / "run_state.json").read_bytes(),
+            }
+
+            discovery = discover_active_workflow(root)
+
+            self.assertIsNone(discovery.state)
+            self.assertIn("run_state_run_dir_mismatch", discovery.diagnostics)
+            self.assertEqual((root / "active_run.json").read_bytes(), before["pointer"])
+            self.assertEqual((run_dir / "run_state.json").read_bytes(), before["state"])
+
+    def test_scanned_discovery_rejects_out_of_root_state_run_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            outside = Path(tmp) / "outside" / "run1"
+            run_dir.mkdir(parents=True)
+            write_run_state(
+                run_dir / "run_state.json",
+                create_initial_state(
+                    "run1", outside, "Power Pool", "2026-07-12T00:00:00Z"
+                ),
+            )
+            before = (run_dir / "run_state.json").read_bytes()
+
+            discovery = discover_active_workflow(root)
+
+            self.assertIsNone(discovery.state)
+            self.assertIn("run_state_run_dir_mismatch", discovery.diagnostics)
+            self.assertFalse((root / "active_run.json").exists())
+            self.assertEqual((run_dir / "run_state.json").read_bytes(), before)
+
+    def test_discovery_diagnoses_pointer_run_id_directory_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            write_run_state(
+                run_dir / "run_state.json",
+                create_initial_state(
+                    "run1", run_dir, "Power Pool", "2026-07-12T00:00:00Z"
+                ),
+            )
+            write_active_run(root, "run2", run_dir)
+            before = (root / "active_run.json").read_bytes()
+
+            discovery = discover_active_workflow(root)
+
+            self.assertEqual(discovery.state.run_id, "run1")
+            self.assertTrue(discovery.recovered)
+            self.assertIn("active_run_directory_mismatch", discovery.diagnostics)
+            self.assertEqual((root / "active_run.json").read_bytes(), before)
+
+    def test_scanned_discovery_rejects_state_run_id_directory_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "runs"
+            run_dir = root / "run1"
+            run_dir.mkdir(parents=True)
+            write_run_state(
+                run_dir / "run_state.json",
+                create_initial_state(
+                    "run2", run_dir, "Power Pool", "2026-07-12T00:00:00Z"
+                ),
+            )
+            before = (run_dir / "run_state.json").read_bytes()
+
+            discovery = discover_active_workflow(root)
+
+            self.assertIsNone(discovery.state)
+            self.assertIn("run_state_run_id_mismatch", discovery.diagnostics)
+            self.assertFalse((root / "active_run.json").exists())
+            self.assertEqual((run_dir / "run_state.json").read_bytes(), before)
+
+    def test_consistency_binds_research_and_candidate_artifacts_to_state_run(self):
+        candidate = {
+            "candidate_id": "c1",
+            "platform_alpha_id": "a1",
+            "version": 1,
+            "expression_hash": "h1",
+            "source_run_id": "other-run",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = create_initial_state(
+                "run1", root, "Power Pool", "2026-07-12T00:00:00Z"
+            )
+            write_run_state(root / "run_state.json", state)
+            (root / "research_record.json").write_text(
+                json.dumps({"run_id": "other-run"}), encoding="utf-8"
+            )
+            (root / "candidate_gate.json").write_text(
+                json.dumps([candidate]), encoding="utf-8"
+            )
+            (root / "approval.jsonl").write_text(
+                json.dumps(candidate) + "\n", encoding="utf-8"
+            )
+            (root / "approved_candidates.jsonl").write_text(
+                json.dumps(dict(candidate, status="queued")) + "\n", encoding="utf-8"
+            )
+
+            issues = diagnose_state_consistency(root)
+
+        self.assertIn("research_record_run_id_mismatch:other-run", issues)
+        for artifact in (
+            "candidate_gate.json",
+            "approval.jsonl",
+            "approved_candidates.jsonl",
+        ):
+            self.assertIn(
+                f"candidate_source_run_id_mismatch:{artifact}:c1:other-run", issues
+            )
+
+    def test_consistency_requires_research_record_for_completed_with_warnings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = create_initial_state(
+                "run1", root, "Power Pool", "2026-07-12T00:00:00Z"
+            )
+            write_run_state(
+                root / "run_state.json",
+                replace(state, status="completed_with_warnings"),
+            )
+
+            issues = diagnose_state_consistency(root)
+
+        self.assertIn("completed_without_research_record", issues)
+
+    def test_blocking_terminal_issues_requires_warning_evidence_to_ignore_unsynced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = create_initial_state(
+                "run1", root, "Power Pool", "2026-07-12T00:00:00Z"
+            )
+            incomplete_warning = replace(
+                state,
+                status="completed_with_warnings",
+                current_stage="complete",
+                last_completed_stage="research_record_sync",
+                research_record_synced=False,
+            )
+            stages = dict(incomplete_warning.stages)
+            stages["research_record_sync"] = WorkflowStageState(
+                name="research_record_sync",
+                status="completed",
+                blocker="OSError: raw vault unavailable",
+                evidence_paths=[str(root / "research_record.json")],
+            )
+            intentional_warning = replace(incomplete_warning, stages=stages)
+
+            without_evidence = blocking_terminal_issues(
+                incomplete_warning, ["terminal_research_record_not_synced"]
+            )
+            with_evidence = blocking_terminal_issues(
+                intentional_warning, ["terminal_research_record_not_synced"]
+            )
+
+        self.assertEqual(without_evidence, ["terminal_research_record_not_synced"])
+        self.assertEqual(with_evidence, [])

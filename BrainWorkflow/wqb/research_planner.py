@@ -1,6 +1,20 @@
 from dataclasses import replace
+from pathlib import Path
+from typing import Any
 
-from wqb.principle_model import IncentiveSnapshot, OptionCard, ScoreBreakdown, SourceEvidence, validate_option_card
+from wqb.benchmark_rules import BenchmarkRule, load_active_benchmark_rules, rules_for_consumer
+from wqb.data_ledger import load_data_ledger_from_knowledge, summarize_data_ledger_authority
+from wqb.knowledge_paths import existing_machine_resource_path
+from wqb.operator_semantics import load_operator_semantics
+from wqb.principle_model import (
+    IncentiveSnapshot,
+    OptionCard,
+    ScoreBreakdown,
+    SourceEvidence,
+    option_card_to_dict,
+    validate_option_card,
+)
+from wqb.template_library import load_template_library_from_knowledge, template_matrix_summary
 
 
 GENIUS_BASE_SCORE = 7.0
@@ -10,6 +24,94 @@ THEME_BASE_SCORE = 6.0
 COMPETITION_BASE_SCORE = 5.5
 REFRESH_RECOVERY_SCORE = 10.0
 STALE_REFRESH_PENALTY = 3.0
+
+
+def _planner_contract_inputs(knowledge_root: Path) -> dict[str, Any]:
+    """Input: knowledge root. Output: planner input summary. Summarize semantic ledgers for option cards."""
+    data_records = load_data_ledger_from_knowledge(knowledge_root)
+    template_records = load_template_library_from_knowledge(knowledge_root)
+    operators = load_operator_semantics(existing_machine_resource_path(knowledge_root, "operator_ledger"))
+    benchmark_rules = load_active_benchmark_rules(knowledge_root, fallback_to_defaults=False)
+    planner_rules = rules_for_consumer(benchmark_rules, "research_planner")
+    data_authority = summarize_data_ledger_authority(data_records)
+    blockers = []
+    if not data_authority.get("authoritative_measured_count"):
+        blockers.append("Authoritative data ledger is missing or has no measured platform rows.")
+    return {
+        "data_authority": data_authority,
+        "operator_semantic_count": len(operators),
+        "template_matrix_ready_count": template_matrix_summary(template_records)["matrix_ready_count"],
+        "benchmark_rule_count": len(benchmark_rules),
+        "benchmark_rule_ids": [rule.rule_id for rule in planner_rules],
+        "benchmark_actions": [rule.action for rule in planner_rules],
+        "maintenance_blockers": blockers,
+    }
+
+
+def _apply_planner_rule_annotations(option: dict[str, Any], rules: list[BenchmarkRule]) -> dict[str, Any]:
+    """Input: option row and planner rules. Output: annotated option row. Apply persisted rules to option risk."""
+    if option.get("primary_incentive") == "knowledge_refresh" or not rules:
+        return option
+    annotations = [
+        f"Active benchmark rule {rule.rule_id}: {rule.action} Rule risk: {rule.risk}"
+        for rule in rules
+        if rule.action or rule.risk
+    ]
+    if annotations:
+        option["correlation_risk"] = " ".join([str(option.get("correlation_risk", "")).strip(), *annotations]).strip()
+        score = option.get("score")
+        if isinstance(score, dict):
+            score["reasons"] = [*score.get("reasons", []), *annotations]
+    return option
+
+
+def plan_research_options(
+    knowledge_root: str | Path,
+    generated_at: str,
+    max_options: int = 5,
+    live_api_enabled: bool = False,
+    snapshot: IncentiveSnapshot | None = None,
+) -> dict[str, Any]:
+    """Input: knowledge root, timestamp, limit, live API flag, snapshot. Output: planner rows. Build durable option rows with semantic contract inputs."""
+    root = Path(knowledge_root)
+    if snapshot is None:
+        snapshot = IncentiveSnapshot(
+            generated_at=generated_at,
+            account={},
+            activities=[],
+            competitions=[],
+            power_pool_boards=[],
+            rule_pages={},
+            evidence=[
+                SourceEvidence(
+                    "knowledge",
+                    str(root),
+                    "Knowledge contract inputs",
+                    generated_at,
+                    stale=True,
+                    note="No live incentive snapshot was supplied.",
+                )
+            ],
+            refresh_errors=[
+                {
+                    "path": "incentive_snapshot",
+                    "error": "SnapshotUnavailable",
+                    "message": "No live incentive snapshot was supplied.",
+                }
+            ],
+        )
+    contract_inputs = _planner_contract_inputs(root)
+    planner_rules = rules_for_consumer(load_active_benchmark_rules(root, fallback_to_defaults=False), "research_planner")
+    options = []
+    for card in generate_research_options(snapshot, max_options=max_options):
+        option = option_card_to_dict(card)
+        option.update(contract_inputs)
+        options.append(_apply_planner_rule_annotations(option, planner_rules))
+    return {
+        "generated_at": generated_at,
+        "option_count": len(options),
+        "options": options,
+    }
 
 
 # Input: IncentiveSnapshot, path fragment, fallback title; Output: SourceEvidence; Purpose: choose the most relevant evidence row for one option card.

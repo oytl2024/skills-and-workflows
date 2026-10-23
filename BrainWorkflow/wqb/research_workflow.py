@@ -1,5 +1,6 @@
 import re
 from dataclasses import dataclass, field as dataclass_field
+from pathlib import Path
 from typing import Any, Iterable
 
 from wqb.benchmark import REPAIRABLE_CHECKS, benchmark_alpha_record
@@ -8,7 +9,7 @@ from wqb.benchmark import REPAIRABLE_CHECKS, benchmark_alpha_record
 STAGE_MAX_SIMULATIONS = {
     "scout": 30,
     "seed": 8,
-    "discovery": 50,
+    "discovery": 30,
     "repair": 8,
     "submit": 0,
 }
@@ -79,10 +80,13 @@ class WorkflowTask:
 def cap_simulation_count(stage: str, requested_count: int) -> int:
     """Input: workflow stage and requested count. Output: capped count. Enforce stage batch budgets."""
     normalized = stage.strip().lower()
-    if normalized == "scout" and int(requested_count) > 0:
-        return STAGE_MAX_SIMULATIONS["scout"]
     stage_cap = STAGE_MAX_SIMULATIONS.get(normalized, requested_count)
     return max(0, min(int(requested_count), stage_cap))
+
+
+def stage_budget_summary() -> dict[str, int]:
+    """Input: none. Output: mutable defensive copy of stage caps. Expose simulation budgets to UI and docs."""
+    return dict(STAGE_MAX_SIMULATIONS)
 
 
 def max_parenthesis_depth(expression: str) -> int:
@@ -279,6 +283,18 @@ def workflow_action_for_platform_issue(message: str) -> dict[str, str]:
     }
 
 
-def is_near_miss(alpha_record: dict[str, Any]) -> bool:
-    """Input: alpha record dict. Output: bool. Detect good-core Alphas suitable for Repair stage."""
-    return benchmark_alpha_record(alpha_record).label == "repairable_signal"
+def is_near_miss(
+    alpha_record: dict[str, Any],
+    benchmark_rules: list[Any] | None = None,
+    knowledge_root: str | Path | None = None,
+    run_dir: str | Path | None = None,
+    consumer: str = "repair_loop",
+) -> bool:
+    """Input: alpha, rules, roots, consumer. Output: bool. Apply scoped authority to Repair promotion."""
+    return benchmark_alpha_record(
+        alpha_record,
+        benchmark_rules=benchmark_rules,
+        knowledge_root=knowledge_root,
+        run_dir=run_dir,
+        consumer=consumer,
+    ).label == "repairable_signal"

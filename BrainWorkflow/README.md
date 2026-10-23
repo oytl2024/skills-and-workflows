@@ -2,9 +2,11 @@
 
 BrainWorkflow is a maintainable WorldQuant BRAIN research workflow for alpha discovery, simulation, check triage, repair, and knowledge-base iteration.
 
+The structured-hypothesis V2 deployment, activation boundary and current coverage are described in [V2 rollout](docs/operations/v2-rollout.md). The shared default remains off; local activation does not resume existing runs.
+
 The project is intentionally principle-led:
 
-1. Refresh current platform rules, activities, Power Pool boards, themes, competitions, and account state.
+1. Refresh platform rules, activities, Power Pool boards, themes, competitions, and account state during separately requested knowledge maintenance; routine research reuses verified local resources.
 2. Score current opportunities against long-term consultant incentives and alpha-pool quality principles.
 3. Present option cards to the user.
 4. Create a concrete execution plan only after the user chooses an option.
@@ -52,6 +54,26 @@ Run from this folder:
 python -m unittest discover -s tests -v
 ```
 
+## Orchestrator-First Workflow
+
+Long-term research should start from the Orchestrator commands instead of manually chaining low-level commands.
+
+```powershell
+python -m wqb.cli workflow-start --objective "Power Pool" --selected-option-id option-1
+python -m wqb.cli workflow-continue
+python -m wqb.cli workflow-status
+python -m wqb.cli workflow-resume
+```
+
+The Orchestrator owns `run_state.json`, `workflow_events.jsonl`, Research Record sync, candidate approval, and approved candidate queue records. Legacy commands remain useful for diagnostics and focused recovery, but they are not the source of official workflow state.
+
+Operational docs:
+
+- `docs/operations/operating_guide.md`: how to run research, readiness, knowledge maintenance, and console state inspection.
+- `docs/operations/maintainer_handoff.md`: how future Codex sessions should maintain and extend the project without relying on a long chat context.
+- `docs/superpowers/specs/2026-07-21-knowledge-workflow-operating-system-design.md`: canonical knowledge and workflow operating system contract.
+- Platform data-field maintenance and selectable console operation are documented in `docs/operations/operating_guide.md`.
+
 ## Current Phase
 
 Phase 2 is implementing the principle-led research planner. The active design is:
@@ -84,7 +106,8 @@ Example foundation files live under `docs/knowledge/`:
 
 The startup layer separates maintenance from research execution:
 
-- `bootstrap-knowledge` materializes Data Ledger, Template Library, Freshness Manifest, and bootstrap reports into the shared Obsidian vault.
+- `bootstrap-knowledge` creates missing initial Data Ledger, Template Library, Freshness Manifest, and bootstrap report scaffolds in a new or incomplete vault. It preserves existing compiled artifacts and is not a post-refresh compile command.
+- `compile-research-records` syncs raw research records from completed runs into `machine/research_records.jsonl` and selected human case reports under `wiki/60_research_cases/`.
 - `readiness-check` validates required artifacts, parseability, freshness, batch size, live API permission, and submit confirmation.
 - `launch-workflow` writes a run manifest, readiness report, and subagent handoff packets before research execution. In strict research or submit-candidate modes, blocked readiness writes only a blocked readiness report and does not create a run manifest or handoffs.
 - `schedule-research` and live simulation/repair commands run the same readiness gate before writing schedules or contacting the API.
@@ -93,6 +116,24 @@ Example:
 
 ```powershell
 python -m wqb.cli bootstrap-knowledge --knowledge-root C:\Users\oytl\Desktop\pyproject\brain\knowledge
+python -m wqb.cli compile-research-records --knowledge-root C:\Users\oytl\Desktop\pyproject\brain\knowledge
 python -m wqb.cli readiness-check --knowledge-root C:\Users\oytl\Desktop\pyproject\brain\knowledge --readiness-mode plan-only
 python -m wqb.cli launch-workflow --workflow-objective current-incentives --workflow-mode plan-only
 ```
+
+Run `bootstrap-knowledge` only when initializing or recovering missing vault structure. After platform data-field refreshes, use `compile-data-ledger`; after research sessions, use `compile-research-records`.
+
+## Workflow Console
+
+The local console is a small standard-library browser UI for operating the existing CLI and Orchestrator without relying on a long chat context.
+
+```powershell
+python -m wqb.cli launch-console --knowledge-root C:\Users\oytl\Desktop\pyproject\brain\knowledge --run-dir C:\Users\oytl\Desktop\pyproject\brain\runs --console-port 8765
+```
+
+It shows readiness, freshness, research options, current workflow state, job history, and the workflow proposal inbox. Console actions write durable job records under `runs/console_jobs/` and update recovery context files.
+
+Knowledge maintenance is deliberately split:
+
+- Compile research records after research sessions with `compile-research-records`.
+- Compile refreshed platform data with `compile-data-ledger`, run `compile-knowledge --apply-cleanup`, then verify with `knowledge-health-check` before starting research.

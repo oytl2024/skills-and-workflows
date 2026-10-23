@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BrainWorkflow architecture</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><p class="eyebrow">BrainWorkflow / Project map</p><h1>System architecture</h1></div>
+    <div class="top-actions"><div class="view-switch" role="group" aria-label="Map view"><button type="button" data-view="workflow" aria-pressed="true">Workflow</button><button type="button" data-view="modules" aria-pressed="false">Modules</button></div><span id="map-status" aria-live="polite">Loading map</span><button id="fit-graph" type="button" title="Fit graph">Fit</button></div>
+  </header>
+  <main class="workspace">
+    <aside class="module-rail" aria-label="Map items">
+      <label for="module-search">Search workflow</label>
+      <input id="module-search" type="search" placeholder="Step or module" aria-label="Search map">
+      <nav id="module-list" aria-label="Map item list"></nav>
+    </aside>
+    <section class="graph-panel" aria-label="Architecture graph">
+      <div class="graph-key"><span class="key implemented">Implemented</span><span class="key partial">Partial</span><span class="key planned">Planned</span><span class="key blocked">Blocked</span><span class="key manual">Manual</span></div>
+      <div id="architecture-graph" role="img" aria-label="Interactive project graph"></div>
+      <div class="graph-caption">Select a step or connection to inspect its real implementation.</div>
+    </section>
+    <aside id="module-detail" class="detail-pane" aria-live="polite"><h2>Project map</h2><p>Select a module to inspect its responsibilities and evidence.</p></aside>
+  </main>
+  <script src="/cytoscape.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

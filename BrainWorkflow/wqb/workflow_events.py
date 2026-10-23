@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+import json
+from pathlib import Path
+from typing import Any
+
+
+EVENTS_FILENAME = "workflow_events.jsonl"
+
+
+@dataclass(frozen=True)
+class WorkflowEvent:
+    event_type: str
+    occurred_at: str
+    payload: dict[str, Any]
+
+
+class WorkflowEventReadError(ValueError):
+    """Input: malformed workflow event data. Output: exception. Block unsafe event-backed recovery."""
+
+
+def append_workflow_event(run_dir: str | Path, event_type: str, payload: dict[str, object], occurred_at: str) -> Path:
+    """Input: run dir, event type, payload, timestamp. Output: event path. Append one workflow event."""
+    root = Path(run_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / EVENTS_FILENAME
+    event = WorkflowEvent(event_type=str(event_type), occurred_at=str(occurred_at), payload=dict(payload))
+    if path.exists() and path.stat().st_size:
+        with path.open("rb+") as handle:
+            handle.seek(-1, 2)
+            if handle.read(1) not in {b"\n", b"\r"}:
+                handle.seek(0, 2)
+                handle.write(b"\n")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(asdict(event), ensure_ascii=False, sort_keys=True) + "\n")
+    return path
+
+
+def read_workflow_events(run_dir: str | Path) -> list[WorkflowEvent]:
+    """Input: run dir. Output: workflow events. Read valid append-only events in file order."""
+    return _read_workflow_events(run_dir, strict=False)
+
+
+def read_workflow_events_strict(run_dir: str | Path) -> list[WorkflowEvent]:
+    """Input: run dir. Output: workflow events. Read events or raise on any malformed non-empty row."""
+    return _read_workflow_events(run_dir, strict=True)
+
+
+def _read_workflow_events(run_dir: str | Path, strict: bool) -> list[WorkflowEvent]:
+    """Input: run dir and strict flag. Output: workflow events. Parse workflow event rows."""
+    path = Path(run_dir) / EVENTS_FILENAME
+    if not path.exists():
+        return []
+    events: list[WorkflowEvent] = []
+    for line_number, raw_line in enumerate(path.read_bytes().splitlines(), start=1):
+        try:
+            line = raw_line.decode("utf-8")
+        except UnicodeDecodeError:
+            if strict:
+                raise WorkflowEventReadError(f"malformed UTF-8 event row {line_number}") from None
+            continue
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            if strict:
+                raise WorkflowEventReadError(f"malformed JSON event row {line_number}") from None
+            continue
+        if not isinstance(row, dict) or "event_type" not in row or "occurred_at" not in row:
+            if strict:
+                raise WorkflowEventReadError(f"malformed event object row {line_number}")
+            continue
+        payload = row.get("payload", {})
+        if not isinstance(payload, dict):
+            if strict:
+                raise WorkflowEventReadError(f"malformed event payload row {line_number}")
+            continue
+        events.append(
+            WorkflowEvent(
+                event_type=str(row["event_type"]),
+                occurred_at=str(row["occurred_at"]),
+                payload=payload,
+            )
+        )
+    return events
