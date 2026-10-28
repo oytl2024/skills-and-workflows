@@ -157,6 +157,32 @@ def _material(root: Path, row: dict) -> tuple[dict, str]:
     return normalized, text
 
 
+def verify_source_equivalence(root: Path, frozen: dict, registered: dict) -> dict:
+    """Input: vault Path and frozen/registered source dicts. Output: verified index/text dict.
+
+    Only the optional full-file digest is enrichment. Every other supplied field
+    retains exact authority; both claimed digests must match the consumed bytes.
+    """
+    if not isinstance(frozen, dict) or not isinstance(registered, dict):
+        raise ValueError('source equivalence requires two registered source objects')
+    frozen_identity = {key: value for key, value in frozen.items() if key != 'file_sha256'}
+    registered_identity = {key: value for key, value in registered.items() if key != 'file_sha256'}
+    if _digest(frozen_identity) != _digest(registered_identity):
+        raise ValueError('source differs from canonical registration: ' + str(frozen.get('path', '')))
+    verified = []
+    for row in (registered, frozen):
+        normalized, text = _material(root, row)
+        if 'file_sha256' in row:
+            claimed = row['file_sha256']
+            if (not isinstance(claimed, str) or not re.fullmatch(r'[a-fA-F0-9]{64}', claimed)
+                    or claimed.lower() != normalized['file_sha256']):
+                raise ValueError('asserted source full-file digest differs from consumed bytes')
+        verified.append((normalized, text))
+    if verified[0][0]['file_sha256'] != verified[1][0]['file_sha256']:
+        raise ValueError('source bytes changed during equivalence verification')
+    return dict(source_index=verified[0][0], source_text=verified[0][1])
+
+
 def _target_material(text: str, target_ids: list[str]) -> str:
     """Input: complete source text/target IDs. Output: complete Markdown sections, never byte slices.
 

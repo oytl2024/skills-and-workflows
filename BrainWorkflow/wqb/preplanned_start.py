@@ -19,7 +19,7 @@ from wqb.lockfile import json_lock_transition_guard
 from wqb.research_group import MAX_LANES, read_group
 from wqb.runtime_control import _write
 from wqb.semantic_compilation import (_digest, _material, _safe,
-    verify_design_materials)
+    verify_design_materials, verify_source_equivalence)
 from wqb.semantic_contracts import SemanticPolicy
 from wqb.template_binding import _scope_matches
 from wqb.workflow_stage_adapters import (_row_has_measured_platform_coverage,
@@ -109,9 +109,10 @@ def _source_context(root: Path, requested: dict, registered: dict) -> dict:
     """Input: vault Path/requested/canonical index dicts. Output: actual raw texts; never repair hashes."""
     texts = {}
     for path, row in requested.items():
-        if _digest(row) != _digest(registered.get(path)):
+        if row.get('path') != path:
             raise ValueError('source differs from canonical registration: ' + path)
-        _, texts[path] = _material(root, row)
+        verified = verify_source_equivalence(root, row, registered.get(path))
+        texts[path] = verified['source_text']
         captured = datetime.fromisoformat(row['captured_at'].replace('Z', '+00:00'))
         if captured.tzinfo is None:
             raise ValueError('source capture timezone missing: ' + path)
