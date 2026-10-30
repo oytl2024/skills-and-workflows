@@ -370,15 +370,34 @@ class SemanticCompileConsoleTests(unittest.TestCase):
         self.assertIn('status', result['notification'])
         self.assertTrue((Path(result['job'])/'command_result.json').exists())
 
-    def test_direct_migration_and_wiki_writers_refuse_active_release(self):
+    def test_active_release_refuses_migration_but_allows_owned_experience_pages(self):
+        """Input: isolated active release. Output: assertions. Preserve semantic authority while updating owned experience pages."""
         self.assertTrue(callable(getattr(compiler, 'compile_semantic_knowledge_command', None)), 'semantic command missing')
         self.assertEqual(self.invoke()['status'], 'completed')
         from wqb.knowledge_vault_migration import run_knowledge_vault_migration
         from wqb.operator_semantics import compile_operator_semantics
         from wqb.knowledge_experience_compile import compile_human_experience_wiki
-        for function in (run_knowledge_vault_migration, compile_operator_semantics, compile_human_experience_wiki):
-            with self.assertRaisesRegex(ValueError, 'semantic'):
+        receipt = read_semantic_release(self.root)
+        pointer = self.root / 'machine/semantic_release.json'
+        protected = [pointer, *(self.root / 'machine/semantic_releases').rglob('*'),
+                     self.root / 'wiki/20_data_semantics.md',
+                     self.root / 'wiki/30_template_and_operator_patterns.md']
+        before = {path: path.read_bytes() for path in protected if path.is_file()}
+        for function in (run_knowledge_vault_migration, compile_operator_semantics):
+            with self.subTest(writer=function.__name__), self.assertRaisesRegex(ValueError, 'semantic'):
                 function(self.root, '2026-10-13T00:00:00Z')
+        owned_page = self.root / 'wiki/10_factor_principles.md'
+        owned_page.write_text('# Stale experience\n', encoding='utf-8')
+        report = compile_human_experience_wiki(self.root, '2026-10-14T00:00:00Z')
+        self.assertEqual(report['page_count'], 4)
+        self.assertIn(str(owned_page), report['page_paths'])
+        self.assertNotIn('Stale experience', owned_page.read_text(encoding='utf-8'))
+        for name in ('20_data_semantics.md', '30_template_and_operator_patterns.md'):
+            page = self.root / 'wiki' / name
+            self.assertIn(page, before)
+            self.assertNotIn(str(page), report['page_paths'])
+        self.assertEqual({path: path.read_bytes() for path in before}, before)
+        self.assertEqual(read_semantic_release(self.root), receipt)
 
     def test_notification_failure_is_deduplicated(self):
         self.assertTrue(callable(getattr(compiler, 'compile_semantic_knowledge_command', None)), 'semantic command missing')

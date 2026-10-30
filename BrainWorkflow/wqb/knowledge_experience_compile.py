@@ -10,7 +10,6 @@ from urllib.parse import quote
 from wqb.knowledge_contracts import canonical_source_family, render_front_matter
 from wqb.knowledge_paths import (
     existing_machine_resource_path,
-    machine_resource_path,
     relative_to_knowledge_root,
 )
 from wqb.research_record import load_research_record_ledger, repair_report_text, render_repair_report_lines
@@ -158,10 +157,11 @@ def _canonical_sources(
     resource_names: list[str],
     rows: list[dict[str, Any]],
     source_key: str,
+    receipt: dict | None = None,
 ) -> list[str]:
     """Input: root, resources, rows, source key. Output: canonical raw or machine provenance paths."""
     sources = {
-        relative_to_knowledge_root(machine_resource_path(knowledge_root, name), knowledge_root)
+        relative_to_knowledge_root(existing_machine_resource_path(knowledge_root, name, receipt=receipt), knowledge_root)
         for name in resource_names
     }
     for row in rows:
@@ -181,6 +181,14 @@ def _write_page(path: Path, front_matter: str, title: str, lines: list[str]) -> 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(front_matter + "\n" + f"# {title}\n\n" + "\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return path
+
+
+def _validate_research_rows(rows: list[Any]) -> list[dict[str, Any]]:
+    """Input: decoded JSONL rows list. Output: dict rows list. Reject malformed research records before derived writes."""
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            raise ValueError(f"research_records.jsonl row {index} must be a JSON object")
+    return rows
 
 
 def select_research_case_records(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
@@ -293,10 +301,12 @@ def compile_research_case_reports(
     knowledge_root: str | Path,
     generated_at: str,
     limit: int,
+    *,
+    records: list[dict[str, Any]] | None = None,
 ) -> list[Path]:
-    """Input: knowledge root, timestamp, limit. Output: report paths. Compile selected research cases for humans."""
+    """Input: root path, timestamp str, limit int, optional decoded records list. Output: Path list. Compile validated research cases."""
     root = Path(knowledge_root)
-    rows = load_research_record_ledger(root)
+    rows = _validate_research_rows(load_research_record_ledger(root) if records is None else records)
     reports: list[Path] = []
     selected_paths: set[Path] = set()
     for row in select_research_case_records(rows, limit):
@@ -320,17 +330,19 @@ def compile_human_experience_wiki(
     max_case_reports: int = 20,
 ) -> dict[str, Any]:
     """Input: knowledge root, timestamp, case limit. Output: compact human wiki compile summary."""
-    from wqb.semantic_publication import read_semantic_release
-    if read_semantic_release(Path(knowledge_root))['release_id'] is not None:
-        raise ValueError('active semantic release: direct wiki20/30 overwrite refused; use compile-semantic-knowledge')
+    from wqb.semantic_publication import WIKI_TARGETS, read_semantic_release, validate_semantic_receipt
     root = Path(knowledge_root)
+    receipt = read_semantic_release(root)
+    active = receipt['release_id'] is not None
+    research_rows = _validate_research_rows(load_research_record_ledger(root))
     generated = generated_at or _now()
     ledger_rows = _read_jsonl_rows(existing_machine_resource_path(root, "data_ledger"))
-    template_rows = _read_jsonl_rows(existing_machine_resource_path(root, "template_library"))
+    template_rows = _read_jsonl_rows(existing_machine_resource_path(root, "template_library", receipt=receipt))
+    validate_semantic_receipt(root, receipt)
     benchmark_rows = _read_jsonl_rows(existing_machine_resource_path(root, "benchmark_rules"))
 
     data_sources = _canonical_sources(root, ["data_ledger"], ledger_rows, "source_paths")
-    template_sources = _canonical_sources(root, ["template_library"], template_rows, "source_paths")
+    template_sources = _canonical_sources(root, ["template_library"], template_rows, "source_paths", receipt)
     benchmark_sources = _canonical_sources(root, ["benchmark_rules"], benchmark_rows, "evidence_paths")
     workflow_sources = sorted(set(data_sources + template_sources + benchmark_sources))
     engineering_sources = workflow_sources
@@ -354,8 +366,14 @@ def compile_human_experience_wiki(
     if not benchmark_actions:
         benchmark_actions = ["- No persisted benchmark rules are available yet."]
 
+    def write_owned_page(path: Path, front: str, title: str, lines: list[str]) -> Path | None:
+        """Input: page Path/front/title strings/body list. Output: Path or None. Preserve publication-owned semantic pages."""
+        if active and path.relative_to(root).as_posix() in WIKI_TARGETS:
+            return None
+        return _write_page(path, front, title, lines)
+
     page_paths = [
-        _write_page(
+        write_owned_page(
             root / HUMAN_WIKI_FILES["start_here"],
             _front_matter(generated, workflow_sources, ["human_learning", "workflow_maintenance"]),
             "Start Here",
@@ -372,18 +390,18 @@ def compile_human_experience_wiki(
                 "- Keep machine records complete and human pages limited to reusable decisions.",
             ],
         ),
-        _write_page(
+        write_owned_page(
             root / HUMAN_WIKI_FILES["factor_principles"],
             _front_matter(generated, template_sources + benchmark_sources, ["research_planner", "candidate_gate"]),
             "Factor Principles",
             [
                 "- Start from a plain economic claim that the selected field can express.",
-                "- Require novelty against self-correlation and production correlation before scaling a family.",
+                "- Prefer distinct mechanisms and data; run cheap baseline checks before SELF/PROD correlation checks.",
                 "- Promote stable PnL near misses to repair review; change one repair lever at a time.",
-                "- Use batches of 30 candidates so outcomes are comparable while the search remains bounded.",
+                "- Scout/Discovery batches contain at most 30 novel valid candidates; never pad duplicates to reach a minimum.",
             ],
         ),
-        _write_page(
+        write_owned_page(
             root / HUMAN_WIKI_FILES["data_semantics"],
             _front_matter(generated, data_sources, ["research_planner", "template_selection"]),
             "Data Semantics",
@@ -398,7 +416,7 @@ def compile_human_experience_wiki(
                 *_bullets(underexplored_labels, "No underexplored categories are available yet."),
             ],
         ),
-        _write_page(
+        write_owned_page(
             root / HUMAN_WIKI_FILES["template_operator_patterns"],
             _front_matter(generated, template_sources, ["research_planner", "repair_loop"]),
             "Template And Operator Patterns",
@@ -416,7 +434,7 @@ def compile_human_experience_wiki(
                 *_bullets(_count_scalar_values(template_rows, "correlation_risk"), "Classify crowding risk before expanding a template family."),
             ],
         ),
-        _write_page(
+        write_owned_page(
             root / HUMAN_WIKI_FILES["benchmark_repair_rules"],
             _front_matter(generated, benchmark_sources, ["triage", "repair_loop", "candidate_gate"]),
             "Benchmark And Repair Rules",
@@ -426,7 +444,7 @@ def compile_human_experience_wiki(
                 *benchmark_actions,
             ],
         ),
-        _write_page(
+        write_owned_page(
             root / HUMAN_WIKI_FILES["engineering_lessons"],
             _front_matter(generated, engineering_sources, ["workflow_maintenance", "human_learning"]),
             "Engineering Lessons",
@@ -438,7 +456,9 @@ def compile_human_experience_wiki(
             ],
         ),
     ]
-    case_report_paths = compile_research_case_reports(root, generated, max_case_reports)
+    page_paths = [path for path in page_paths if path is not None]
+    case_report_paths = compile_research_case_reports(root, generated, max_case_reports, records=research_rows)
+    validate_semantic_receipt(root, receipt)
     return {
         "generated_at": generated,
         "page_count": len(page_paths),

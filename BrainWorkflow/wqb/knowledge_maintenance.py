@@ -134,8 +134,12 @@ def run_knowledge_maintenance(
 ) -> dict[str, Any]:
     """Input: knowledge root and compile settings. Output: maintenance report. Run compile, cleanup, and health verification."""
     generated = generated_at or _now()
+    pointer = Path(knowledge_root) / "machine" / "semantic_release.json"
+    if pointer.exists() or pointer.is_symlink():
+        return _maintain_active_release(Path(knowledge_root), generated, apply_cleanup, max_case_reports)
     ensure_knowledge_dirs(knowledge_root)
     migration = run_knowledge_vault_migration(knowledge_root, generated)
+    migration["mode"] = "legacy_initialization"
     decision_migration = migrate_legacy_decision_artifacts(knowledge_root)
     wiki = compile_human_experience_wiki(knowledge_root, generated, max_case_reports=max_case_reports)
     interaction = compile_interaction_lessons(knowledge_root, generated)
@@ -182,4 +186,50 @@ def run_knowledge_maintenance(
     )
     report["verification_report_path"] = str(verification_report_path) if verification_report_path else None
     _write_report(knowledge_root, report)
+    return report
+
+
+def _maintain_active_release(root: Path, generated: str, apply_cleanup: bool, max_case_reports: int) -> dict[str, Any]:
+    """Input: root Path, timestamp str, cleanup bool, case limit int. Output: dict receipt. Compile owned outputs without legacy migration."""
+    from wqb.semantic_publication import read_semantic_release
+
+    report = asdict(KnowledgeMaintenanceReport(
+        "knowledge_maintenance", generated, "blocked",
+        {"mode": "active_release_preserved", "status": "blocked"},
+        {"status": "skipped", "reason": "active semantic release; legacy migration not applicable"},
+        {"status": "not_started"}, {"status": "not_started"},
+        {"status": "skipped", "removed_count": 0}, {"status": "not_started"},
+    ))
+    report["verification_report_path"] = None
+    step = "migration"
+    try:
+        receipt = read_semantic_release(root)
+        if receipt["release_id"] is None:
+            raise ValueError("active semantic pointer disappeared during maintenance")
+        report["migration"].update(status="completed", release_id=receipt["release_id"])
+        ensure_knowledge_dirs(root)
+        step = "wiki"
+        report[step] = compile_human_experience_wiki(root, generated, max_case_reports=max_case_reports)
+        report[step]["status"] = "completed"
+        step = "interaction_lessons"
+        report[step] = compile_interaction_lessons(root, generated)
+        if read_semantic_release(root) != receipt:
+            raise ValueError("semantic release selection changed during maintenance")
+        step = "cleanup"
+        if apply_cleanup:
+            raise ValueError("active-release cleanup refused: source preservation is not verified; legacy migration was skipped")
+        report[step] = apply_obsolete_active_cleanup(
+            root, generated, dry_run=True,
+        )
+        report[step]["status"] = "blocked" if report[step].get("blocked") else "completed"
+        step = "health"
+        report[step] = evaluate_knowledge_contract_health(root)
+        if read_semantic_release(root) != receipt:
+            raise ValueError("semantic release selection changed during maintenance")
+        if report["health"].get("issue_count", 0) == 0 and report["cleanup"]["status"] == "completed":
+            report["status"] = "completed"
+    except (OSError, ValueError, RuntimeError) as error:
+        report[step] = {**report[step], "status": "blocked", "error": str(error)}
+        report["error"] = f"{step}: {error}"
+    _write_report(root, report)
     return report

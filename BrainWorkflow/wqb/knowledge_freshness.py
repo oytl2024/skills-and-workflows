@@ -160,6 +160,16 @@ def evaluate_knowledge_contract_health(knowledge_root: str | Path) -> dict[str, 
     raw_root = root / "raw"
     wiki_root = root / "wiki"
     source_index = raw_root / "source_index.md"
+    from wqb.semantic_publication import read_semantic_release
+
+    selected_resources: set[Path] = set()
+    try:
+        receipt = read_semantic_release(root)
+        if receipt["release_id"] is not None:
+            selected_resources = {Path(path).resolve() for path in receipt["paths"].values()}
+    except (OSError, ValueError):
+        # The clean-structure evaluator below reports corrupt publication evidence.
+        pass
     raw_paths = [
         path
         for path in (sorted(raw_root.rglob("*.md")) if raw_root.exists() else [])
@@ -183,7 +193,7 @@ def evaluate_knowledge_contract_health(knowledge_root: str | Path) -> dict[str, 
                     )
                     continue
                 family = canonical_source_family(resolved, root)
-                if not (family.startswith("raw/") or family.startswith("machine/")):
+                if not (family.startswith("raw/") or family.startswith("machine/") or resolved in selected_resources):
                     issues.append(
                         KnowledgeHealthIssue(
                             code="wiki_backlink_not_source_authority",
