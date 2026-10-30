@@ -8,7 +8,19 @@ import unittest
 from unittest.mock import patch
 
 
+FIXTURE_NOW = '2026-10-23T00:00:00Z'
+
+
 class PreplannedResearchAcceptanceTests(unittest.TestCase):
+    def setUp(self):
+        """Input: TestCase. Output: fixed default budget clock; explicit rollover timestamps remain effective."""
+        from wqb import daily_simulation_budget
+        clock = daily_simulation_budget._clock
+        budget_clock = patch.object(daily_simulation_budget, '_clock',
+                                    side_effect=lambda now: clock(now or FIXTURE_NOW))
+        budget_clock.start()
+        self.addCleanup(budget_clock.stop)
+
     def test_daily_rollover_releases_frozen_pair_without_refund_or_model_call(self):
         """Input: none. Output: None; next day funds the same pair while retaining lifetime usage and authority."""
         from tests.test_preplanned_start import PreplannedStartTests
@@ -72,7 +84,7 @@ class PreplannedResearchAcceptanceTests(unittest.TestCase):
         initial = dict(active=True, run_dir=str(run), status='running', current_stage='scout_seed')
         def step():
             """Input: none. Output: actual tree wait adapted to existing driver envelope, no fake transport."""
-            return {**initial, **continue_tree(run, fixture.config, '2026-10-23T00:00:00Z')}
+            return {**initial, **continue_tree(run, fixture.config, FIXTURE_NOW)}
         waiting = step()
         self.assertEqual(waiting['next_action'], 'daily-budget-wait', waiting)
         self.assertEqual(waiting['daily_simulation_budget']['remaining'], 1)
@@ -81,7 +93,7 @@ class PreplannedResearchAcceptanceTests(unittest.TestCase):
             """Input: wait slice float. Output: durable group Stop without sleeping or advancing authority."""
             stop_group(Path(group['group_dir']), group['request_revision'])
         result = run_workflow_driver(fixture.paths, dict(bound_group_lane=str(run)), step=step,
-            status_reader=lambda: initial, now_func=lambda: '2026-10-23T00:00:00Z', sleep_func=stop)
+            status_reader=lambda: initial, now_func=lambda: FIXTURE_NOW, sleep_func=stop)
         self.assertEqual(result['runtime_status'], 'paused')
 
     def test_report_scope_is_comparable_without_fabricating_capture_timestamp(self):
@@ -164,7 +176,7 @@ class PreplannedResearchAcceptanceTests(unittest.TestCase):
             return dict(run_dir=str(source), status='completed')
         for lane in group['lanes']:
             run = fixture.paths.run_root / lane['run_id']
-            first = tree_runtime.continue_tree(run, fixture.config, '2026-10-23T00:00:00Z',
+            first = tree_runtime.continue_tree(run, fixture.config, FIXTURE_NOW,
                 enable_live_api=True, source_batch_runner=source_runner)
             self.assertEqual(first['next_action'], 'workflow-auto-continue', first)
             final = tree_runtime.continue_tree(run, fixture.config, '2026-10-23T00:00:01Z')

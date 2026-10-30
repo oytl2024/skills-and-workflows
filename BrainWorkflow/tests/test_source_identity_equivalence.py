@@ -119,6 +119,24 @@ class SourceIdentityEquivalenceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'repair receipt'):
                 self.verify(row, row)
 
+    def test_hypothesis_source_never_expands_official_fact_authority(self):
+        from wqb import resource_evidence
+        path = 'raw/user/idea.txt'
+        source = dict(self.registered, path=path, source_type='user_note', source_family='raw/user')
+        ref = dict(source_path=path, sha256=self.digest, capture_date='2026-10-23',
+                   kind='hypothesis', experiment_refs=[])
+        index, texts = {path: source}, {path: 'Documented fixture facts.'}
+        with self.assertRaisesRegex(ValueError, 'official source family'):
+            resource_evidence._source(ref, index, texts)
+        self.assertEqual(resource_evidence.verify_hypothesis_source(ref, index, texts), texts[path])
+        with self.assertRaises(ValueError):
+            resource_evidence.verify_hypothesis_source(dict(ref, kind='documented'), index, texts)
+        with self.assertRaises(ValueError):
+            resource_evidence.verify_hypothesis_source(ref,
+                {path: dict(source, source_type='platform_learn_material')}, texts)
+        with self.assertRaisesRegex(ValueError, 'hash'):
+            resource_evidence.verify_hypothesis_source(ref, index, {path: 'Changed text'})
+
 
 if __name__ == '__main__':
     unittest.main()

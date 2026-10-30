@@ -86,6 +86,7 @@ FIELD_BATCH_CANDIDATE_BUFFER_MULTIPLIER = 3
 DEFAULT_MULTI_CHUNK_SLEEP_SECONDS = 0.0
 RETRY_PLANNED_MULTI_CHUNK_SLEEP_SECONDS = 30.0
 KNOWLEDGE_ROOT_ENV = "BRAIN_KNOWLEDGE_ROOT"
+MAX_FULL_SEMANTIC_PLAN_BYTES = 16_000_000
 
 
 class ReadinessGateError(RuntimeError):
@@ -3953,6 +3954,37 @@ def main() -> None:
     if args.command == 'compile-semantic-knowledge':
         config = load_config(args.config, overrides={})
         policy = dict(config.get('semantic_policy', {}))
+        full_local_mode = policy.pop('full_local_mode', 'bounded')
+        if full_local_mode not in {'bounded', 'prepare', 'execute'}:
+            raise ValueError('unsupported semantic_policy.full_local_mode')
+        if full_local_mode == 'prepare':
+            from wqb.knowledge_compile import prepare_full_semantic_compile
+            options = policy.get('full_local', {})
+            if not isinstance(options, dict):
+                raise ValueError('semantic_policy.full_local requires an object')
+            result = prepare_full_semantic_compile(Path(args.knowledge_root), options)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return
+        if full_local_mode == 'execute':
+            from wqb.full_semantic_compile import _json
+            from wqb.semantic_compilation import _safe
+            from wqb.full_semantic_model_worker import create_full_semantic_model_runner
+            from wqb.knowledge_compile import run_full_semantic_compile
+            options = policy.get('full_local', {})
+            if not isinstance(options, dict) or set(options) != {'plan_path'}:
+                raise ValueError('full-local execute accepts only frozen plan_path, not budget overrides')
+            root = Path(args.knowledge_root).absolute()
+            path = _safe(root, options['plan_path'])
+            if (path.name != 'plan.json' or path.parent.parent.name != 'semantic_jobs'
+                    or path.stat().st_size > MAX_FULL_SEMANTIC_PLAN_BYTES):
+                raise ValueError('invalid or oversized full semantic plan_path')
+            plan = _json(path.read_text(encoding='utf-8'))
+            runner = create_full_semantic_model_runner(root, plan, config)
+            result = run_full_semantic_compile(root, plan, executor=runner)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            if result['status'] != 'completed':
+                raise SystemExit(2)
+            return
         for flag, key in (('--max-mechanisms', 'max_mechanisms'), ('--max-conditions-per-mechanism', 'max_conditions_per_mechanism')):
             if cli_flag_present(sys.argv[1:], flag) or key not in policy:
                 policy[key] = getattr(args, key)

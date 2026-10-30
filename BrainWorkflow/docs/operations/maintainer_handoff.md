@@ -4,6 +4,35 @@ This document is for future Codex sessions and human maintainers. It replaces de
 
 ## First Files To Read
 
+### Full Local Semantic Maintenance (2026-10-30)
+
+The approved 2026-10-23 full-local compile and readiness-closure plans govern
+the current implementation. Read root `todo.md` for acceptance and unresolved
+work; implemented helpers do not mean real resources are research-ready.
+
+`full_semantic_compile` prepares complete local identity inventories with bounded
+jobs. `full_semantic_execution` owns finite reservations and non-replay dispatch
+claims; checkpoint and direct-worker routes authenticate the owning job before
+choosing a model path. A mutable checkpoint type or legacy manifest label is not
+authority. Original deadlines and durable cancellation supervise transport.
+`full_semantic_model_worker` handles strict wire encoding, not semantic trust.
+`full_semantic_coverage` streams inventory and reuses canonical authority/output
+validation in read-only mode. Binder and actual Start coverage remain explicitly
+unmeasured until their existing consumer validators are integrated.
+
+Ordinary maintenance preserves a selected semantic release rather than invoking
+legacy migration. Owned wiki outputs cannot replace publication-owned pages.
+Optional `field_semantics_ref` selectors require exact bytes, source generation,
+scope and documented premises; user notes support hypotheses only. No result is
+automatically activated or published. Missing local excerpts and stale sources
+remain blockers, not reasons to raise material bounds or renew capture dates.
+
+The actual zero-call reports are under the private vault's existing
+`machine/reports`; exact paths/counts are in root `todo.md`. They inventory local
+captures, not all fields currently offered by the live platform. Additional
+capture, model allowance, resource activation and old-run proof renewal require
+their own authority. Local verification does not resume a research mission.
+
 ### Preplanned Desktop Integration (2026-10-23)
 
 Read the outer workspace `milestone.md` and Latest handoff in `todo.md` first.

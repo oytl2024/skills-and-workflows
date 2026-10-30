@@ -26,6 +26,234 @@ DESIGN_AUDIT_MAX_FIELDS = 30
 DESIGN_AUDIT_MAX_SOURCES = 8
 
 
+def prepare_full_semantic_compile(root: Path, config: dict) -> dict:
+    """Input: local vault Path/config dict. Output: immutable full inventory plan; no model or publication."""
+    from wqb.full_semantic_compile import prepare_full_semantic_compile as prepare
+    return prepare(root, config)
+
+
+def run_full_semantic_compile(root: Path, plan: dict, *, executor) -> dict:
+    """Input: vault Path/frozen plan/explicit executor. Output: budgeted per-target results; no publication."""
+    from wqb.full_semantic_execution import run_full_semantic_compile as execute
+    return execute(root, plan, executor=executor)
+
+
+def build_full_semantic_report(root: Path, plan: dict) -> dict:
+    """Input: vault Path/frozen plan dict. Output: source-verified four-level coverage report, no activation."""
+    from wqb.full_semantic_coverage import build_full_semantic_report as report
+    return report(root, plan)
+
+
+def resolve_field_semantics(root: Path, row: dict) -> dict:
+    """Input: vault Path/current ledger dict. Output: classified selection dict; read-only, no publication authority.
+
+    Schema1 selects one exact target in a byte-bound job result. The validated
+    label is not evidence: source registration, scoped raw facts and every premise
+    are verified again. Economic cards stay hypotheses, never executable facts.
+    """
+    from copy import deepcopy
+    from wqb.data_ledger import (field_semantics_reference_from_dict, data_ledger_record_from_dict,
+                                 is_authoritative_data_record, _latest_scope_outcomes, _scope_key,
+                                 _manifest_certifies_scopes)
+    from wqb.knowledge_contracts import verified_field_extract_source
+    from wqb.knowledge_paths import existing_machine_resource_path
+    from wqb.resource_evidence import (_equal, _json_object, _invalid_constant,
+        verify_premise, resolve_timing_contract, verify_hypothesis_source)
+    from wqb.semantic_compilation import _safe, _read, MAX_OUTPUT_BYTES, verify_source_equivalence
+    from wqb.semantic_contracts import resource_scope_from_dict, hypothesis_card_from_dict, evidence_ref_from_dict
+
+    empty = dict(facts={}, hypothesis_cards=[], missing_facts=[])
+    if isinstance(row, dict) and 'field_semantics_ref' not in row:
+        return dict(empty, status='absent')
+    try:
+        root = Path(root)
+        ref = field_semantics_reference_from_dict(row['field_semantics_ref'], row)
+        path = _safe(root, ref['path'])
+        if path.stat().st_size > MAX_OUTPUT_BYTES:
+            raise ValueError('oversized field explanation result')
+        raw_result = path.read_bytes()
+        if hashlib.sha256(raw_result).hexdigest() != ref['sha256'].lower():
+            raise ValueError('field explanation full-file digest mismatch')
+        result = json.loads(raw_result, object_pairs_hook=_json_object, parse_constant=_invalid_constant)
+        if not isinstance(result, dict):
+            raise ValueError('expected field explanation object')
+        if (set(result) != {'schema_version', 'status', 'source_index', 'fields'}
+                or type(result['schema_version']) is not int or result['schema_version'] != 1
+                or result['status'] != 'validated' or not isinstance(result['fields'], list)):
+            raise ValueError('invalid field explanation result schema/status')
+        targets = {}
+        target_keys = {'dataset_id', 'field_id', 'field_type', 'allowed_scopes', 'literal_fact_explanation',
+                       'facts', 'hypothesis_cards', 'missing_facts'}
+        for target in result['fields']:
+            if not isinstance(target, dict) or set(target) != target_keys:
+                raise ValueError('invalid field explanation target fields')
+            key = (target['dataset_id'], target['field_id'])
+            if any(not isinstance(value, str) or not value for value in key) or key in targets:
+                raise ValueError('duplicate or invalid field explanation identity')
+            targets[key] = target
+        target = targets.get((row['dataset_id'], row['field_id']))
+        if target is None or target['field_type'] != row.get('field_type'):
+            raise ValueError('field explanation target identity/type mismatch')
+        scope_keys = ('instrument_type', 'region', 'delay', 'universe')
+        scopes = row.get('available_scopes', [{key: row.get(key) for key in scope_keys}])
+        if not isinstance(scopes, list) or not scopes:
+            raise ValueError('missing exact field scopes')
+        scopes = [resource_scope_from_dict(scope) for scope in scopes]
+        primary = resource_scope_from_dict({key: row.get(key) for key in scope_keys})
+        if primary not in scopes:
+            raise ValueError('primary field scope conflicts with captured scopes')
+        if not isinstance(target['allowed_scopes'], list) or not target['allowed_scopes']:
+            raise ValueError('missing allowed scopes')
+        allowed = [resource_scope_from_dict(scope) for scope in target['allowed_scopes']]
+        if any(scope not in allowed for scope in scopes):
+            raise ValueError('field explanation scope mismatch')
+        if not is_authoritative_data_record(data_ledger_record_from_dict(row)):
+            raise ValueError('field requires current certified measured capture')
+        frozen = result['source_index']
+        if not isinstance(frozen, dict) or not frozen:
+            raise ValueError('missing field explanation sources')
+        registered = {}
+        index_path = existing_machine_resource_path(root, 'source_index')
+        for source in _audit_resource_rows(index_path, root):
+            source_path = source.get('path')
+            if source_path in frozen:
+                if source_path in registered and not _equal(registered[source_path], source):
+                    raise ValueError('conflicting canonical source registrations')
+                registered[source_path] = source
+        index, texts = {}, {}
+        for source_path, source in frozen.items():
+            if not isinstance(source, dict) or source.get('path') != source_path:
+                raise ValueError('field source index identity mismatch')
+            verified = verify_source_equivalence(root, source, registered.get(source_path))
+            index[source_path], texts[source_path] = verified['source_index'], verified['source_text']
+        source_paths = row.get('source_paths')
+        if not isinstance(source_paths, list) or not source_paths or any(not isinstance(path, str) for path in source_paths):
+            raise ValueError('missing current field source paths')
+        source_proofs = []
+        for source_path in source_paths:
+            original = _safe(root, source_path, source=True)
+            for scope in scopes:
+                proofs = [source_path] if source_path in index else []
+                if not proofs:
+                    for proof_path, source in index.items():
+                        if source.get('content_status') != 'verified_raw_extract':
+                            continue
+                        origin = verified_field_extract_source(root, proof_path, row['dataset_id'], row['field_id'],
+                                                              {_scope_key(scope)})
+                        if origin is not None and origin.resolve() == original.resolve():
+                            proofs.append(proof_path)
+                if not proofs:
+                    raise ValueError('current field source lacks exact-scope original or certified excerpt proof')
+                source_proofs.extend(dict(source_path=source_path, proof_path=proof, scope=scope) for proof in proofs)
+        proof_paths = {proof['proof_path'] for proof in source_proofs}
+        literal = target['literal_fact_explanation']
+        if not isinstance(literal, str) or not literal.strip() or literal != row.get('field_description'):
+            raise ValueError('literal explanation must retain original field description')
+        # Verify whole field objects to bind type, description, coverage and optional
+        # facts to exact scope; another scope's coverage never certifies this row.
+        for scope in scopes:
+            found = False
+            for proof in source_proofs:
+                if proof['scope'] != scope:
+                    continue
+                source_path = proof['proof_path']
+                source = index[source_path]
+                if source['captured_at'][:10] != row.get('source_updated_at'):
+                    raise ValueError('field capture date mismatch')
+                for field, dataset, captured_scope in _coverage_source_fields(texts[source_path]):
+                    if dataset.get('id') != row['dataset_id'] or field.get('id') != row['field_id'] or not _equal(captured_scope, scope):
+                        continue
+                    evidence = dict(source_path=source_path, sha256=source['content_hash'],
+                                    capture_date=source['captured_at'][:10], kind='documented', experiment_refs=[])
+                    premise = dict(evidence_ref=evidence, locator=dict(kind='json_value',
+                        row_identity=dict(dataset_id=row['dataset_id'], field_id=row['field_id'], scope=scope),
+                        value_path=['field'], expected_value=field))
+                    verify_premise(premise, index, texts)
+                    capture_dir = (root / proof['source_path']).parent
+                    for filename in ('manifest.json', 'scopes.jsonl'):
+                        _safe(root, (capture_dir / filename).relative_to(root).as_posix())
+                    outcomes = _latest_scope_outcomes(capture_dir)
+                    manifest = _read(capture_dir / 'manifest.json')
+                    outcome = outcomes.get(_scope_key(scope), {})
+                    if (str(manifest.get('generated_at', ''))[:10] != row.get('source_updated_at')
+                            or not _manifest_certifies_scopes(manifest, outcomes, {_scope_key(scope)})
+                            or outcome.get('sampling_mode') == 'stratified' or outcome.get('field_budget', 0)):
+                        raise ValueError('field requires current exact-scope capture certification')
+                    if outcome.get('capture_generation_id'):
+                        generation = deepcopy(premise)
+                        generation['locator'].update(value_path=['capture_generation_id'],
+                            expected_value=outcome['capture_generation_id'])
+                        verify_premise(generation, index, texts)
+                    if (field.get('type') != row.get('field_type') or field.get('description') != literal
+                            or field.get('coverage', 0.0) != row.get('coverage')):
+                        raise ValueError('current field facts conflict with source generation')
+                    for name in ('units', 'vector_grain', 'available_at'):
+                        if name in row and (name not in field or not _equal(row[name], field[name])):
+                            raise ValueError('current optional field fact conflicts with raw: ' + name)
+                    found = True
+            if not found:
+                raise ValueError('no exact-scope field source proof')
+        facts = target['facts']
+        if not isinstance(facts, dict) or set(facts) - {'units', 'vector_grain', 'available_at', 'timing_contract'}:
+            raise ValueError('unsupported field fact key')
+        selected = {}
+        for name, claim in facts.items():
+            if not isinstance(claim, dict) or set(claim) != {'value', 'premises'} or not isinstance(claim['premises'], list) or not claim['premises']:
+                raise ValueError('field fact requires value and documented premises')
+            value = claim['value']
+            if name == 'timing_contract':
+                if claim['premises'] != value.get('premises'):
+                    raise ValueError('timing fact premises differ from contract')
+                if any(premise['evidence_ref']['source_path'] not in proof_paths
+                       for premise in claim['premises'] if premise['locator']['kind'] == 'json_value'):
+                    raise ValueError('timing field premise belongs to another source generation')
+                for scope in scopes:
+                    frozen_scope = dict(scope, as_of=row['source_updated_at'] + 'T23:59:59+00:00')
+                    if resolve_timing_contract(value, row, frozen_scope, index, texts)['status'] != 'supported':
+                        raise ValueError('unsupported field timing contract')
+            else:
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError('field fact requires nonempty literal string')
+                proved = []
+                for premise in claim['premises']:
+                    located = verify_premise(premise, index, texts)
+                    locator = premise['locator']
+                    identity = locator.get('row_identity', {})
+                    if (premise['evidence_ref']['source_path'] not in proof_paths
+                            or locator['kind'] != 'json_value' or locator['value_path'] != ['field', name]
+                            or identity.get('dataset_id') != row['dataset_id'] or identity.get('field_id') != row['field_id']
+                            or identity.get('scope') not in scopes or not _equal(located, value)):
+                        raise ValueError('fact premise is not exact field/scope/value')
+                    proved.append(identity['scope'])
+                if any(scope not in proved for scope in scopes):
+                    raise ValueError('fact lacks every current scope premise')
+            if name in row and not _equal(row[name], value):
+                raise ValueError('enrichment conflicts with current field fact')
+            selected[name] = deepcopy(value)
+        cards = target['hypothesis_cards']
+        if not isinstance(cards, list):
+            raise ValueError('expected hypothesis cards list')
+        for card in cards:
+            if not isinstance(card, dict) or set(card) != {'hypothesis_card', 'evidence_refs'}:
+                raise ValueError('invalid field hypothesis card')
+            hypothesis_card_from_dict(card['hypothesis_card'])
+            if not isinstance(card['evidence_refs'], list) or not card['evidence_refs']:
+                raise ValueError('hypothesis card requires classified evidence')
+            for evidence in card['evidence_refs']:
+                if evidence_ref_from_dict(evidence).kind != 'hypothesis':
+                    raise ValueError('economic field cards remain hypotheses')
+                verify_hypothesis_source(evidence, index, texts)
+        missing = target['missing_facts']
+        if not isinstance(missing, list) or any(not isinstance(key, str) or not key.strip() for key in missing):
+            raise ValueError('missing_facts requires explicit strings')
+        if path.read_bytes() != raw_result:
+            raise ValueError('field explanation bytes changed during verification')
+        return dict(status='supported', facts=selected, literal_fact_explanation=literal,
+                    hypothesis_cards=deepcopy(cards), missing_facts=list(missing), source_proofs=source_proofs)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        return dict(empty, status='rejected', reason=str(exc))
+
+
 def _write_semantic_command_receipt(path: Path, row: dict) -> None:
     """Input: receipt Path/dict. Output: None; use existing bounded atomic Windows replacement."""
     from wqb.semantic_publication import _atomic_write

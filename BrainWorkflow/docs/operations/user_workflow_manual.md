@@ -319,6 +319,39 @@ digests and zero new simulation reservation; conflicts block rather than replay
 POST. Restart validates reused source and child evidence. Existing qualified rows
 are not converted into fresh qualified repair children.
 
+### Full Local Semantic Compilation
+
+This is a separately authorized knowledge-maintenance operation, not research
+Start. The existing `compile-semantic-knowledge` command retains its default
+bounded behavior. Its configuration can select `semantic_policy.full_local_mode`:
+
+- `prepare`: inventory local indexed/raw/canonical resources, freeze explanation
+  jobs and report estimated work. `semantic_policy.full_local.model_call_budget`
+  defaults to zero. Preparation never calls a model, captures platform data,
+  publishes resources or renews capture dates.
+- `execute`: accept only `semantic_policy.full_local.plan_path`, pointing to the
+  previously frozen `machine/semantic_jobs/<key>/plan.json`. Runtime overrides
+  cannot increase that plan's allowance. Use this only after a finite model-call
+  allowance is separately agreed. A prepared job is not a completed answer.
+
+The executor reserves each call durably before dispatch and uses the existing
+read-only Codex worker at medium reasoning effort. It preserves complete
+per-target answers, not just a summary. Cancelled, rejected and uncertain calls
+remain charged; uncertain outcomes are not automatically replayed. Completed
+results are reusable only after current-source and full-result verification.
+
+Each target retains its literal source meaning, sourced typed facts where
+available, hypothesis cards, conditional uses, missing facts and conflicts.
+Verified user research notes can support hypotheses but cannot establish
+official field/operator facts. Missing timing, units, vector grain or signatures
+remain explicit gaps. Processing every target is not full semantic coverage,
+compiler eligibility, reviewed publication or research readiness.
+
+Ordinary maintenance of a selected semantic release preserves that release and
+its publication-owned wiki pages. It compiles only its own experience outputs;
+active-release cleanup is refused until source preservation can be verified.
+No maintenance command silently selects generated explanations for research.
+
 ### Submitted Result Unavailable
 
 Only a progress-poll404 with a verified original submission can be isolated as

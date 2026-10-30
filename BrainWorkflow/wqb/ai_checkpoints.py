@@ -163,7 +163,8 @@ def run_ai_checkpoint(
     if checkpoint is None:
         raise ValueError(f"Unknown AI checkpoint: {checkpoint_id}")
     if checkpoint.get('status') in {'unknown', 'running'} or (
-            checkpoint['checkpoint_type'] == 'initial_research_plan' and checkpoint.get('status') != 'pending'):
+            checkpoint['checkpoint_type'] in {'initial_research_plan', 'full_semantic_explanation'}
+            and checkpoint.get('status') != 'pending'):
         return checkpoint
     if not executor_argv:
         return {"checkpoint_id": checkpoint_id, "status": "pending", "reason": "executor-not-configured"}
@@ -182,6 +183,26 @@ def run_ai_checkpoint(
     _append_checkpoint_event(decisions_dir, running)
     argv = [str(input_path) if arg == "{input}" else str(output_path) if arg == "{output}" else arg for arg in executor_argv]
     try:
+        from wqb.codex_ai_worker import _authenticated_explanation_route
+        checkpoint_run = Path(decisions_dir).resolve().parent.parent
+        bound_explanation = _authenticated_explanation_route(checkpoint_run, checkpoint['checkpoint_type'])
+        if checkpoint['checkpoint_type'] == 'full_semantic_explanation':
+            from wqb.full_semantic_execution import (load_bound_explanation_job,
+                validate_full_semantic_output, require_full_semantic_reservation,
+                claim_full_semantic_dispatch, full_semantic_transport_controls)
+            explanation_run = Path(decisions_dir).resolve().parent.parent
+            explanation_job = (bound_explanation if bound_explanation is not None
+                               else load_bound_explanation_job(explanation_run))
+            require_full_semantic_reservation(explanation_job)
+            if checkpoint['evidence_paths'] != ['input.json']:
+                raise ValueError('full explanation checkpoint evidence mismatch')
+            claim_full_semantic_dispatch(explanation_job, input_path)
+            timeout_seconds, authority_cancelled = full_semantic_transport_controls(explanation_job, timeout_seconds)
+            caller_cancelled = cancellation_check
+            def explanation_cancelled() -> bool:
+                """Input: none. Output: bool; callers may add cancellation, never remove original authority."""
+                return authority_cancelled() or (caller_cancelled is not None and caller_cancelled())
+            cancellation_check = explanation_cancelled
         if checkpoint['checkpoint_type'] == 'initial_research_plan':
             from wqb.initial_model_worker import _authenticated_task
             from wqb.initial_research_planning import TASK_PATH
@@ -202,6 +223,12 @@ def run_ai_checkpoint(
         if not isinstance(output, dict) or not output.get("summary"):
             raise ValueError("AI executor output must be JSON with nonempty summary")
         final = {**running, "status": "completed", "summary": str(output["summary"])}
+        if checkpoint['checkpoint_type'] == 'full_semantic_explanation':
+            if load_bound_explanation_job(explanation_run) != explanation_job:
+                raise ValueError('full explanation job changed during checkpoint')
+            require_full_semantic_reservation(explanation_job)
+            validate_full_semantic_output(Path(explanation_job['root']), explanation_job, output)
+            final['targets'] = output['targets']
         if checkpoint['checkpoint_type'] == 'initial_research_plan':
             task = _authenticated_task(run)
             if task != initial_task:

@@ -113,16 +113,26 @@ def _policy(policy: SemanticPolicy) -> dict:
     return values
 
 
-def _material(root: Path, row: dict) -> tuple[dict, str]:
+def _material(root: Path, row: dict, *, _verification_session=None) -> tuple[dict, str]:
     """Input: root/SourceIndexRow dict. Output: enriched index/text. Verify body and full hashes."""
     required = {'path', 'content_hash', 'captured_at', 'source_type', 'source_family'}
+    if _verification_session is not None:
+        from wqb.knowledge_contracts import _FieldExtractSession
+        if (type(_verification_session) is not _FieldExtractSession
+                or _verification_session.root != Path(root).resolve()):
+            raise ValueError('invalid field extraction verification session')
     if not isinstance(row, dict) or not required <= set(row) or any(not isinstance(row[k], str) or not row[k] for k in required):
         raise ValueError('source_refs require existing source index metadata')
     datetime.fromisoformat(row['captured_at'].replace('Z', '+00:00'))
     path = _safe(root, row['path'], source=True)
     if path.stat().st_size > MAX_SOURCE_BYTES:
         raise ValueError('source exceeds safe read bound; compile a smaller indexed source')
-    raw = path.read_bytes()
+    captured = _verification_session.original(row['path']) if _verification_session is not None else None
+    raw = captured['source_bytes'] if captured is not None else None
+    if raw is None:
+        raw = path.read_bytes()
+    if len(raw) > MAX_SOURCE_BYTES:
+        raise ValueError('source exceeds safe read bound; compile a smaller indexed source')
     text = raw.decode('utf-8')
     content = raw
     metadata = {}
@@ -135,7 +145,11 @@ def _material(root: Path, row: dict) -> tuple[dict, str]:
                     raise ValueError(f'frontmatter/index mismatch: {key}')
     if _hash(content) != row['content_hash'].lower():
         raise ValueError('indexed source content_hash mismatch')
-    if path.suffix.lower() == '.md':
+    is_extract = (row.get('content_status') == 'verified_raw_extract'
+                  or metadata.get('content_status') == 'verified_raw_extract'
+                  or (row['path'].startswith('raw/platform/data_fields/')
+                      and path.name.startswith('semantic-subset-')))
+    if path.suffix.lower() == '.md' and not (is_extract and _verification_session is not None):
         from wqb.knowledge_contracts import verify_source_repair
         repair = verify_source_repair(root, row['path'])
         if repair.get('status') not in ('verified', 'not_repaired') or repair.get('source_sha256') != _hash(raw):
@@ -145,7 +159,8 @@ def _material(root: Path, row: dict) -> tuple[dict, str]:
             or (row['path'].startswith('raw/platform/data_fields/')
                 and path.name.startswith('semantic-subset-'))):
         from wqb.knowledge_contracts import verify_field_source_extract
-        receipt = verify_field_source_extract(root, row['path'])
+        receipt = (verify_field_source_extract(root, row['path']) if _verification_session is None
+                   else _verification_session.proof(row['path']))
         if receipt.get('status') != 'verified' or receipt.get('excerpt_sha256') != _hash(raw):
             raise ValueError('field extract receipt does not match consumed bytes')
     normalized = dict(row, file_sha256=_hash(raw))

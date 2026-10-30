@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from wqb.knowledge_paths import existing_machine_resource_path
-from wqb.semantic_contracts import check_semantic_record_fields, timing_contract_from_dict
+from wqb.semantic_contracts import SHA256, _path, check_semantic_record_fields, timing_contract_from_dict
 
 
 LOW_RISK_BONUS = 1.5
@@ -64,6 +64,25 @@ class DataLedgerRecord:
     timing_contract: dict | None = None
     submitted_alpha_ids: list[str] | None = None
     submitted_legacy_usage_count: int | None = None
+    field_semantics_ref: dict | None = None
+    field_semantics_history: list[dict] | None = None
+
+
+def field_semantics_reference_from_dict(ref: dict, row: dict) -> dict:
+    """Input: reference/ledger dicts. Output: copied dict. Validate selector shape, never source authority."""
+    if not isinstance(ref, dict) or set(ref) != {'schema_version', 'path', 'sha256', 'dataset_id', 'field_id'}:
+        raise ValueError('invalid field_semantics_ref fields')
+    if type(ref['schema_version']) is not int or ref['schema_version'] != 1:
+        raise ValueError('unsupported field_semantics_ref schema')
+    path = _path(ref['path'])
+    if not path.startswith('machine/semantic_jobs/') or len(Path(path).parts) < 4:
+        raise ValueError('field explanation must be an immutable semantic job result')
+    if not isinstance(ref['sha256'], str) or not SHA256.fullmatch(ref['sha256']):
+        raise ValueError('field explanation requires SHA256')
+    if any(not isinstance(ref[key], str) or not ref[key] or ref[key] != row.get(key)
+           for key in ('dataset_id', 'field_id')):
+        raise ValueError('field explanation selector identity mismatch')
+    return dict(ref)
 
 
 def data_ledger_record_to_dict(record: DataLedgerRecord) -> dict[str, Any]:
@@ -72,7 +91,8 @@ def data_ledger_record_to_dict(record: DataLedgerRecord) -> dict[str, Any]:
     if row["available_scopes"] is None:
         row.pop("available_scopes")
     for key in ('units', 'vector_grain', 'available_at', 'timing_contract',
-                'submitted_alpha_ids', 'submitted_legacy_usage_count'):
+                'submitted_alpha_ids', 'submitted_legacy_usage_count',
+                'field_semantics_ref', 'field_semantics_history'):
         if row[key] is None:
             row.pop(key)
     return row
@@ -82,6 +102,11 @@ def data_ledger_record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
     """Input: dict row. Output: DataLedgerRecord. Normalize one JSON-safe data ledger row."""
     if "timing_contract" in row:
         check_semantic_record_fields(row, DataLedgerRecord)
+    if 'field_semantics_history' in row:
+        history = row['field_semantics_history']
+        if not isinstance(history, list) or any(not isinstance(item, dict) or set(item) != {'reference', 'reason'}
+                or not isinstance(item['reference'], dict) or not isinstance(item['reason'], str) for item in history):
+            raise ValueError('invalid diagnostic field_semantics_history')
     return DataLedgerRecord(
         dataset_id=str(row.get("dataset_id", "")),
         dataset_name=str(row.get("dataset_name", "")),
@@ -128,6 +153,9 @@ def data_ledger_record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
         timing_contract=timing_contract_from_dict(row['timing_contract']) if 'timing_contract' in row else None,
         submitted_alpha_ids=row.get('submitted_alpha_ids'),
         submitted_legacy_usage_count=row.get('submitted_legacy_usage_count'),
+        field_semantics_ref=(field_semantics_reference_from_dict(row['field_semantics_ref'], row)
+                             if 'field_semantics_ref' in row else None),
+        field_semantics_history=row.get('field_semantics_history'),
     )
 
 

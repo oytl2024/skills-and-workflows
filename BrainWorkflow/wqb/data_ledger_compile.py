@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from copy import deepcopy
 from datetime import datetime, timezone
 import ast
 import json
@@ -25,6 +26,89 @@ COMPILE_LOCK_TIMEOUT_SECONDS = 5.0
 COMPILE_LOCK_SLEEP_SECONDS = 0.05
 COMPILE_LOCK_STALE_SECONDS = 3600.0
 DATA_LEDGER_MAX_AGE_DAYS = KNOWLEDGE_MAX_AGE_DAYS
+
+
+def merge_field_enrichment(root: Path, captured: dict, prior: dict | None) -> dict:
+    """Input: vault Path/fresh captured dict/optional prior dict. Output: merged copy with verified enrichment only.
+
+    Current measured facts always win. Usage is historical, not semantic authority;
+    rejected selectors remain diagnostics and can never select an explanation.
+    """
+    from wqb.knowledge_compile import resolve_field_semantics, _audit_resource_rows
+    from wqb.semantic_compilation import verify_source_equivalence
+    from wqb.resource_evidence import resolve_timing_contract
+    from wqb.knowledge_contracts import verified_field_extract_source
+
+    merged = deepcopy(captured)
+    if prior is None:
+        return merged
+    same_identity = all(captured.get(key) == prior.get(key) for key in ('dataset_id', 'field_id'))
+    if not same_identity:
+        return merged
+    scopes = _ledger_row_scope_keys(captured)
+    same_scopes = bool(scopes) and scopes == _ledger_row_scope_keys(prior)
+    if same_scopes:
+        for key in ('simulation_usage_count', 'submitted_usage_count', 'submitted_alpha_ids',
+                    'submitted_legacy_usage_count', 'repair_usage_count', 'last_used_at',
+                    'best_result_label', 'activity_tags', 'experiment_paths'):
+            if key in prior:
+                merged[key] = deepcopy(prior[key])
+    history = deepcopy(prior.get('field_semantics_history', []))
+    reference = prior.get('field_semantics_ref')
+    if reference is not None:
+        candidate = dict(merged, field_semantics_ref=reference)
+        resolved = resolve_field_semantics(Path(root), candidate)
+        if resolved['status'] == 'supported':
+            merged['field_semantics_ref'] = deepcopy(reference)
+            for key, value in resolved['facts'].items():
+                if key not in merged:
+                    merged[key] = deepcopy(value)
+        else:
+            rejected = dict(reference=deepcopy(reference), reason=resolved.get('reason', 'incompatible field generation'))
+            if rejected not in history:
+                history.append(rejected)
+    # Existing documented timing contracts predate the optional explanation
+    # reference. Revalidate their original premises rather than copy a context row.
+    if 'timing_contract' not in merged and prior.get('timing_contract'):
+        contract = prior['timing_contract']
+        timing_reason = 'legacy timing source/identity/scope is incompatible or unsupported'
+        compatible = same_scopes and all(captured.get(key) == prior.get(key) for key in (
+            'field_type', 'source_paths', 'source_updated_at', 'field_description'))
+        if compatible:
+            try:
+                for item in contract['premises']:
+                    if item['locator']['kind'] != 'json_value':
+                        continue
+                    source_path = item['evidence_ref']['source_path']
+                    if source_path not in merged.get('source_paths', []):
+                        original = verified_field_extract_source(Path(root), source_path, merged['dataset_id'],
+                                                                merged['field_id'], scopes)
+                        if original is None or original.relative_to(root).as_posix() not in merged.get('source_paths', []):
+                            raise ValueError('legacy timing field premise belongs to another source generation')
+                rows = list(_audit_resource_rows(existing_machine_resource_path(root, 'source_index'), Path(root)))
+                needed = {item['evidence_ref']['source_path'] for item in contract['premises']}
+                index, texts = {}, {}
+                for source in rows:
+                    source_path = source.get('path')
+                    if source_path not in needed:
+                        continue
+                    if source_path in index:
+                        raise ValueError('ambiguous timing source registration')
+                    checked = verify_source_equivalence(Path(root), source, source)
+                    index[source_path], texts[source_path] = checked['source_index'], checked['source_text']
+                if all(resolve_timing_contract(contract, merged,
+                        dict(_scope_dict_from_key(scope), as_of=merged['source_updated_at'] + 'T23:59:59+00:00'),
+                        index, texts)['status'] == 'supported' for scope in scopes):
+                    merged['timing_contract'] = deepcopy(contract)
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                timing_reason = str(exc)
+        if 'timing_contract' not in merged:
+            rejected = dict(reference=dict(timing_contract=deepcopy(contract)), reason=timing_reason)
+            if rejected not in history:
+                history.append(rejected)
+    if history:
+        merged['field_semantics_history'] = history
+    return merged
 
 
 def normalize_data_category(value: object) -> tuple[str, list[str]]:
@@ -551,7 +635,9 @@ def compile_data_ledger_from_raw(
                     if key[2] is not None
                     else None
                 ) or prior_records_by_field.get(key[:2])
-                output_rows.append(_record_from_group(root, fields_path, grouped[key], source_day, prior) | {"coverage_status": "measured_raw" if measured else "partial"})
+                captured = _record_from_group(root, fields_path, grouped[key], source_day, prior) | {"coverage_status": "measured_raw" if measured else "partial"}
+                output_rows.append(merge_field_enrichment(root, captured,
+                    data_ledger_record_to_dict(prior) if prior else None))
             attempted_field_keys = {
                 (str(row.get("dataset_id", "")), str(row.get("field_id", "")))
                 for row in output_rows

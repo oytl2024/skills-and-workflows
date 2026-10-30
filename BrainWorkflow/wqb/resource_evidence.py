@@ -284,7 +284,7 @@ def _check_header(text: str) -> None:
     raise ValueError("unterminated frontmatter header")
 
 
-def _source(ref: dict, source_index: dict, source_texts: dict) -> str:
+def _source(ref: dict, source_index: dict, source_texts: dict, *, _hypothesis_only: bool = False) -> str:
     """Input: ref/index/full sources dicts. Output: verified body str. Check identity and actual bytes."""
     if not isinstance(source_index, dict) or not isinstance(source_texts, dict):
         raise ValueError("expected source index and complete source texts")
@@ -296,7 +296,12 @@ def _source(ref: dict, source_index: dict, source_texts: dict) -> str:
     if issues:
         raise ValueError("invalid premise provenance: " + issues[0]["message"])
     if row["source_family"] not in SOURCE_FAMILIES.get(row["source_type"], set()):
-        raise ValueError("unsupported official source family")
+        user_family = next((family for family in ('raw/user', 'raw/community/user_messages', 'raw/research')
+                            if path.startswith(family + '/')), None)
+        if (not _hypothesis_only or ref.get('kind') != 'hypothesis' or user_family is None
+                or row['source_type'] in SOURCE_FAMILIES
+                or not (row['source_family'] == user_family or row['source_family'].startswith(user_family + '/'))):
+            raise ValueError("unsupported official source family")
     supplied = source_texts.get(path)
     if not isinstance(supplied, (str, bytes)):
         raise ValueError("missing complete source bytes/text")
@@ -326,6 +331,13 @@ def _source(ref: dict, source_index: dict, source_texts: dict) -> str:
     if hashlib.sha256(content).hexdigest() != row["content_hash"].lower():
         raise ValueError("source content hash mismatch")
     return body
+
+
+def verify_hypothesis_source(ref: dict, source_index: dict, source_texts: dict) -> str:
+    """Input: hypothesis EvidenceRef/index/full texts dicts. Output: byte-verified body str, never official fact authority."""
+    if evidence_ref_from_dict(ref).kind != 'hypothesis':
+        raise ValueError('hypothesis source cannot certify documented or measured claims')
+    return _source(ref, source_index, source_texts, _hypothesis_only=True)
 
 
 def _comment_mask(body: str) -> list[bool]:
