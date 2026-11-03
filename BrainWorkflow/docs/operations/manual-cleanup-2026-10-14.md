@@ -210,3 +210,12 @@ skills-and-workflows\BrainWorkflow\NVIDIA Corporation
   95 tests passed in 15.500 seconds; source remains the frozen digest above.
   Commit/push the audit and reverify local/remote equality; final results belong
   in outer `todo.md`. No proof or quota is silently renewed by this audit.
+
+## Nov 3 approved AI Repair retirement audit
+
+- User explicitly approved retiring old research execution while preserving historical evidence. Old AI Repair is no longer a supported recovery mode; this overrides only the old-run execution compatibility promise.
+- Exact deletion candidates, all relative to BrainWorkflow: `wqb/repair_planning.py`, `wqb/repair_brief.py`, `wqb/repair_output_contract.py`, `tests/test_ai_repair_acceptance.py`, `tests/test_repair_planning.py`, `tests/test_repair_brief.py`, `tests/test_repair_output_contract.py`.
+- These are tracked source/tests, recoverable from pre-cleanup Git history. Shared limits and receipt verification move to `repair_policy.py`; simulation accounting, locks, Stop and unknown-POST recovery remain. Production imports and surviving tests must no longer depend on the deleted modules.
+- Exclusions: all knowledge/raw/machine/wiki, runs and receipts, Alpha/check identities, source evidence, credentials, configuration, profiles, archives and unrelated output. No archive is deleted merely because it records the retired design.
+- Pre-cleanup: synchronize this plan/audit and verify HEAD against its intended remote without force before deletion. Code edits in progress are not final acceptance. Then verify each candidate is an ordinary tracked file inside the product, not a link/junction, delete the exact audited paths, run affected and full offline regressions and commit/push the finished version. A failed push stops deletion.
+- This cleanup grants no platform/model calls, research resume, proof renewal, budget change or Alpha submission. Deployment and real-vault readiness remain separately blocked.
