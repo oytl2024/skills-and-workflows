@@ -10,6 +10,142 @@ from wqb.knowledge_maintenance import run_knowledge_maintenance
 
 
 class KnowledgeMaintenanceTests(unittest.TestCase):
+    def _field_capture(self, root: Path, day: str, region: str, description: str,
+                       timestamp: str | None = None, partial: bool = False) -> Path:
+        """Input: temporary root/date/scope/text and optional timestamp/status. Output: isolated raw capture Path."""
+        capture = root / 'raw/platform/data_fields' / day
+        capture.mkdir(parents=True)
+        scope = dict(instrument_type='EQUITY', region=region, delay=1, universe='TOP3000')
+        status = 'partial' if partial else 'complete'
+        values = {
+            'data_fields.jsonl': dict(scope=scope, capture_generation_id=day, data_set=dict(id='d'),
+                field=dict(id='f', type='MATRIX', description=description, coverage=0.8)),
+            'manifest.json': dict(generated_at=timestamp or day + 'T00:00:00Z',
+                certification_status=status, requested_matrix=[scope]),
+            'scopes.jsonl': dict(scope=scope, status='partial' if partial else 'completed',
+                certification_status=status, capture_generation_id=day),
+        }
+        for name, value in values.items():
+            (capture / name).write_text(json.dumps(value), encoding='utf-8')
+        return capture
+
+    def test_active_maintenance_compiles_all_scope_generations_and_keeps_partial(self):
+        """Input: older USA ledger and newer USA/EUR captures. Output: latest per-scope facts, dates and partial status."""
+        from wqb.data_ledger_compile import compile_data_ledger_from_raw
+        from wqb.semantic_publication import read_semantic_release
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            release = self._active_release(root)
+            oldest = self._field_capture(root, '2026-10-15', 'USA', 'Old USA')
+            compile_data_ledger_from_raw(root, oldest)
+            self._field_capture(root, '2026-10-16', 'USA', 'New USA', partial=True)
+            self._field_capture(root, '2026-10-17', 'EUR', 'EUR field')
+            report = run_knowledge_maintenance(root, '2026-10-30T00:00:00Z')
+            rows = {row['region']: row for row in (json.loads(line) for line in
+                (root / 'machine/data_ledger.jsonl').read_text(encoding='utf-8').splitlines())}
+            self.assertEqual(rows['USA']['field_description'], 'New USA')
+            self.assertEqual(rows['USA']['source_updated_at'], '2026-10-16')
+            self.assertEqual(rows['USA']['coverage_status'], 'partial')
+            self.assertEqual(rows['EUR']['coverage_status'], 'measured_raw')
+            self.assertEqual(report['status'], 'completed')
+            self.assertEqual(len(report['data_compile']['captures']), 3)
+            self.assertEqual(read_semantic_release(root), release)
+
+    def test_active_capture_order_uses_timezone_aware_manifest_time(self):
+        """Input: captures whose lexical days disagree with absolute time. Output: genuinely latest scope generation wins."""
+        from wqb.knowledge_maintenance import _compile_active_fields
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            latest = self._field_capture(root, '2026-10-15', 'USA', 'Latest', '2026-10-15T23:30:00-02:00')
+            earlier = self._field_capture(root, '2026-10-16', 'USA', 'Earlier', '2026-10-16T00:30:00Z')
+            report = _compile_active_fields(root, '2026-10-30T00:00:00Z')
+            row = json.loads((root / 'machine/data_ledger.jsonl').read_text(encoding='utf-8'))
+            self.assertEqual(row['field_description'], 'Latest')
+            self.assertEqual(row['source_updated_at'], '2026-10-15')
+            self.assertEqual([item['capture_path'] for item in report['captures']],
+                [earlier.relative_to(root).as_posix(), latest.relative_to(root).as_posix()])
+
+    def test_active_capture_invalid_time_blocks_before_any_ledger_replacement(self):
+        """Input: valid older capture and missing/invalid/naive newer timestamps. Output: blocked without inferred dates or writes."""
+        from wqb.data_ledger_compile import compile_data_ledger_from_raw
+        for timestamp in (None, 'not-a-time', '2026-10-16T00:00:00', '2026-10-17T00:00:00Z'):
+            with self.subTest(timestamp=timestamp), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self._active_release(root)
+                oldest = self._field_capture(root, '2026-10-15', 'USA', 'Old USA')
+                compile_data_ledger_from_raw(root, oldest)
+                before = (root / 'machine/data_ledger.jsonl').read_bytes()
+                newest = self._field_capture(root, '2026-10-16', 'EUR', 'New EUR')
+                manifest_path = newest / 'manifest.json'
+                manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+                manifest['generated_at'] = timestamp
+                manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+                report = run_knowledge_maintenance(root, '2026-10-30T00:00:00Z')
+                self.assertEqual(report['data_compile']['status'], 'blocked')
+                self.assertEqual((root / 'machine/data_ledger.jsonl').read_bytes(), before)
+
+    def test_active_replay_preserves_only_current_compatible_selected_explanation(self):
+        """Input: selected current explanation plus historical capture. Output: revalidated selector survives replay, not new generations."""
+        from tests.test_field_semantic_enrichment import FieldSemanticEnrichmentTests
+        from wqb.knowledge_maintenance import _compile_active_fields
+        fixture = FieldSemanticEnrichmentTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.ledger.write_text(json.dumps(fixture.row), encoding='utf-8')
+        self._field_capture(fixture.root, '2026-10-14', 'USA', 'Earlier generation')
+        _compile_active_fields(fixture.root, '2026-10-30T00:00:00Z')
+        row = json.loads(fixture.ledger.read_text(encoding='utf-8'))
+        self.assertEqual(row.get('field_semantics_ref'), fixture.row['field_semantics_ref'])
+        self.assertEqual(fixture.resolve(row)['status'], 'supported')
+        self._field_capture(fixture.root, '2026-10-16', 'USA', 'Changed generation')
+        _compile_active_fields(fixture.root, '2026-10-30T00:00:00Z')
+        row = json.loads(fixture.ledger.read_text(encoding='utf-8'))
+        self.assertNotIn('field_semantics_ref', row)
+
+    def test_error_receipt_may_have_no_semantic_compile_target_but_regular_source_may_not(self):
+        """Input: indexed-style diagnostic metadata. Output: valid empty diagnostic targets, no exemption for platform facts."""
+        from wqb.knowledge_contracts import render_front_matter, validate_raw_metadata
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'request_error.md'
+            body = '# Raw request failure\n'
+            metadata = dict(source_type='platform_capture_error', source_family='raw/platform/learn',
+                source_path='/tutorial-pages/example', captured_at='2026-10-15T00:00:00Z',
+                capture_tool='fixture', content_status='raw_markdown', record_count=1,
+                content_hash=hashlib.sha256(body.encode()).hexdigest(), update_check='compare error receipt',
+                compiled_targets=[])
+            path.write_text(render_front_matter(metadata) + body, encoding='utf-8')
+            self.assertNotIn('missing compiled_targets', validate_raw_metadata(path))
+            metadata['source_type'] = 'platform_learn_material'
+            path.write_text(render_front_matter(metadata) + body, encoding='utf-8')
+            self.assertIn('missing compiled_targets', validate_raw_metadata(path))
+
+    def test_active_maintenance_compiles_new_raw_fields_without_replacing_release(self):
+        """Input: active release plus new local capture. Output: updated field ledger and unchanged semantic release."""
+        from wqb.semantic_publication import read_semantic_release
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            receipt = self._active_release(root)
+            capture = root / 'raw/platform/data_fields/2026-10-15'
+            capture.mkdir(parents=True)
+            scope = dict(instrument_type='EQUITY', region='USA', delay=1, universe='TOP3000')
+            values = {
+                'data_fields.jsonl': dict(scope=scope, capture_generation_id='g1', data_set=dict(id='new_data'),
+                    field=dict(id='new_field', type='MATRIX', description='New literal field', coverage=0.8)),
+                'manifest.json': dict(generated_at='2026-10-15T00:00:00Z', certification_status='complete',
+                    requested_matrix=[scope]),
+                'scopes.jsonl': dict(scope=scope, status='completed', certification_status='complete',
+                    capture_generation_id='g1'),
+            }
+            for name, value in values.items():
+                (capture / name).write_text(json.dumps(value), encoding='utf-8')
+            report = run_knowledge_maintenance(root, '2026-10-30T00:00:00Z')
+            rows = [json.loads(line) for line in (root / 'machine/data_ledger.jsonl').read_text().splitlines()]
+            selected = [row for row in rows if row.get('field_id') == 'new_field']
+            self.assertEqual(len(selected), 1)
+            self.assertEqual(selected[0]['source_updated_at'], '2026-10-15')
+            self.assertEqual(report['data_compile']['status'], 'completed')
+            self.assertEqual(read_semantic_release(root), receipt)
+
     def test_compiled_principles_preserve_cheap_checks_first_and_batch_maximum(self):
         """Input: isolated ordinary maintenance. Output: human principles match current runtime boundaries."""
         from wqb.knowledge_experience_compile import compile_human_experience_wiki

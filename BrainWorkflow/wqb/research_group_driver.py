@@ -7,9 +7,12 @@ Tree dispatch/plan authentication belongs to workflow_auto_continue, not here.
 """
 
 import argparse
+from datetime import datetime, timezone
+import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from uuid import uuid4
 
 from wqb.daily_simulation_budget import DAILY_SIMULATION_LIMIT, activate_daily_policy
@@ -19,6 +22,9 @@ from wqb.research_group import _digest, _guard, _read, read_group, discover_grou
 from wqb.runtime_control import (_write, read_runtime_control, request_runtime_state,
     update_runtime_status, has_runtime_authority, utc_now)
 from wqb.source_run_lock import read_source_run_lock
+from wqb.owned_network_deadline import (OwnedExecutionTree, OwnedSubmissionFence, JOB_ENV, NONCE_ENV,
+    DEFAULT_REQUEST_TIMEOUT_SECONDS, SUPERVISION_POLL_SECONDS, TERMINATION_WAIT_SECONDS,
+    hex_identity, positive_number)
 
 
 LOCK_SECONDS = 10.0
@@ -31,6 +37,9 @@ ENUM_CONFIG = {'instrument_type': {'EQUITY'}, 'language': {'FASTEXPR'},
     'unit_handling': {'VERIFY'}, 'neutralization': {'NONE', 'MARKET', 'SECTOR', 'INDUSTRY', 'SUBINDUSTRY'},
     'ai_executor': {'codex'}}
 TERMINAL = frozenset({'completed', 'completed_with_warnings', 'aborted'})
+# Retain real handles/fences if termination cannot yet be proved. The lane entry
+# stays alive in quarantine; it never acknowledges Stop by simply exiting.
+_UNCONFIRMED_OWNERS = {}
 
 
 def _safe(path) -> Path:
@@ -366,10 +375,212 @@ def run_group_lane(paths, group, run_dir, *, config, step=None) -> dict:
     return run_workflow_driver(paths, bound, step=step)
 
 
+def _network_request(job, owner, now_func):
+    """Input: job Path, owner dict, clock callable returning float. Output: validated request dict; fail closed."""
+    path = _safe(job / 'network_current.json')
+    if not path.exists():
+        return {}
+    row = _read(path)
+    # A valid dispatch can be published during the read; sample the same injected clock afterwards.
+    now = now_func()
+    if (any(row.get(k) != owner[k] for k in ('owner_nonce', 'execution_pid', 'supervisor_pid'))
+            or not hex_identity(row.get('request_id')) or row.get('state') not in {'entered', 'completed', 'transport_error'}
+            or row.get('operation') not in {'request', 'authentication', 'simulation_submit'}
+            or row.get('method') not in {'GET', 'POST', 'OPTIONS', 'HEAD', 'PUT', 'DELETE', 'PATCH', 'OTHER'}
+            or not isinstance(row.get('simulation_identities'), list)
+            or any(not hex_identity(v, 64) for v in row['simulation_identities'])):
+        raise ValueError('owned request identity invalid')
+    started, deadline = positive_number(row.get('started')), positive_number(row.get('deadline'))
+    if (not owner['supervision_started'] <= started <= now or deadline <= started or deadline > owner['runtime_deadline']
+            or deadline > started + owner['request_timeout_seconds']):
+        raise ValueError('owned request deadline invalid')
+    return row
+
+
+def _confirm_tree(tree) -> bool:
+    """Input: retained execution tree object. Output: bool; errors mean unconfirmed, never implicit fence release."""
+    try:
+        return tree.terminate_and_confirm() is True
+    except Exception:
+        return False
+
+
+def _request_outcome(run, group, request):
+    """Input: run/group Paths, authenticated request dict. Output: sanitized str; never alter reservation or WAL."""
+    if request.get('operation') != 'simulation_submit':
+        return 'not_submission'
+    identities = request.get('simulation_identities') or []
+    claims = _read(_safe(group.parent / 'simulation_reservations.json'))
+    if identities and all(isinstance(claims.get(i), dict) and claims[i].get('run_id') == run.name
+            and claims[i].get('group_id') == group.name and claims[i].get('submission_status') == 'sent'
+            and type(claims[i].get('status_code')) is int and 200 <= claims[i]['status_code'] < 300
+            and isinstance(claims[i].get('progress_url'), str) and claims[i]['progress_url'] for i in identities):
+        return 'response_recorded_reconcile'
+    return 'unknown'
+
+
+def supervise_group_lane(paths, group, run_dir, *, config, spawn_runner=subprocess.Popen,
+                         now_func=time.monotonic, sleep_func=time.sleep) -> dict:
+    """Input: prepared paths/group/run, config dict, Popen/clock callables. Output: owned execution result dict.
+
+    Retain OS containment handles throughout execution. A deadline/Stop never
+    releases another worker's lease, refunds attempts, or replays an unknown POST.
+    """
+    group, run = _group_path(group), _safe(run_dir)
+    row, lanes = _prepared(paths, group)
+    if run not in [item[0] for item in lanes]:
+        raise ValueError('supervised lane is not a prepared member')
+    control = _validate_control(run, row)
+    worker = _read(_safe(run / 'runtime/group_worker.json'))
+    if (worker.get('pid') != os.getpid() or worker.get('status') != 'running'
+            or not hex_identity(worker.get('job_id'))):
+        raise ValueError('supervision requires the owning lane entry')
+    job = _safe(run / 'runtime/group_workers' / worker['job_id'])
+    if (job / 'network_owner.json').exists():
+        raise ValueError('owned execution cannot be replayed')
+    started = now_func()
+    elapsed = float(control.get('elapsed_seconds', 0))
+    group_elapsed = float(row['elapsed_seconds'])
+    if row.get('active_since'):
+        group_elapsed += max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(row['active_since'])).total_seconds())
+    remaining = min(control['max_runtime_seconds'] - elapsed, row['authority']['max_runtime_seconds'] - group_elapsed)
+    if row['desired_state'] != 'running' or control['desired_state'] != 'running':
+        return dict(run_dir=str(run), runtime_status='paused', runtime_reason='user_paused')
+    if remaining <= 0:
+        return dict(run_dir=str(run), runtime_status='blocked', runtime_reason='runtime_budget_exhausted')
+    clean = sanitize_worker_config(config)
+    owner = dict(run_dir=str(run), job_id=job.name, supervisor_pid=os.getpid(), owner_nonce=uuid4().hex,
+        supervision_started=started,
+        runtime_deadline=started + remaining,
+        request_timeout_seconds=positive_number(clean.get('request_timeout_seconds', DEFAULT_REQUEST_TIMEOUT_SECONDS)))
+    argv = [sys.executable, '-m', 'wqb.research_group_driver', 'execute', '--run-dir', str(run),
+        '--group-dir', str(group), '--job-id', job.name]
+    from wqb.desktop_application import packaged_worker_command
+    argv = packaged_worker_command(argv)
+    environment = {**os.environ, JOB_ENV: str(job), NONCE_ENV: owner['owner_nonce'],
+        'BRAIN_WORKFLOW_CONTROL_PATH': str(run)}
+    tree = OwnedExecutionTree()
+    request, reason, confirmed, exit_code, lease = {}, '', False, None, {}
+    fence = OwnedSubmissionFence(run, job, owner)
+    try:
+        with (_safe(job / 'execution.log')).open('ab') as log:
+            process = spawn_runner(argv, cwd=str(_safe(paths.workflow_root)), env=environment,
+                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, **tree.spawn_kwargs)
+        tree.attach(process)
+        owner['execution_pid'] = process.pid
+        _write(_safe(job / 'network_owner.json'), owner)
+        # The child cannot enter the driver until its retained tree is enrolled.
+        _write(_safe(job / 'network_permit.json'), {'owner_nonce': owner['owner_nonce'], 'execution_pid': process.pid})
+        while True:
+            try:
+                request = _network_request(job, owner, now_func)
+            except (ValueError, OSError, TypeError):
+                reason = 'owned_network_request_invalid'
+                break
+            current = read_group(group)
+            # Read intent only: polling merged status can interfere with the
+            # child's status/accounting publisher on Windows.
+            intent = _read(_safe(run / 'runtime_control.json'))
+            if current['desired_state'] != 'running' or intent['desired_state'] != 'running':
+                reason = 'user_paused'
+                break
+            if current['request_revision'] != worker['start_revision']:
+                reason = 'user_paused'
+                break
+            exit_code = tree.poll()
+            if exit_code is not None:
+                break
+            if now_func() >= owner['runtime_deadline']:
+                reason = 'runtime_budget_exhausted'
+                break
+            if request.get('state') == 'entered' and now_func() >= request['deadline']:
+                # Re-read instead of killing from a stale projection at the deadline.
+                latest = _network_request(job, owner, now_func)
+                if latest == request:
+                    reason = 'network_total_deadline_exceeded'
+                    break
+            fence.step()
+            sleep_func(SUPERVISION_POLL_SECONDS)
+        lease = read_source_run_lock(run / 'runtime')
+        confirmed = _confirm_tree(tree)
+    except Exception:
+        reason = ('user_paused' if read_group(group)['desired_state'] != 'running'
+            or _read(_safe(run / 'runtime_control.json'))['desired_state'] != 'running' else 'owned_lane_supervision_failed')
+        lease = read_source_run_lock(run / 'runtime')
+        confirmed = _confirm_tree(tree)
+    finally:
+        if confirmed:
+            fence.release()
+            tree.close()
+        else:
+            _UNCONFIRMED_OWNERS[str(job)] = (tree, fence)
+    if not confirmed:
+        reason = 'owned_network_termination_unconfirmed'
+    # Only after the whole tree is dead may late response evidence be reconciled.
+    try:
+        request = _network_request(job, owner, now_func)
+    except (ValueError, OSError, TypeError):
+        pass
+    outcome = _request_outcome(run, group, request)
+    receipt = dict(termination_confirmed=confirmed, request_outcome=outcome,
+        request_id=request.get('request_id', ''), owner_nonce=owner['owner_nonce'],
+        execution_pid=owner.get('execution_pid'), reason=reason)
+    _write(_safe(job / 'network_supervision.json'), receipt)
+    if confirmed:
+        from wqb.source_run_lock import release_source_run_lock
+        lock = read_source_run_lock(run / 'runtime')
+        if (lock.get('status') == 'running' and lock.get('pid') == owner.get('execution_pid')
+                and lock.get('action') == 'workflow-driver' and lock == lease):
+            release_source_run_lock(run / 'runtime', lock['action'], utc_now(),
+                pid=owner['execution_pid'], owner_id=lock['owner_id'])
+    result_path = _safe(job / 'execution_result.json')
+    result = _read(result_path) if result_path.exists() else {}
+    if not reason and exit_code == 0 and result.get('owner_nonce') == owner['owner_nonce']:
+        return result['result']
+    reason = reason or 'owned_lane_execution_failed'
+    result = dict(run_dir=str(run), runtime_status='paused' if reason == 'user_paused' else 'blocked',
+        runtime_reason=reason, next_action='maintenance-blocker', **{k: receipt[k] for k in
+            ('termination_confirmed', 'request_outcome', 'request_id')})
+    fields = dict(status=result['runtime_status'], reason=reason, last_result=result,
+        elapsed_seconds=max(float(read_runtime_control(run).get('elapsed_seconds', 0)), elapsed + now_func() - started))
+    update_runtime_status(run, **fields)
+    if reason != 'user_paused':
+        from wqb.recovery_cases import classify_blocker, ensure_recovery_case, advance_scripted_recovery
+        from wqb.maintenance_notifications import dispatch_notification
+        blocker = classify_blocker({**result, 'source_bridge': {'source_run_dir': str(run),
+            'metadata': {'uncertain_submission_hashes': request.get('simulation_identities', [])
+                if outcome == 'unknown' else []}}})
+        case = ensure_recovery_case(run, blocker, utc_now())
+        case = advance_scripted_recovery(run, case, clean, utc_now())
+        update_runtime_status(run, recovery_case=case)
+        case = dispatch_notification(run, case, utc_now())
+        update_runtime_status(run, recovery_case=case)
+    return result
+
+
+def _execute_owned_lane(paths, group, run, job, config):
+    """Input: validated lane paths/config. Output: int; wait for enrollment, then run the existing driver in-process."""
+    from wqb.owned_network_deadline import authenticated_context
+    if os.environ.get(JOB_ENV) != str(job) or not hex_identity(os.environ.get(NONCE_ENV)):
+        raise ValueError('execute role requires an owning supervisor')
+    end = time.monotonic() + TERMINATION_WAIT_SECONDS
+    while not _safe(job / 'network_permit.json').exists():
+        if time.monotonic() >= end:
+            raise ValueError('owned execution enrollment timed out')
+        time.sleep(SUPERVISION_POLL_SECONDS)
+    context = authenticated_context()
+    permit = _read(_safe(job / 'network_permit.json'))
+    if context is None or permit != dict(owner_nonce=os.environ[NONCE_ENV], execution_pid=os.getpid()):
+        raise ValueError('owned execution permit mismatch')
+    result = run_group_lane(paths, group, run, config=config)
+    _write(_safe(job / 'execution_result.json'), {'owner_nonce': os.environ[NONCE_ENV], 'result': result})
+    return 0
+
+
 def main(argv=None):
     """Input: optional argv list. Output: int exit code; execute only a recorded explicit lane job."""
     parser = argparse.ArgumentParser()
-    parser.add_argument('command', choices=['lane'])
+    parser.add_argument('command', choices=['lane', 'execute'])
     parser.add_argument('--run-dir', required=True)
     parser.add_argument('--group-dir', required=True)
     parser.add_argument('--job-id', required=True)
@@ -390,6 +601,13 @@ def main(argv=None):
     row, _ = _prepared(paths, group)
     if saved['group_manifest_sha256'] != row['manifest_sha256'] or config['bound_group_lane'] != str(run):
         raise ValueError('worker frozen context mismatch')
+    if args.command == 'execute':
+        try:
+            return _execute_owned_lane(paths, group, run, job, config)
+        except Exception:
+            # The ordinary driver retains its evidence. Never emit request
+            # exception text (URLs/credentials/payloads) to the supervision log.
+            return 1
     index = _safe(run / 'runtime/group_worker.json')
     with _guard_dispatch(group):
         worker = _read(index)
@@ -399,13 +617,12 @@ def main(argv=None):
         if (current['desired_state'] != 'running'
                 or worker.get('start_revision') != current['request_revision']):
             raise ValueError('worker launch superseded by newer group intent')
-        import os
         worker = {**worker, 'pid': os.getpid(), 'status': 'running'}
         _write(index, worker)
         _write(job / 'job.json', worker)
     try:
-        result = run_group_lane(paths, group, run, config=config)
-        status = 'exited'
+        result = supervise_group_lane(paths, group, run, config=config)
+        status = 'unknown' if result.get('termination_confirmed') is False else 'exited'
         _write(job / 'result.json', result)
     except Exception:
         status = 'failed'
@@ -415,6 +632,14 @@ def main(argv=None):
         _write(job / 'job.json', worker)
         if _read(index).get('job_id') == args.job_id:
             _write(index, worker)
+    quarantine = _UNCONFIRMED_OWNERS.get(str(job))
+    if quarantine:
+        tree, fence = quarantine
+        while not _confirm_tree(tree):
+            time.sleep(TERMINATION_WAIT_SECONDS)
+        fence.release()
+        tree.close()
+        del _UNCONFIRMED_OWNERS[str(job)]
     return 0 if status == 'exited' else 1
 
 

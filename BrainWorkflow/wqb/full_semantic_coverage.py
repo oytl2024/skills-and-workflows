@@ -23,6 +23,9 @@ from wqb.semantic_compilation import MAX_OUTPUT_BYTES, _safe
 REPORT_VERSION = 1
 MAX_REASON_CHARS = 600
 MAX_INVENTORY_LINE_BYTES = 16 * 1024 * 1024
+MAX_CONSUMER_REQUESTS = 32
+MAX_CONSUMER_TEMPLATES = 30
+MAX_CONSUMER_MANIFEST_BYTES = 16 * 1024 * 1024
 REPORT_PREFIX = 'machine/reports/full_semantic_coverage_'
 ARTIFACT_ERRORS = (OSError, ValueError, TypeError, KeyError, RuntimeError, UnicodeError)
 
@@ -127,13 +130,137 @@ def _freshness(index: dict, now: datetime) -> str:
     return 'current' if index else 'not_evaluated'
 
 
-def _validate_explanation(root: Path, job: dict, cached: dict) -> dict:
+def _validate_explanation(root: Path, job: dict, cached: dict, *, verification_session=None) -> dict:
     """Input: vault/authenticated job/cached result dict. Output: canonical read-only validated targets by ID."""
     reconstructed = validate_full_semantic_output(root, job,
-        dict(summary=cached['summary'], targets=cached['targets']), persist_field_results=False)
+        dict(summary=cached['summary'], targets=cached['targets']), persist_field_results=False,
+        _verification_session=verification_session)
     if _bytes(reconstructed) != _bytes(cached):
         raise ValueError('completed explanation envelope differs from canonical validation')
     return {target['target_id']: target for target in reconstructed['targets']}
+
+
+def _report_field_session(root: Path, jobs: list):
+    """Input: vault Path/bound job references. Output: shared extraction session or None; authentication remains per job."""
+    from wqb.knowledge_contracts import verify_field_source_extracts
+    paths = set()
+    for ref in jobs:
+        try:
+            raw = _ref(root, dict(path=ref['path'], sha256=ref['sha256']),
+                       MAX_OUTPUT_BYTES, 'machine/semantic_jobs/' + ref['job_id'])
+            manifest = _json(raw.decode('utf-8'))
+            for material in manifest['materials']:
+                path = material['source_index']['path']
+                if isinstance(path, str) and Path(path).name.startswith('semantic-subset-'):
+                    paths.add(path)
+        except ARTIFACT_ERRORS:
+            # Normal per-job verification below retains the precise rejection.
+            continue
+    return verify_field_source_extracts(root, sorted(paths)) if paths else None
+
+
+def _consumer_measurements(root: Path, targets: dict, binding_requests, consumer_run_dirs) -> tuple[dict, dict]:
+    """Input: vault/inventory/optional explicit operation and run lists. Output: read-only binder and frozen-Start measurements."""
+    from wqb.knowledge_compile import _audit_resource_rows, semantic_resource_coverage
+    from wqb.knowledge_paths import machine_resource_path
+    from wqb.preplanned_start import _source_context
+    from wqb.research_tree import _load
+    from wqb.template_binding import _scope_matches
+    bindings = dict(status='not_evaluated', numerator=0, denominator=None,
+        denominator_unit='candidate_operation_bindings', reasons=['No explicit source-bound binding requests supplied.'])
+    starts = dict(status='not_evaluated', numerator=0, denominator=None,
+        denominator_unit='frozen_start_lanes', reasons=['No explicit existing frozen Start lanes supplied.'])
+    for requests in (binding_requests, consumer_run_dirs):
+        if requests is not None and (not isinstance(requests, list) or len(requests) > MAX_CONSUMER_REQUESTS):
+            raise ValueError('consumer requests require a bounded explicit list')
+    if binding_requests is not None:
+        wanted, canonical, index, seen = set(), {}, {}, set()
+        for request in binding_requests:
+            if (not isinstance(request, dict) or set(request) != {'resources', 'templates'}
+                    or not isinstance(request['templates'], list) or len(request['templates']) > MAX_CONSUMER_TEMPLATES):
+                raise ValueError('binding request requires bounded resources/templates')
+            for row in request['resources']['field_rows']:
+                wanted.add((row['dataset_id'], row['field_id']))
+        for row in _audit_resource_rows(machine_resource_path(root, 'data_ledger'), root):
+            key = (row.get('dataset_id'), row.get('field_id'))
+            if key in wanted:
+                canonical.setdefault(key, []).append(row)
+        for source in _audit_resource_rows(machine_resource_path(root, 'source_index'), root):
+            if source['path'] in index:
+                raise ValueError('duplicate canonical source index path')
+            index[source['path']] = source
+        bindings.update(status='measured', denominator=0, reasons=[])
+        for request in binding_requests:
+            resources = request['resources']
+            consumed = {key: resources[key] for key in ('field_rows', 'operator_rows',
+                'source_index', 'source_texts')}
+            consumed['scope'] = resources['evidence_pack']['scope']
+            consumed['resource_contract_version'] = resources.get('resource_contract_version', 1)
+            templates = []
+            for template in request['templates']:
+                identity = _digest(dict(resources=consumed, template=template))
+                if identity not in seen:
+                    seen.add(identity)
+                    templates.append(template)
+            bindings['denominator'] += len(templates)
+            if not templates:
+                continue
+            try:
+                scope = resources['evidence_pack']['scope']
+                for row in resources['field_rows']:
+                    rows = [r for r in canonical.get((row['dataset_id'], row['field_id']), []) if _scope_matches(r, scope)]
+                    if len(rows) != 1 or _digest(rows[0]) != _digest(row):
+                        raise ValueError('binding field differs from exact canonical selection')
+                texts = _source_context(root, resources['source_index'], index)
+                if texts != resources['source_texts']:
+                    raise ValueError('binding material differs from current source bytes')
+                if _freshness(resources['source_index'], datetime.now(timezone.utc)) != 'current':
+                    raise ValueError('binding sources are stale or have invalid capture dates')
+                measured = semantic_resource_coverage(dict(knowledge_root=root,
+                    resource_contract_version=resources.get('resource_contract_version', 1),
+                    field_rows=resources['field_rows'], operator_rows=resources['operator_rows'],
+                    template_rows=templates, source_index=list(resources['source_index'].values())), scope)
+                bindings['numerator'] += measured['executable_bindings']
+                bindings['reasons'].extend(measured['reasons'])
+            except ARTIFACT_ERRORS as error:
+                bindings['reasons'].append(dict(reason=str(error)[:MAX_REASON_CHARS]))
+    if consumer_run_dirs is not None:
+        starts.update(status='measured', denominator=0, reasons=[])
+        seen = set()
+        for supplied in consumer_run_dirs:
+            run = Path(supplied).absolute()
+            try:
+                key = _root(run)
+            except ARTIFACT_ERRORS:
+                key = ('invalid', run)
+            if key in seen:
+                continue
+            seen.add(key)
+            starts['denominator'] += 1
+            try:
+                run = _root(run)
+                if not run.is_relative_to(root.parent / 'runs'):
+                    raise ValueError('consumer run must be in the owning workspace runs directory')
+                manifest_path = _safe(run, 'run_manifest.json')
+                if manifest_path.stat().st_size > MAX_CONSUMER_MANIFEST_BYTES:
+                    raise ValueError('consumer manifest exceeds safe read bound')
+                before = manifest_path.read_bytes()
+                if len(before) > MAX_CONSUMER_MANIFEST_BYTES:
+                    raise ValueError('consumer manifest exceeds safe read bound')
+                manifest = _json(before.decode('utf-8'))
+                if _root(Path(manifest['knowledge_root'])) != root:
+                    raise ValueError('consumer run belongs to a different knowledge vault')
+                attachment, snapshot = _load(run)
+                for row in snapshot['data_ledger_rows']:
+                    identity = dict(dataset_id=row['dataset_id'], field_id=row['field_id'])
+                    if 'field:' + _digest(identity) not in targets:
+                        raise ValueError('consumer field is outside the measured inventory')
+                if manifest_path.read_bytes() != before or _load(run) != (attachment, snapshot):
+                    raise ValueError('consumer evidence changed during validation')
+                starts['numerator'] += 1
+            except ARTIFACT_ERRORS as error:
+                starts['reasons'].append(dict(run_id=run.name, reason=str(error)[:MAX_REASON_CHARS]))
+    return bindings, starts
 
 
 def _markdown(report: dict) -> str:
@@ -144,20 +271,20 @@ def _markdown(report: dict) -> str:
         '| --- | --- | --- |',
         f"| Inventory: source-byte-validated targets | {inventory['numerator']} / {inventory['denominator']} | {inventory['status']} |",
         f"| Current validated explanations | {explanations['numerator']} / {explanations['denominator']} | {explanations['status']} |",
-        '| Compiler/binder candidate operations | 0 / unknown | not_evaluated |',
-        '| Actual frozen Start lanes | 0 / unknown | not_evaluated |', '',
+        f"| Compiler/binder candidate operations | {report['compiler_binder']['numerator']} / {report['compiler_binder']['denominator']} | {report['compiler_binder']['status']} |",
+        f"| Actual frozen Start lanes | {report['start_consumption']['numerator']} / {report['start_consumption']['denominator']} | {report['start_consumption']['status']} |", '',
         f"Processed: {explanations['processed']}; documented targets: {explanations['documented_targets']}; "
         f"hypothesis targets: {explanations['hypothesis_targets']}; unattempted: {explanations['unattempted']}.", '',
         'Inventory includes blocked and unattempted identities. Byte validation is not freshness or scope certification.',
         'Processing is not semantic completeness. Hypotheses are not documented facts.',
-        'Compiler/binder coverage requires measured operation-specific existing compiler/binder results; not evaluated here.',
-        'Start coverage requires validated source-bound frozen consumption evidence; no consumer artifact validator is wired here.',
+        'Compiler/binder coverage measures only explicit source-bound operation requests, not all possible formulas.',
+        'Start coverage validates explicit existing frozen lane artifacts without starting or resuming a mission.',
         'Unknown denominators are not zero-sized success. No publication, Start, model or platform calls occurred.', '',
         f"Detailed evidence: [{Path(report['report_paths']['json']).name}]({Path(report['report_paths']['json']).name})", '']
     return '\n'.join(lines)
 
 
-def build_full_semantic_report(root: Path, plan: dict) -> dict:
+def build_full_semantic_report(root: Path, plan: dict, *, binding_requests=None, consumer_run_dirs=None) -> dict:
     """Input: knowledge-root Path/authenticated K4 plan dict. Output: four-level report dict and JSON/Markdown files.
 
     Only machine/reports is written. Invalid plans raise before report creation;
@@ -170,12 +297,13 @@ def build_full_semantic_report(root: Path, plan: dict) -> dict:
     plans = {saved['content_key']: saved}
     now = datetime.now(timezone.utc)
     diagnostics = list(saved.get('diagnostics', []))
+    field_session = _report_field_session(root, saved['jobs'])
     for ref in saved['jobs']:
         base = 'machine/semantic_jobs/' + ref['job_id']
         ids = ref['target_ids']
         try:
             raw = _ref(root, dict(path=ref['path'], sha256=ref['sha256']), MAX_OUTPUT_BYTES, base)
-            job = load_bound_explanation_job(_safe(root, base))
+            job = load_bound_explanation_job(_safe(root, base), _verification_session=field_session)
             manifest = job['manifest']
             if (manifest['target_ids'] != ids or _hash(raw) != ref['sha256']
                     or manifest['input_ref']['sha256'] != ref['input_sha256']
@@ -198,9 +326,9 @@ def build_full_semantic_report(root: Path, plan: dict) -> dict:
                 continue
             result_raw = _ref(root, state['result_ref'], MAX_OUTPUT_BYTES, base)
             cached = _json(result_raw.decode('utf-8'))
-            checked = _validate_explanation(root, job, cached)
+            checked = _validate_explanation(root, job, cached, verification_session=field_session)
             try:
-                if load_bound_explanation_job(_safe(root, base)) != job:
+                if load_bound_explanation_job(_safe(root, base), _verification_session=field_session) != job:
                     raise ValueError('source/job changed during report validation')
             except ARTIFACT_ERRORS:
                 for tid in ids:
@@ -226,6 +354,9 @@ def build_full_semantic_report(root: Path, plan: dict) -> dict:
             for tid in ids:
                 targets[tid].update(processing_status='invalid', explanation_validated=False, documented=False, hypothesis=False)
                 targets[tid]['reasons'].append(dict(code='coverage_validation_failed', reason=reason))
+    bindings, consumption = _consumer_measurements(root, targets, binding_requests, consumer_run_dirs)
+    if field_session is not None:
+        field_session.finalize()
     for owner in plans.values():
         reference = owner['inventory_ref']
         with _safe(root, reference['path']).open('rb') as stream:
@@ -254,12 +385,8 @@ def build_full_semantic_report(root: Path, plan: dict) -> dict:
             documented_targets=sum(t['documented'] for t in values),
             hypothesis_targets=sum(t['hypothesis'] for t in values), unattempted=counts['unattempted'],
             processing_counts=dict(counts), unresolved_targets=total - explained),
-        compiler_binder=dict(status='not_evaluated', numerator=0, denominator=None,
-            denominator_unit='candidate_operation_bindings', reasons=[
-                'No operation-specific existing compiler/binder measurement performed; typed explanations alone are not bindings.']),
-        start_consumption=dict(status='not_evaluated', numerator=0, denominator=None,
-            denominator_unit='frozen_start_lanes', reasons=[
-                'No validated source-bound Start consumption artifact reader integrated; no inferred lanes or Start invocation.']),
+        compiler_binder=bindings,
+        start_consumption=consumption,
         targets=values, diagnostics=diagnostics, model_calls=0, platform_calls=0,
         publication_authorized=False, research_authorized=False, research_ready=False)
     json_path = _safe(root, paths['json'])

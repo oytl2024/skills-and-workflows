@@ -97,6 +97,19 @@ def write_source_metadata(
 
 
 class SourceBridgeTests(unittest.TestCase):
+    def test_strict_tree_recovers_pending_checks_even_when_another_candidate_exists(self):
+        """Input: complete mixed checked batch with one candidate and pending checks. Output: recover pending identities first."""
+        from wqb.source_bridge import _decision_for_source
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            write_candidates(source / 'candidates.csv')
+            with patch('wqb.source_bridge.research_outcome', return_value=dict(outcome='pending_review')):
+                strict = _decision_for_source(source, '2026-11-03T00:00:00Z', require_complete_batch=True)
+                legacy = _decision_for_source(source, '2026-11-03T00:00:00Z')
+            self.assertEqual(strict.action, 'complete_in_flight')
+            self.assertTrue(strict.metadata['pending_check_recovery'])
+            self.assertEqual(legacy.action, 'import_existing')
+
     def test_new_round_does_not_rebind_excluded_source(self):
         """Input: local round fixture. Output: assertions. Prevent completed source reuse across rounds."""
         with tempfile.TemporaryDirectory() as tmp:

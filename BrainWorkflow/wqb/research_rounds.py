@@ -426,6 +426,16 @@ def advance_research_round(run: Path, now: str, result: dict) -> dict:
 
 def _advance_unlocked(run: Path, now: str, result: dict) -> dict:
     """Input: run Path, timestamp str, result dict. Output: decision dict. Validate then journal under round lock."""
+    from wqb.research_seed_stage import preplanned_research_enabled
+    if preplanned_research_enabled(run):
+        from wqb.research_tree import _load
+        _load(run)
+        prior = _read(run / ROUND_STATE_FILENAME)
+        if prior.get('pending_transition'):
+            raise ValueError('preplanned run has a legacy pending round transition; reconcile original evidence')
+        # Its full finite experiment tree is already frozen. Legacy rotation
+        # cannot invent another tree or reuse its consumed simulation identities.
+        return dict(status='not_applicable', reason='preplanned_tree_uses_frozen_finite_plan')
     ledger = _read(run / ROUND_STATE_FILENAME) or {
         'schema_version': ROUND_SCHEMA_VERSION, 'run_id': run.name, 'rounds': [],
         'current_round_id': 'round-0001',

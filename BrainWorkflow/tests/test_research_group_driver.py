@@ -4,6 +4,12 @@ from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
+import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import subprocess
+import sys
+import threading
+import time
 from threading import Barrier
 from types import SimpleNamespace
 import unittest
@@ -480,7 +486,7 @@ class ResearchGroupDriverTests(unittest.TestCase):
             config={}, spawn_runner=self.spawn)
         worker = started['workers'][0]
         args = self.spawned[0][0][3:]
-        with patch('wqb.research_group_driver.run_group_lane', return_value={'runtime_status': 'paused'}) as lane:
+        with patch('wqb.research_group_driver.supervise_group_lane', return_value={'runtime_status': 'paused'}) as lane:
             self.assertEqual(main(args), 0)
             with self.assertRaises(ValueError):
                 main(args)
@@ -488,6 +494,328 @@ class ResearchGroupDriverTests(unittest.TestCase):
         job = Path(worker['evidence_dir'])
         self.assertEqual(json.loads((job / 'result.json').read_text())['runtime_status'], 'paused')
         self.assertEqual(json.loads((job / 'job.json').read_text())['status'], 'exited')
+
+    def supervise(self, mode='timeout', confirmed=True):
+        """Input: fake completion mode str/confirmation bool. Output: supervisor result and fake tree; no real transport."""
+        from wqb import research_group_driver as driver
+        group = self.prepared()
+        started = driver.start_group_workers(self.paths, group, expected_revision=group['request_revision'],
+            config={'request_timeout_seconds': 2}, spawn_runner=self.spawn)
+        run = self.paths.run_root / 'lane-0'
+        worker = {**started['workers'][0], 'status': 'running', 'pid': os.getpid()}
+        _write(run / 'runtime/group_worker.json', worker)
+        job = Path(worker['evidence_dir'])
+        self.addCleanup(driver._UNCONFIRMED_OWNERS.pop, str(job), None)
+        if mode == 'runtime-expiry':
+            update_runtime_status(run, elapsed_seconds=3598)
+        clock = [100.0]
+        child = SimpleNamespace(pid=800123, returncode=None)
+        tree = SimpleNamespace(spawn_kwargs={}, stopped=False, closed=False, observations=[])
+        def attach(process):
+            """Input: retained fake process. Output: None; bind only the actual returned handle."""
+            self.assertIs(process, child)
+        tree.attach = attach
+        def poll():
+            """Input: none. Output: fake process exit code without PID lookup."""
+            return child.returncode
+        tree.poll = poll
+        def terminate():
+            """Input: none. Output: bool; simulate a response racing process termination."""
+            tree.stopped = True
+            if mode == 'lease-replaced':
+                _write(run / 'runtime/source_run_lock.json', dict(status='running', pid=child.pid,
+                    owner_id='replacement-owner', action='workflow-driver'))
+            if mode == 'termination-error':
+                raise OSError('private termination diagnostic')
+            if mode == 'late-response':
+                row = json.loads((job / 'network_current.json').read_text())
+                _write(job / 'network_current.json', {**row, 'state': 'completed', 'response_recorded': True})
+                from wqb.research_group import record_payload_outcome
+                record_payload_outcome(run, row['simulation_identities'],
+                    SimpleNamespace(status_code=201, headers={'Location': 'https://fixture/simulations/known'}))
+            child.returncode = -9
+            tree.observations.append(json.loads((run / 'runtime/source_run_lock.json').read_text())['status'])
+            return confirmed
+        tree.terminate_and_confirm = terminate
+        tree.close = lambda: setattr(tree, 'closed', True)
+        identity = 'c' * 64
+        def sleep(seconds):
+            """Input: polling seconds float. Output: None; advance only a deterministic fake clock."""
+            clock[0] += 1
+            if not (job / 'network_current.json').exists():
+                owner = json.loads((job / 'network_owner.json').read_text())
+                _write(run / 'runtime/source_run_lock.json', dict(status='running', pid=child.pid,
+                    owner_id='fake-lock-owner', action='workflow-driver'))
+                row = dict(request_id='d' * 32, owner_nonce=owner['owner_nonce'],
+                    execution_pid=child.pid, supervisor_pid=os.getpid(), method='POST',
+                    operation='simulation_submit', simulation_identities=[identity],
+                    state='entered', started=clock[0], deadline=clock[0] + 2)
+                if mode == 'runtime-expiry':
+                    row['deadline'] = owner['runtime_deadline']
+                from wqb.research_group import _reserve_identities
+                _reserve_identities(Path(group['group_dir']), run.name, [identity], submission=True)
+                charge_daily_budget(run, 1, 'offline-owned-request')
+                update_runtime_status(run, elapsed_seconds=17)
+                if mode == 'nonce-mismatch':
+                    row['owner_nonce'] = 'e' * 32
+                if mode == 'pid-reuse':
+                    row['execution_pid'] = 999999
+                if mode == 'corrupt-deadline':
+                    row['deadline'] = float('nan')
+                if mode == 'future-start':
+                    row['started'] += 50
+                    row['deadline'] += 50
+                _write(job / 'network_current.json', row)
+                if mode == 'stop':
+                    # Persist intent without waiting on the fake request's fence.
+                    current = json.loads((Path(group['group_dir']) / 'group_intent.json').read_text())
+                    _write(Path(group['group_dir']) / 'group_intent.json',
+                        {**current, 'desired_state': 'paused', 'request_revision': 'f' * 32})
+            elif mode == 'completion-race' and clock[0] >= 103:
+                row = json.loads((job / 'network_current.json').read_text())
+                _write(job / 'network_current.json', {**row, 'state': 'completed'})
+                owner = json.loads((job / 'network_owner.json').read_text())
+                _write(job / 'execution_result.json', {'owner_nonce': owner['owner_nonce'],
+                    'result': {'runtime_status': 'paused'}})
+                child.returncode = 0
+        read_record = driver._read
+        raced = False
+        def read(path):
+            """Input: JSON Path. Output: dict; publish once during a read using only the injected clock."""
+            nonlocal raced
+            if (mode in {'read-race', 'future-read'} and path == job / 'network_current.json'
+                    and not raced):
+                raced = True
+                clock[0] += .25
+                row = read_record(path)
+                started = clock[0] + (50 if mode == 'future-read' else 0)
+                _write(path, {**row, 'started': started, 'deadline': started + 2})
+            return read_record(path)
+        with patch.object(driver, 'OwnedExecutionTree', return_value=tree), \
+                patch.object(driver, '_read', side_effect=read), \
+                patch('wqb.maintenance_notifications.dispatch_notification', side_effect=lambda r, c, n: c):
+            result = driver.supervise_group_lane(self.paths, group, run, config={'request_timeout_seconds': 2},
+                spawn_runner=lambda *a, **k: child, now_func=lambda: clock[0], sleep_func=sleep)
+        return result, tree, run, job
+
+    def test_request_published_during_read_reaches_its_total_deadline(self):
+        result, tree, run, job = self.supervise('read-race')
+        self.assertEqual(result['runtime_reason'], 'network_total_deadline_exceeded')
+        self.assertTrue(result['termination_confirmed'])
+        self.assertEqual(result['request_outcome'], 'unknown')
+        self.assertEqual(read_daily_budget(run)['lifetime_attempts'], 1)
+
+    def test_request_still_in_future_after_read_is_rejected_by_injected_clock(self):
+        result, tree, run, job = self.supervise('future-read')
+        self.assertEqual(result['runtime_reason'], 'owned_network_request_invalid')
+        self.assertTrue(result['termination_confirmed'])
+        self.assertEqual(read_daily_budget(run)['lifetime_attempts'], 1)
+
+    def test_pid_reuse_cannot_release_a_replaced_source_lease(self):
+        result, tree, run, job = self.supervise('lease-replaced')
+        self.assertTrue(result['termination_confirmed'])
+        lock = json.loads((run / 'runtime/source_run_lock.json').read_text())
+        self.assertEqual(lock['status'], 'running')
+        self.assertEqual(lock['owner_id'], 'replacement-owner')
+
+    def test_termination_error_is_sanitized_and_keeps_ownership_quarantined(self):
+        result, tree, run, job = self.supervise('termination-error')
+        self.assertFalse(result['termination_confirmed'])
+        self.assertEqual(result['runtime_reason'], 'owned_network_termination_unconfirmed')
+        self.assertNotIn('private termination diagnostic', (job / 'network_supervision.json').read_text())
+
+    def test_execute_role_does_not_persist_exception_urls_or_payloads(self):
+        from wqb import research_group_driver as driver
+        group = self.prepared()
+        driver.start_group_workers(self.paths, group, expected_revision=group['request_revision'],
+            config={}, spawn_runner=self.spawn)
+        args = ['execute', *self.spawned[0][0][4:]]
+        with patch.object(driver, '_execute_owned_lane', side_effect=RuntimeError('https://private?secret=payload')):
+            self.assertEqual(driver.main(args), 1)
+
+    def test_request_deadline_never_extends_remaining_original_runtime(self):
+        result, tree, run, job = self.supervise('runtime-expiry')
+        self.assertEqual(result['runtime_reason'], 'runtime_budget_exhausted')
+        self.assertEqual(result['request_outcome'], 'unknown')
+        self.assertGreaterEqual(read_runtime_control(run)['elapsed_seconds'], 3600)
+        self.assertEqual(read_runtime_control(run)['max_runtime_seconds'], 3600)
+        self.assertEqual(read_daily_budget(run)['lifetime_attempts'], 1)
+
+    def test_owned_total_timeout_terminates_before_releasing_source_lease(self):
+        result, tree, run, job = self.supervise()
+        self.assertEqual(result['runtime_reason'], 'network_total_deadline_exceeded')
+        self.assertTrue(result['termination_confirmed'])
+        self.assertTrue(tree.stopped)
+        self.assertEqual(tree.observations, ['running'])
+        self.assertEqual(json.loads((run / 'runtime/source_run_lock.json').read_text())['status'], 'released')
+        self.assertEqual(result['request_outcome'], 'unknown')
+        self.assertEqual(read_daily_budget(run)['lifetime_attempts'], 1)
+        claims = json.loads((run.parent / 'research_groups/simulation_reservations.json').read_text())
+        self.assertEqual(claims['c' * 64]['submission_status'], 'unknown')
+
+    def test_unconfirmed_termination_never_releases_source_lease(self):
+        result, tree, run, job = self.supervise(confirmed=False)
+        self.assertFalse(result['termination_confirmed'])
+        self.assertEqual(result['runtime_reason'], 'owned_network_termination_unconfirmed')
+        self.assertEqual(json.loads((run / 'runtime/source_run_lock.json').read_text())['status'], 'running')
+
+    def test_deadline_completion_race_keeps_completed_response(self):
+        result, tree, run, job = self.supervise('completion-race')
+        self.assertEqual(result['runtime_status'], 'paused')
+        self.assertEqual(result.get('runtime_reason', ''), '')
+
+    def test_request_pid_nonce_and_deadline_corruption_never_target_foreign_pid(self):
+        for mode in ('pid-reuse', 'nonce-mismatch', 'corrupt-deadline', 'future-start'):
+            with self.subTest(mode=mode):
+                if mode != 'pid-reuse':
+                    self.setUp()
+                result, tree, run, job = self.supervise(mode)
+                self.assertEqual(result['runtime_reason'], 'owned_network_request_invalid')
+                self.assertTrue(tree.stopped)
+                self.assertTrue(result['termination_confirmed'])
+
+    def test_stop_during_post_preserves_unknown_and_original_authority(self):
+        result, tree, run, job = self.supervise('stop')
+        self.assertEqual(result['runtime_status'], 'paused')
+        self.assertEqual(result['runtime_reason'], 'user_paused')
+        self.assertEqual(result['request_outcome'], 'unknown')
+        control = read_runtime_control(run)
+        self.assertEqual(control['max_runtime_seconds'], 3600)
+        self.assertEqual(control['max_recoveries'], 3)
+        self.assertEqual(read_group(run.parent / 'research_groups' / json.loads(
+            (run / 'research_group_binding.json').read_text())['group_id'])['desired_state'], 'paused')
+
+    def test_late_response_is_reconciled_without_resubmit_or_refund(self):
+        result, tree, run, job = self.supervise('late-response')
+        self.assertEqual(result['request_outcome'], 'response_recorded_reconcile')
+        claims = json.loads((run.parent / 'research_groups/simulation_reservations.json').read_text())
+        self.assertEqual(claims['c' * 64]['progress_url'], 'https://fixture/simulations/known')
+        self.assertNotIn('https://', (job / 'network_supervision.json').read_text())
+
+    def local_trickle(self, stop=False, complete=False):
+        """Input: Stop scenario bool. Output: result/evidence; real owned subprocesses, loopback HTTP only."""
+        from wqb import research_group_driver as driver
+        from wqb.submission_attempts import uncertain_submission_hashes
+        entered = threading.Event()
+        arrivals = []
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                """Input: server log args. Output: None; keep fictional HTTP logs quiet."""
+            def do_POST(self):
+                """Input: local HTTP request. Output: trickling body, always faster than the read inactivity timeout."""
+                self.rfile.read(int(self.headers['Content-Length']))
+                arrivals.append(time.monotonic())
+                self.send_response(201)
+                self.send_header('Content-Length', '200')
+                self.send_header('Location', '/simulations/fixture-only')
+                self.end_headers()
+                entered.set()
+                try:
+                    if complete:
+                        self.wfile.write(b'x' * 200)
+                        self.wfile.flush()
+                        return
+                    for _ in range(200):
+                        self.wfile.write(b'x')
+                        self.wfile.flush()
+                        time.sleep(.04)
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        serving = threading.Thread(target=lambda: server.serve_forever(poll_interval=.02), daemon=True)
+        serving.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        group = self.prepared()
+        started = driver.start_group_workers(self.paths, group, expected_revision=group['request_revision'],
+            config={'request_timeout_seconds': .6}, spawn_runner=self.spawn)
+        run = self.paths.run_root / 'lane-0'
+        worker = {**started['workers'][0], 'status': 'running', 'pid': os.getpid()}
+        _write(run / 'runtime/group_worker.json', worker)
+        job = Path(worker['evidence_dir'])
+        stopped, errors = [], []
+        confirmed_tree = threading.Event()
+        def stop_when_entered():
+            """Input: none. Output: None; real Stop must persist then wait until the sending fence is released."""
+            if not entered.wait(10):
+                errors.append('local POST did not enter')
+                return
+            try:
+                stopped.append(stop_group(Path(group['group_dir']), started['request_revision']))
+                if not confirmed_tree.is_set():
+                    errors.append('Stop acknowledged before subtree termination was confirmed')
+            except Exception as error:
+                errors.append(repr(error))
+        stopper = threading.Thread(target=stop_when_entered, daemon=True) if stop else None
+        if stopper:
+            stopper.start()
+        processes = []
+        def spawn(argv, **kwargs):
+            """Input: real execution argv/kwargs. Output: real Popen with only fixture transport replacement."""
+            self.assertEqual(argv[3], 'execute')
+            script = ('import sys; from tests.test_owned_network_deadline import fixture_execution; '
+                      'sys.exit(fixture_execution(sys.argv[1:]))')
+            environment = {**kwargs.pop('env'), 'FIXTURE_HTTP': f'http://127.0.0.1:{server.server_port}'}
+            process = subprocess.Popen([sys.executable, '-B', '-c', script, *argv[3:]], env=environment, **kwargs)
+            processes.append(process)
+            return process
+        tree = driver.OwnedExecutionTree()
+        terminate = tree.terminate_and_confirm
+        def confirm():
+            """Input: none. Output: bool; expose the interval between process death and confirmed tree cleanup."""
+            result = terminate()
+            time.sleep(.15)
+            if result:
+                confirmed_tree.set()
+            return result
+        tree.terminate_and_confirm = confirm
+        with patch('wqb.maintenance_notifications.dispatch_notification', side_effect=lambda r, c, n: c), \
+                patch.object(driver, 'OwnedExecutionTree', return_value=tree):
+            result = driver.supervise_group_lane(self.paths, group, run,
+                config={'request_timeout_seconds': .6}, spawn_runner=spawn)
+        if stopper:
+            stopper.join(10)
+            self.assertFalse(stopper.is_alive())
+            self.assertEqual(errors, [], (result, (job / 'execution.log').read_text()))
+            self.assertEqual(stopped[0]['desired_state'], 'paused')
+        self.assertTrue(entered.is_set(), (result, (job / 'execution.log').read_text()))
+        self.assertEqual(len(arrivals), 1)
+        self.assertLess(time.monotonic() - arrivals[0], 3)
+        self.assertTrue(json.loads((job / 'network_supervision.json').read_text())['termination_confirmed'])
+        self.assertIsNotNone(processes[0].poll())
+        self.assertEqual(read_daily_budget(run)['lifetime_attempts'], 1)
+        events = [json.loads(line) for line in (run / 'stages/offline-network/simulation_events.jsonl').read_text().splitlines()]
+        self.assertEqual(len(uncertain_submission_hashes(events)), 0 if complete else 1)
+        self.assertEqual(len(events), 2 if complete else 1)
+        self.assertEqual(json.loads((run / 'runtime/source_run_lock.json').read_text())['status'], 'released')
+        self.assertEqual(read_runtime_control(run)['max_runtime_seconds'], 3600)
+        self.assertEqual(read_runtime_control(run)['max_recoveries'], 3)
+        return result, run, job
+
+    def test_actual_trickle_http_is_killed_at_total_deadline_and_unknown_post_is_not_replayed(self):
+        result, run, job = self.local_trickle()
+        self.assertEqual(result['runtime_reason'], 'network_total_deadline_exceeded')
+        self.assertEqual(result['request_outcome'], 'unknown')
+        from wqb.research_group import reserve_payloads
+        with self.assertRaisesRegex(RuntimeError, 'already reserved or outcome unknown'):
+            reserve_payloads(run, {'regular': 'rank(close)', 'settings': {}})
+        with self.assertRaisesRegex(ValueError, 'cannot be replayed'):
+            from wqb.research_group_driver import supervise_group_lane
+            supervise_group_lane(self.paths,
+                run.parent / 'research_groups' / json.loads((run / 'research_group_binding.json').read_text())['group_id'],
+                run, config={})
+
+    def test_actual_stop_during_trickle_post_acknowledges_only_after_owned_tree_dies(self):
+        result, run, job = self.local_trickle(stop=True)
+        self.assertEqual(result['runtime_status'], 'paused')
+        self.assertEqual(result['runtime_reason'], 'user_paused')
+
+    def test_actual_completed_post_retains_location_and_ordinary_driver_result(self):
+        result, run, job = self.local_trickle(complete=True)
+        self.assertEqual(result['runtime_status'], 'completed')
+        claims = json.loads((run.parent / 'research_groups/simulation_reservations.json').read_text())
+        self.assertEqual(list(claims.values())[0]['progress_url'], '/simulations/fixture-only')
+        self.assertEqual(json.loads((job / 'network_current.json').read_text())['state'], 'completed')
 
 
 if __name__ == '__main__':

@@ -161,6 +161,27 @@ class ExplorationCertificationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             freeze_exploration(self.run, receipt, knowledge_root=self.vault, certificate=cert)
 
+    def test_unrelated_research_index_growth_preserves_selected_source_certificate(self):
+        """Input: frozen source certificate then another lane's research index row. Output: same valid attachment, immutable proof."""
+        certificate = self.certify()
+        receipt = validate_exploration(self.design, self.resources, self.scope)
+        saved = self.run / 'runtime/exploration/resources' / (certificate['content_sha256'] + '.json')
+        before = saved.read_bytes()
+        rows = list(self.resources['source_index'].values())
+        other = dict(path='raw/research/runs/other.md', source_family='raw/research/runs',
+                     source_type='workflow_research_record', content_hash='0' * 64,
+                     captured_at='2026-11-03T00:00:00Z')
+        self.write_index(rows + [other])
+        self.assertEqual(self.attach(receipt, certificate), receipt)
+        self.assertEqual(saved.read_bytes(), before)
+        self.index.write_bytes(self.index.read_bytes() + b'\n')
+        self.assertEqual(self.attach(receipt, certificate), receipt)
+        changed = deepcopy(rows)
+        changed[0]['content_hash'] = '0' * 64
+        self.write_index(changed + [other])
+        with self.assertRaisesRegex(ValueError, 'canonical registration'):
+            self.attach(receipt, certificate)
+
     def test_no_certificate_or_bare_old_run_cannot_attach(self):
         receipt = validate_exploration(self.design, self.resources, self.scope)
         with self.assertRaises(ValueError):
@@ -214,6 +235,10 @@ class ExplorationCertificationTests(unittest.TestCase):
                 changed = json.loads(before)
                 changed['start_snapshot']['research_policy']['exploration_policy_version'] = 2
                 target.write_text(json.dumps(changed), encoding='utf-8')
+            elif target == self.index:
+                changed = [json.loads(line) for line in before.splitlines() if line.strip()]
+                changed[0]['content_hash'] = '0' * 64
+                self.write_index(changed)
             else:
                 target.write_bytes(before + b' ')
             with self.subTest(target=target), self.assertRaises(ValueError):

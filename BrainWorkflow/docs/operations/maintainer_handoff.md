@@ -4,6 +4,22 @@ This document is for future Codex sessions and human maintainers. It replaces de
 
 ## First Files To Read
 
+### Verified Maintenance Slice (2026-11-03)
+
+Full offline suite: 2,816 tests, zero failures/errors, four skips, 687.819 seconds;
+source before/after `075c350ad133e77b32ec116fe4f0a2326cb25d0e7b27c44a24c35794b9824f0c`.
+Final review's field-card punctuation rejection was reproduced and fixed without
+changing immutable cards or sentence validation. Canonical consumption, certified
+Repair, pending-check recovery, finite-tree completion and owned HTTP supervision
+are covered by genuine composed fixtures. New EXE build `20261103-145837-8680`
+matches that source; three isolated native launches each passed 16 checks.
+
+This is not actual-vault completion or formal deployment. Real prepared knowledge
+still has stale/incomplete materials and no newly executed explanation batch.
+Root `todo.md` and the private deployment-readiness receipt retain exact remaining
+decisions; no new capture/model allowance, publication, old-proof renewal, research
+resume, quota change or Alpha submission is implied by these offline results.
+
 ### Full Local Semantic Maintenance (2026-10-30)
 
 The approved 2026-10-23 full-local compile and readiness-closure plans govern
@@ -17,8 +33,10 @@ choosing a model path. A mutable checkpoint type or legacy manifest label is not
 authority. Original deadlines and durable cancellation supervise transport.
 `full_semantic_model_worker` handles strict wire encoding, not semantic trust.
 `full_semantic_coverage` streams inventory and reuses canonical authority/output
-validation in read-only mode. Binder and actual Start coverage remain explicitly
-unmeasured until their existing consumer validators are integrated.
+validation in read-only mode. Explicit bounded `binding_requests` use the real
+source-bound binder; `consumer_run_dirs` validate existing frozen Start lanes in
+the owning workspace/vault. Omitted inputs remain explicitly unmeasured; report
+generation never creates a lane or grants research authority.
 
 Ordinary maintenance preserves a selected semantic release rather than invoking
 legacy migration. Owned wiki outputs cannot replace publication-owned pages.
@@ -26,6 +44,10 @@ Optional `field_semantics_ref` selectors require exact bytes, source generation,
 scope and documented premises; user notes support hypotheses only. No result is
 automatically activated or published. Missing local excerpts and stale sources
 remain blockers, not reasons to raise material bounds or renew capture dates.
+The canonical ledger projects only verified exact-scope bounded field excerpts.
+Overlapping extracts must retain every compatible proof path used by a selected
+explanation. Start consumes that canonical selector and at most 30 fallback
+fields per dataset, not the full platform inventory or unrelated explanation jobs.
 
 The actual zero-call reports are under the private vault's existing
 `machine/reports`; exact paths/counts are in root `todo.md`. They inventory local
@@ -50,6 +72,14 @@ remain mandatory. Optional `repair_search_policy` supports source-bound finite
 setting experiments; missing traits do not justify invented cadence or exposure.
 Arbitrary Start-supplied transforms remain unsupported. Empty rules are explicit
 deterministic exhaustion, not a claim of economic falsification.
+Compiler-produced rules can opt in with `compile_version=1`; they revalidate
+source meanings, actual parent-field applicability and the complete parent AST.
+Finite preplanned trees bypass legacy round rotation at normal record-sync
+completion; continuous AI epochs need a separate contract, not replayed identities.
+Exploration certificates retain their historical full-index hash unchanged,
+but operational equivalence compares exact selected registrations/raw bytes and
+owner/scope/policy/resources. Unrelated index additions cannot revoke a sibling
+lane; selected-source mutation and within-call index mutation still fail closed.
 
 Build with `scripts/build_desktop.ps1` after the frontend typecheck/tests/build.
 The package contains immutable product code/assets, not private knowledge,
@@ -58,11 +88,16 @@ source revision, not merely test an older EXE. Closing the view is not Stop.
 Frontend fixture latency and real durable localhost command latency are separate
 measurements; neither establishes live platform throughput.
 
-Known transport limitation: Requests timeout bounds inactivity, not a hard total
-response wall clock. A trickling remote response may delay fence acknowledgment;
-durable Stop still persists, and unknown POST outcomes cannot be blindly replayed.
-Hard network cancellation requires a separately verified transport change, not a
-quota increase or timer that releases an actively sending POST fence.
+Managed group lanes use an owning supervisor plus a separate contained execution
+process. `owned_network_deadline` writes sanitized nonce-bound dispatch evidence;
+the supervisor retains process handles and the fair POST fence until the owned
+tree is confirmed dead. A total request deadline is bounded by the original run
+time, not merely Requests' inactivity timeout. Interrupted POSTs remain charged
+and unknown unless an actual durable response can be reconciled; no blind retry.
+Unmanaged legacy/injected clients retain ordinary Requests semantics. Windows
+containment is covered by real local trickle/Stop tests; native POSIX acceptance
+and real platform throughput are not inferred. Current review/build evidence is
+in root `todo.md`, not an older EXE receipt.
 
 No real deployment, legacy proof renewal or research resume is certified by this
 offline integration. Exact current acceptance/build paths are in root `todo.md`.

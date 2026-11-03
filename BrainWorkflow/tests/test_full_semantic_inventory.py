@@ -508,6 +508,62 @@ class FullSemanticInventoryTests(unittest.TestCase):
             _material(self.root / 'different-vault', rows[paths[0]], _verification_session=session)
         session.finalize()
 
+    def test_optional_bulk_preparation_supplies_missing_bounded_material(self):
+        """Input: oversized capture without excerpts. Output: bounded jobs, two original reads, no ledger changes."""
+        from wqb.semantic_compilation import MAX_SOURCE_BYTES
+        original = 'raw/platform/data_fields/2026-10-23/data_fields.jsonl'
+        rows = [dict(self.field('f%03d' % i), capture_generation_id='fixture',
+                     generated_at='2026-10-23T00:00:00Z', endpoint='/data-fields') for i in range(65)]
+        self.write(original, ''.join(json.dumps(row) + '\n' for row in rows) + '\n' * MAX_SOURCE_BYTES)
+        self.write('raw/platform/data_fields/2026-10-23/manifest.json', dict(
+            generated_at=rows[0]['generated_at'], capture_generation_id='fixture', scope=rows[0]['scope'],
+            certification_status='partial', field_count=65, error_count=1))
+        ledger = self.write('machine/data_ledger.jsonl', json.dumps(dict(dataset_id='prices', field_id='f000')))
+        before = ledger.read_bytes()
+        reads, open_path = [], Path.open
+
+        def counted(path, *args, **kwargs):
+            """Input: Path/open arguments. Output: real stream, counting only original reads."""
+            if path == self.root / original and (not args or 'r' in args[0]):
+                reads.append(path)
+            return open_path(path, *args, **kwargs)
+
+        config = dict(local_field_extracts=dict(source_paths=[original], max_batches=3, max_fields=65))
+        with patch.object(Path, 'open', counted):
+            plan = prepare_full_semantic_compile(self.root, config)
+        self.assertEqual(plan['coverage']['prepared_targets'], 65)
+        self.assertEqual(plan['model_calls'], 0)
+        self.assertEqual(plan['budget']['model_call_budget'], 0)
+        self.assertEqual(len(reads), 2)
+        self.assertEqual(ledger.read_bytes(), before)
+        self.assertTrue(all(t['freshness_status'] == 'not_evaluated' for t in self.inventory(plan)))
+        second = prepare_full_semantic_compile(self.root, config)
+        self.assertEqual(plan['content_key'], second['content_key'])
+        self.assertEqual(plan['local_field_extracts']['selected_fields'], 65)
+
+    def test_bulk_config_invalid_options_rejected_before_preparation(self):
+        """Input: invalid opt-in bounds/types. Output: ValueError without frozen jobs."""
+        for option in [True, {}, dict(source_paths=[], max_batches=0), dict(source_paths=[], max_fields=True)]:
+            with self.assertRaises(ValueError):
+                prepare_full_semantic_compile(self.root, dict(local_field_extracts=option))
+        self.assertFalse((self.root / 'machine/semantic_jobs').exists())
+
+    def test_optional_preparation_preserves_other_existing_capture_sessions(self):
+        """Input: empty new-source selection plus existing excerpts. Output: ordinary two-read verification retained."""
+        original, _ = self.extracts()
+        reads, open_path = [], Path.open
+
+        def counted(path, *args, **kwargs):
+            """Input: Path/open arguments. Output: real file with original read count."""
+            if path == self.root / original:
+                reads.append(path)
+            return open_path(path, *args, **kwargs)
+
+        with patch.object(Path, 'open', counted):
+            plan = prepare_full_semantic_compile(self.root, dict(local_field_extracts=dict(source_paths=[])))
+        self.assertEqual(plan['coverage']['prepared_targets'], 3)
+        self.assertEqual(len(reads), 2)
+
 
 if __name__ == '__main__':
     unittest.main()

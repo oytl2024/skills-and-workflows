@@ -52,12 +52,14 @@ ConvertTo-Json -InputObject $Manifest -Depth 4 | Set-Content -LiteralPath (Join-
 $PreviousPythonPath = $env:PYTHONPATH
 $PreviousTemp = $env:TEMP
 $PreviousTmp = $env:TMP
+$PreviousInstallerCache = $env:PYINSTALLER_CONFIG_DIR
 try {
     $env:PYTHONPATH = $DependencyRoot
     $env:SystemRoot = [Environment]::GetFolderPath("Windows")
     $env:windir = $env:SystemRoot
     $env:TEMP = Join-Path $BuildRoot "temp"
     $env:TMP = $env:TEMP
+    $env:PYINSTALLER_CONFIG_DIR = Join-Path $BuildRoot "cache"
     New-Item -ItemType Directory -Path $env:TEMP -Force | Out-Null
     $Arguments = @("-m", "PyInstaller", "--noconfirm", "--onedir", "--windowed", "--noupx",
         "--name", "BrainWorkflow", "--distpath", $Distribution,
@@ -102,4 +104,5 @@ try {
     $env:PYTHONPATH = $PreviousPythonPath
     $env:TEMP = $PreviousTemp
     $env:TMP = $PreviousTmp
+    $env:PYINSTALLER_CONFIG_DIR = $PreviousInstallerCache
 }

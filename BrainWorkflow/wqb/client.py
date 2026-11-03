@@ -8,7 +8,7 @@ import requests
 
 from wqb.auth import load_credentials
 from wqb.request_metrics import record_request
-from wqb.runtime_control import CONTROL_ENV, check_submission_allowed, cooperative_sleep, submission_request_gate
+from wqb.runtime_control import CONTROL_ENV, check_submission_allowed, cooperative_sleep
 
 
 BASE_URL = "https://api.worldquantbrain.com"
@@ -41,16 +41,24 @@ class WQBClient:
         self.authenticated = False
         self.metrics_run_dir = metrics_run_dir
 
-    def _dispatch(self, method: str, url: str, *, authentication: bool = False, **kwargs: Any):
+    def _dispatch(self, method: str, url: str, *, authentication: bool = False,
+                  simulation_identities=None, **kwargs: Any):
         """Input: method/URL and request kwargs. Output: response. Measure one actual attempt without changing outcomes."""
         started = time.monotonic()
         response = None
         payload = kwargs.get("json")
         try:
-            if authentication:
-                response = self.session.post(url, **kwargs)
-            else:
-                response = self.session.request(method, url, **kwargs)
+            from wqb.owned_network_deadline import owned_request
+            with owned_request(method, url, self.timeout_seconds, simulation_identities,
+                               stream=kwargs.get('stream', False)) as receipt:
+                if authentication:
+                    response = self.session.post(url, **kwargs)
+                else:
+                    response = self.session.request(method, url, **kwargs)
+                if receipt is not None and simulation_identities:
+                    from wqb.research_group import record_payload_outcome
+                    # Preserve accepted Location evidence before completion can race termination.
+                    record_payload_outcome(Path(os.environ[CONTROL_ENV]), simulation_identities, response)
             return response
         finally:
             root = self.metrics_run_dir or os.environ.get(CONTROL_ENV)
@@ -129,7 +137,8 @@ class WQBClient:
             self.authenticate()
         retry_limit = 0 if simulation_submit else self.max_retries
         for attempt in range(retry_limit + 1):
-            gate = submission_request_gate(os.environ[CONTROL_ENV], fair=True) if managed_submit else nullcontext()
+            from wqb.owned_network_deadline import owned_submission_gate
+            gate = owned_submission_gate(Path(os.environ[CONTROL_ENV])) if managed_submit else nullcontext()
             with gate:
                 if managed:
                     check_submission_allowed()
@@ -157,7 +166,8 @@ class WQBClient:
                             record_payload_outcome(run, identities, None)
                             raise
                 try:
-                    response = self._dispatch(method, url, timeout=self.timeout_seconds, **kwargs)
+                    response = self._dispatch(method, url, simulation_identities=identities,
+                                              timeout=self.timeout_seconds, **kwargs)
                 except requests.exceptions.RequestException:
                     if simulation_submit:
                         raise RuntimeError("simulation submission outcome unknown; reconcile before retry") from None

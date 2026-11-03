@@ -131,6 +131,15 @@ def _validate_resource(root: Path, resource: dict, scope: dict, ledger: list[dic
     fields = resource['field_rows']
     if not 1 <= len(fields) <= MAX_FIELDS_PER_LANE:
         raise ValueError('lane requires 1..30 source-backed fields')
+    semantic_paths, semantic_histories = _field_semantic_context(root, fields, index)
+    if semantic_paths - resource['source_index'].keys():
+        raise ValueError('field explanation sources missing from frozen resource context')
+    supplied_histories = {
+        _digest(dict(history, evidence_refs=sorted(history['evidence_refs'], key=_digest)))
+        for history in resource['evidence_pack'].get('histories', [])}
+    if any(_digest(dict(history, evidence_refs=sorted(history['evidence_refs'], key=_digest)))
+           not in supplied_histories for history in semantic_histories):
+        raise ValueError('field explanation hypotheses missing from frozen resource context')
     version = resource.get('resource_contract_version', 1)
     for row in fields:
         identity = (row.get('dataset_id'), row.get('field_id'))
@@ -141,7 +150,7 @@ def _validate_resource(root: Path, resource: dict, scope: dict, ledger: list[dic
         if (not _scope_matches(row, scope) or not _row_has_measured_platform_coverage(row)
                 or not _row_has_positive_coverage(row) or not _row_has_source_date(row)):
             raise ValueError('missing measured positive dated exact-scope coverage: ' + str(identity))
-        if not _coverage_field_supported(row, texts, resource['source_index'], scope,
+        if not _coverage_field_supported(dict(row, semantic_tags=[]), texts, resource['source_index'], scope,
                                          resource_contract_version=version):
             raise ValueError('missing source-backed description/type/timing/grain/metadata: ' + str(identity))
         measured = []
@@ -162,6 +171,34 @@ def _validate_resource(root: Path, resource: dict, scope: dict, ledger: list[dic
                                             resource_contract_version=version):
             raise ValueError('missing typed source-backed operator: ' + str(row.get('operator')))
     return resource
+
+
+def _field_semantic_context(root: Path, fields: list[dict], index: dict) -> tuple[set, list]:
+    """Input: vault Path/canonical field rows/source index. Output: source paths and bounded hypothesis histories; no edits."""
+    from wqb.knowledge_compile import resolve_field_semantics
+    from wqb.semantic_contracts import CARD_FIELDS
+    paths, histories = set(), []
+    for row in fields:
+        selected = resolve_field_semantics(root, row)
+        if selected['status'] == 'absent':
+            continue
+        if selected['status'] != 'supported':
+            raise ValueError('field explanation rejected: ' + selected.get('reason', 'unknown'))
+        if any(row.get(name) != value for name, value in selected['facts'].items()):
+            raise ValueError('field explanation facts need maintenance compilation before Start')
+        # One structured card per field bounds the initial prompt independently
+        # of scope repetitions; the complete result remains selected in the ledger.
+        for card in selected['hypothesis_cards'][:1]:
+            for ref in card['evidence_refs']:
+                path = ref['source_path']
+                if path not in index:
+                    raise ValueError('field explanation source missing from canonical index')
+                paths.add(path)
+            # Join clauses, not complete sentences; the immutable source card is unchanged.
+            statement = '; '.join(name + ': ' + card['hypothesis_card'][name].strip().rstrip('.!?\u3002\uff01\uff1f')
+                                  for name in CARD_FIELDS)
+            histories.append(dict(statement=statement, evidence_refs=deepcopy(card['evidence_refs'])))
+    return paths, histories
 
 
 def _local_resources(root: Path, scope: dict, config: dict, count: int) -> tuple[list, list, list]:
@@ -206,15 +243,22 @@ def _local_resources(root: Path, scope: dict, config: dict, count: int) -> tuple
         except (OSError, ValueError, TypeError, KeyError) as error:
             diagnostics.append(dict(path=relative, reason=str(error)))
     jobs_root = _safe(root, 'machine/semantic_jobs')
-    jobs = sorted(jobs_root.glob('*/run_manifest.json')) if jobs_root.exists() else []
+    jobs = []
+    for path in sorted(jobs_root.glob('*/run_manifest.json')) if jobs_root.exists() else []:
+        try:
+            manifest = _json(_safe(root, path.parent.relative_to(root).as_posix()), 'run_manifest.json')
+            identity = manifest.get('identity', {})
+            if (manifest.get('task_kind') == 'hypothesis_design'
+                    and identity.get('evidence_pack', {}).get('scope') == scope
+                    and identity.get('context_digest')):
+                jobs.append((path, manifest))
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            diagnostics.append(dict(path=str(path.relative_to(root)), reason=str(error)))
     if len(jobs) > MAX_LOCAL_JOBS:
-        raise ValueError('semantic job lookup exceeds bounded local index; maintenance required')
-    for path in jobs:
+        raise ValueError('hypothesis design lookup exceeds bounded local index; maintenance required')
+    for path, manifest in jobs:
         try:
             job = _safe(root, path.parent.relative_to(root).as_posix())
-            manifest = _json(job, 'run_manifest.json')
-            if manifest.get('task_kind') != 'hypothesis_design':
-                continue
             policy = SemanticPolicy(**manifest['identity']['policy'])
             pack, resource = verify_design_materials(job, manifest, policy, check_sources=True)
             if resource is None or pack['scope'] != scope:
@@ -238,23 +282,30 @@ def _local_resources(root: Path, scope: dict, config: dict, count: int) -> tuple
                 grouped.setdefault(row.get('dataset_id'), []).append(row)
         for dataset, fields in sorted(grouped.items(), key=lambda item: str(item[0])):
             try:
+                fields = sorted(fields, key=lambda row: (row.get('simulation_usage_count', 0), str(row.get('field_id'))))[:MAX_FIELDS_PER_LANE]
+                explanation_paths, histories = _field_semantic_context(root, fields, index)
                 paths = {p for row in fields for p in row.get('source_paths', [])}
+                paths.update(explanation_paths)
                 paths.update(ref['source_path'] for row in operators
                              for ref in (row.get('definition') or {}).get('evidence_refs', []))
                 selected = {path: index[path] for path in sorted(paths)}
                 texts = _source_context(root, selected, index)
                 # These are literal sourced descriptions/tags, not inferred meanings.
-                semantics = sorted({text for row in fields for text in
-                    [row.get('field_description', row.get('description')), *row.get('semantic_tags', [])]
-                    if isinstance(text, str) and text.strip()})
+                semantics = {row.get('field_description', row.get('description')) for row in fields}
+                semantics = {text for text in semantics if isinstance(text, str) and text.strip()}
+                semantics.update(tag for row in fields for tag in row.get('semantic_tags', [])
+                    if _coverage_field_supported(dict(row, semantic_tags=[tag]), texts, selected, scope,
+                                                 resource_contract_version=2))
                 pack = dict(resource_contract_version=2, scope=deepcopy(scope), source_index=selected,
-                    source_texts=texts, allowed_role_semantics=semantics,
-                    allowed_operator_intents=['level', 'change'], histories=[])
+                    source_texts=texts, allowed_role_semantics=sorted(semantics),
+                    allowed_operator_intents=['level', 'change'], histories=histories)
                 resource = dict(resource_contract_version=2, field_rows=deepcopy(fields),
                     operator_rows=deepcopy(operators), source_index=selected, source_texts=texts,
                     evidence_pack=pack, settings=build_settings({**config,
                         **{key: scope[key] for key in ('instrument_type', 'region', 'delay', 'universe')}}))
                 accept(resource)
+                if len(resources) >= count:
+                    break
             except (OSError, ValueError, TypeError, KeyError) as error:
                 diagnostics.append(dict(dataset_id=dataset, reason=str(error)))
     receipts = list({row['content_sha256']: row for row in receipts}.values())
@@ -276,7 +327,9 @@ def _repair_policy(resource: dict, supplied: dict | None = None) -> dict:
     repurpose raw as a project policy store or invent documented rule references.
     Empty rules are a supported deterministic exhaustion, not a Scout blocker.
     """
-    from wqb.repair_search import _policy
+    from wqb.repair_search import _policy, compile_repair_search_policy
+    if isinstance(supplied, dict) and 'compile_version' in supplied:
+        return compile_repair_search_policy(resource, supplied)
     traits = {}
     fields = resource['field_rows']
     if fields and all(row['field_type'] == 'MATRIX' for row in fields):

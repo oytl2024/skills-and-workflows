@@ -541,6 +541,39 @@ def _persist_binding(
     return path
 
 
+def _pending_checks_decision(source: Path, now: str) -> SourceBridgeDecision:
+    """Input: completed source Path/time str. Output: bounded existing-ID check recovery or persisted wait/blocker."""
+    from wqb.pending_check_recovery import CHECK_RECOVERY_RECEIPT
+    path = source / CHECK_RECOVERY_RECEIPT
+    saved = _read_json(path)
+    metadata = {'pending_check_recovery': True}
+    reason = ''
+    if path.exists() and (not saved or saved.get('run_id') != source.name):
+        reason = 'existing Alpha check recovery receipt is invalid'
+    elif saved.get('status') == 'paused' and saved.get('recovery_eligible') is not True:
+        reason = 'existing Alpha check recovery attempts exhausted'
+    retry_at = saved.get('rate_limit_retry_at')
+    if retry_at and _parse_time(retry_at) is None:
+        reason = 'existing Alpha check recovery retry time is invalid'
+    if reason:
+        return SourceBridgeDecision('maintenance_blocker', reason, source.name, str(source), [str(path)], metadata)
+    checks_source = source / 'stages/backtest/checks'
+    cooldown = read_rate_limit_state(checks_source / 'rate_limit_state.json')
+    rate_metadata = _rate_limit_metadata(cooldown, now)
+    metadata.update(rate_metadata)
+    if rate_limit_requires_maintenance(cooldown, now):
+        return SourceBridgeDecision('maintenance_blocker', 'existing Alpha check recovery rate limit threshold reached',
+            source.name, str(source), [str(path)], metadata)
+    if cooldown_is_active(cooldown, now):
+        return SourceBridgeDecision('rate_limit_wait', 'existing Alpha check recovery cooldown active',
+            source.name, str(source), [str(path)], metadata)
+    if retry_at and _parse_time(retry_at) > (_parse_time(now) or datetime.now(timezone.utc)):
+        return SourceBridgeDecision('rate_limit_wait', 'existing Alpha checks await paced recovery',
+            source.name, str(source), [str(path)], {**metadata, 'retry_at': retry_at})
+    return SourceBridgeDecision('complete_in_flight', 'existing Alpha identities need check recovery',
+        source.name, str(source), [str(source / 'all_alphas.jsonl'), str(path)], metadata)
+
+
 def _decision_for_source(source: Path, now: str, *, require_complete_batch: bool = False) -> SourceBridgeDecision | None:
     """Input: one compatible source and timestamp. Output: recovery decision or none. Classify durable source evidence."""
     events_path = source / "simulation_events.jsonl"
@@ -554,6 +587,14 @@ def _decision_for_source(source: Path, now: str, *, require_complete_batch: bool
     candidate_path = source / "candidates.csv"
     complete = not _has_in_flight_simulation(events_path) and not _planned_candidate_state(source)[1]
     can_import = not require_complete_batch or complete
+    outcome = None
+    if require_complete_batch and complete:
+        try:
+            outcome = research_outcome(source)
+        except (OSError, ValueError):
+            outcome = {"outcome": "missing_results"}
+        if outcome['outcome'] == 'pending_review':
+            can_import = False
     if _candidate_file_valid(source) and can_import:
         return SourceBridgeDecision(
             "import_existing",
@@ -570,10 +611,11 @@ def _decision_for_source(source: Path, now: str, *, require_complete_batch: bool
             str(source),
             [str(candidate_path)],
         )
-    try:
-        outcome = research_outcome(source)
-    except (OSError, ValueError):
-        outcome = {"outcome": "missing_results"}
+    if outcome is None:
+        try:
+            outcome = research_outcome(source)
+        except (OSError, ValueError):
+            outcome = {"outcome": "missing_results"}
     events_path = source / "simulation_events.jsonl"
     _, unresolved = _planned_candidate_state(source)
     if (outcome["outcome"] in {"repairable_signal", "qualified", "no_signal"}
@@ -619,6 +661,8 @@ def _decision_for_source(source: Path, now: str, *, require_complete_batch: bool
             str(source),
             [str(events_path)],
         )
+    if require_complete_batch and complete and outcome['outcome'] == 'pending_review':
+        return _pending_checks_decision(source, now)
     planned_path = source / "planned_candidates.jsonl"
     has_planned, has_unresolved = _planned_candidate_state(source)
     if has_unresolved:

@@ -20,6 +20,11 @@ MAX_FIELD_CAPTURE_LINE_BYTES = 1_000_000
 MAX_FIELD_EXTRACT_BYTES = 512_000
 MAX_CAPTURE_MANIFEST_BYTES = 2_000_000
 MAX_SOURCE_REPAIR_BYTES = 2_000_000
+DEFAULT_FIELD_EXTRACT_BATCHES = 8
+DEFAULT_FIELD_EXTRACT_FIELDS = 240
+MAX_BULK_FIELD_BATCHES = 64
+MAX_BULK_FIELD_SOURCES = 64
+MAX_BULK_FIELD_FIELDS = MAX_BULK_FIELD_BATCHES * MAX_FIELD_EXTRACT_ROWS
 
 RAW_CANONICAL_PREFIXES = (
     "raw/platform/learn",
@@ -201,6 +206,9 @@ def validate_raw_metadata(path: Path) -> list[str]:
     """Input: raw Markdown path. Output: issue strings. Validate raw source metadata."""
     metadata, _ = parse_markdown_front_matter(path.read_text(encoding="utf-8"))
     issues = _missing_fields(metadata, RAW_REQUIRED_FIELDS)
+    if metadata.get('source_type') == 'platform_capture_error' and 'compiled_targets' in metadata:
+        # Failure receipts are retained diagnostics, never semantic fact sources.
+        issues = [issue for issue in issues if issue != 'missing compiled_targets']
     content_status = metadata.get("content_status")
     if (content_status == 'verified_raw_extract' or path.name.startswith('semantic-subset-')
             or any(key in metadata for key in ('extraction_receipt', 'original_source_path', 'original_sha256'))
@@ -452,7 +460,7 @@ def _capture_manifest_outcome(manifest: dict, scope: dict) -> dict:
 
 
 def _scan_field_source(source: Path, identities: list[dict], manifest: dict, *,
-                       _receipts_only: bool = False, _on_row=None) -> dict:
+                       _receipts_only: bool = False, _on_row=None, _bulk_limits: dict | None = None) -> dict:
     """Input: source/identities/manifest, internal receipt mode/callback. Output: streamed hashes and rows or receipts.
 
     Receipt mode keeps no selected row bodies and applies each extract's byte/epoch
@@ -460,10 +468,13 @@ def _scan_field_source(source: Path, identities: list[dict], manifest: dict, *,
     """
     from wqb.semantic_contracts import resource_scope_from_dict
     expected = {json.dumps(identity, sort_keys=True): identity for identity in identities}
-    selected = {}
+    selected, retained = {}, {}
     source_hash = hashlib.sha256()
     before = source.stat()
-    snapshot_bytes = bytearray() if _receipts_only and before.st_size <= MAX_SOURCE_REPAIR_BYTES else None
+    snapshot_limit = (MAX_SOURCE_REPAIR_BYTES if _bulk_limits is None else
+                      _bulk_limits.get('max_snapshot_bytes', MAX_SOURCE_REPAIR_BYTES))
+    snapshot_bytes = (bytearray() if (_receipts_only or _bulk_limits is not None)
+                      and before.st_size <= snapshot_limit else None)
     count, selected_bytes, oldest = 0, 0, None
     original_captured_at = None
     with source.open('rb') as stream:
@@ -491,8 +502,19 @@ def _scan_field_source(source: Path, identities: list[dict], manifest: dict, *,
             if _on_row is not None:
                 _on_row(row)
             key = json.dumps(identity, sort_keys=True)
-            if key not in expected:
+            if _bulk_limits is None and key not in expected:
                 continue
+            keep = True
+            if _bulk_limits is not None:
+                if key in selected:
+                    raise ValueError('duplicate captured field identity')
+                keep = (len(retained) < _bulk_limits['max_fields']
+                        and selected_bytes + len(raw) <= _bulk_limits['max_bytes']
+                        and (_bulk_limits.get('requested_keys') is None or key in _bulk_limits['requested_keys']))
+                if not keep and key not in expected:
+                    continue
+                if any(not isinstance(identity[k], str) or not identity[k].strip() for k in ('dataset_id', 'field_id')):
+                    raise ValueError('invalid field identity')
             resource_scope_from_dict(row['scope'])
             if row.get('endpoint') != '/data-fields':
                 raise ValueError('unsupported field capture endpoint')
@@ -506,32 +528,70 @@ def _scan_field_source(source: Path, identities: list[dict], manifest: dict, *,
                 raise ValueError('field capture generation/date mismatch')
             if key in selected:
                 raise ValueError('duplicate captured field identity')
-            selected_bytes += len(raw)
-            if not _receipts_only and selected_bytes > MAX_FIELD_EXTRACT_BYTES:
+            if keep:
+                selected_bytes += len(raw)
+            if _bulk_limits is None and not _receipts_only and selected_bytes > MAX_FIELD_EXTRACT_BYTES:
                 raise ValueError('selected field bytes exceed extract bound')
             item = dict(row_sha256=hashlib.sha256(raw).hexdigest(), record_number=count,
                         captured_at=row['generated_at'], capture_generation_id=row['capture_generation_id'])
-            if _receipts_only:
+            if _receipts_only or _bulk_limits is not None:
                 item.update(raw_bytes=len(raw), row_content_sha256=hashlib.sha256(json.dumps(
                     row, sort_keys=True, ensure_ascii=False, allow_nan=False).encode('utf-8')).hexdigest())
-            else:
+            if not _receipts_only and keep:
                 item['row'] = row
             selected[key] = item
+            if _bulk_limits is not None and keep:
+                retained[key] = item
     after = source.stat()
     if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
         raise ValueError('field source changed during extraction')
-    if not _receipts_only and selected.keys() != expected.keys():
+    if _bulk_limits is None and not _receipts_only and selected.keys() != expected.keys():
         raise ValueError('missing exact field capture identities')
     epochs = {(_capture_timestamp(item['captured_at']), item['capture_generation_id']) for item in selected.values()}
-    if not _receipts_only and len(epochs) != 1:
+    if _bulk_limits is None and not _receipts_only and len(epochs) != 1:
         raise ValueError('mixed capture epochs require separate source excerpts')
+    output = retained if _bulk_limits is not None else selected
     result = dict(original_sha256=source_hash.hexdigest(), original_rows=count,
-                  selected=[selected[key] for key in sorted(selected)], source_stat=after,
+                  selected=[output[key] for key in sorted(output)], source_stat=after,
                   original_captured_at=original_captured_at)
-    if _receipts_only:
+    if _receipts_only or _bulk_limits is not None:
         result.update(selected_by_identity=selected,
                       source_bytes=bytes(snapshot_bytes) if snapshot_bytes is not None else None)
     return result
+
+
+def _field_extract_artifacts(source_path: str, manifest_bytes: bytes, identities: list[dict], scanned: dict) -> dict:
+    """Input: canonical path, manifest bytes, exact identities and scan dict. Output: existing-schema artifact dict."""
+    parts = PurePosixPath(source_path).parts
+    captured_at = scanned['selected'][0]['captured_at']
+    original_hash = scanned['original_sha256']
+    identity = dict(kind='field_source_extract', version=1, source_path=source_path,
+        original_sha256=original_hash, manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+        identities=sorted(json.dumps(item, sort_keys=True) for item in identities))
+    key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode('utf-8')).hexdigest()
+    excerpt_path = '/'.join(parts[:-1]) + '/semantic-subset-' + key + '.md'
+    receipt_path = 'machine/semantic_jobs/' + key + '/field_source_extract.json'
+    body = '# Verified Field Source Extract\n\n' + '```json\n' + json.dumps(
+        dict(rows=[item['row'] for item in scanned['selected']]), ensure_ascii=False,
+        sort_keys=True, allow_nan=False) + '\n```\n'
+    body_hash = hashlib.sha256(body.encode('utf-8')).hexdigest()
+    metadata = dict(source_type='platform_data_field_capture', source_family='raw/platform/data_fields',
+        source_path=excerpt_path, captured_at=captured_at, capture_tool='knowledge_contracts.extract_field_source_subset',
+        content_status='verified_raw_extract', record_count=len(identities), content_hash=body_hash,
+        update_check='verify original capture, row digests and extraction receipt',
+        compiled_targets=['machine/data_ledger.jsonl'], extraction_receipt=receipt_path,
+        original_source_path=source_path, original_sha256=original_hash)
+    excerpt = (render_front_matter(metadata) + body).encode('utf-8')
+    if len(excerpt) > MAX_FIELD_EXTRACT_BYTES:
+        raise ValueError('rendered field extract exceeds bound')
+    result = dict(status='extracted', source_path=source_path, excerpt_path=excerpt_path,
+                  receipt_path=receipt_path, original_sha256=original_hash, selected_rows=len(identities))
+    receipt = dict(identity=identity, result=result, captured_at=captured_at,
+        original_rows=scanned['original_rows'], partial=True,
+        excerpt_sha256=hashlib.sha256(excerpt).hexdigest(), body_sha256=body_hash,
+        row_receipts=[{name: item[name] for name in ('row_sha256', 'record_number', 'captured_at', 'capture_generation_id')}
+                      for item in scanned['selected']])
+    return dict(result=result, excerpt=excerpt, receipt=receipt, metadata=metadata)
 
 
 def _write_immutable_source(path: Path, content: bytes) -> None:
@@ -597,31 +657,10 @@ def extract_field_source_subset(root: Path, source_path: str, identities: list[d
     scanned = _scan_field_source(source, identities, manifest)
     captured_at = scanned['selected'][0]['captured_at']
     original_hash = scanned['original_sha256']
-    identity = dict(kind='field_source_extract', version=1, source_path=source_path,
-        original_sha256=original_hash, manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(), identities=identity_keys)
-    key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode('utf-8')).hexdigest()
-    excerpt_path = '/'.join(parts[:-1]) + '/semantic-subset-' + key + '.md'
-    receipt_path = 'machine/semantic_jobs/' + key + '/field_source_extract.json'
-    body = '# Verified Field Source Extract\n\n' + '```json\n' + json.dumps(
-        dict(rows=[item['row'] for item in scanned['selected']]), ensure_ascii=False,
-        sort_keys=True, allow_nan=False) + '\n```\n'
-    body_hash = hashlib.sha256(body.encode('utf-8')).hexdigest()
-    metadata = dict(source_type='platform_data_field_capture', source_family='raw/platform/data_fields',
-        source_path=excerpt_path, captured_at=captured_at, capture_tool='knowledge_contracts.extract_field_source_subset',
-        content_status='verified_raw_extract', record_count=len(identities), content_hash=body_hash,
-        update_check='verify original capture, row digests and extraction receipt',
-        compiled_targets=['machine/data_ledger.jsonl'], extraction_receipt=receipt_path,
-        original_source_path=source_path, original_sha256=original_hash)
-    excerpt = (render_front_matter(metadata) + body).encode('utf-8')
-    if len(excerpt) > MAX_FIELD_EXTRACT_BYTES:
-        raise ValueError('rendered field extract exceeds bound')
-    result = dict(status='extracted', source_path=source_path, excerpt_path=excerpt_path,
-                  receipt_path=receipt_path, original_sha256=original_hash, selected_rows=len(identities))
-    expected_receipt = dict(identity=identity, result=result, captured_at=captured_at,
-        original_rows=scanned['original_rows'], partial=True,
-        excerpt_sha256=hashlib.sha256(excerpt).hexdigest(), body_sha256=body_hash,
-        row_receipts=[{name: item[name] for name in ('row_sha256', 'record_number', 'captured_at', 'capture_generation_id')}
-                      for item in scanned['selected']])
+    artifact = _field_extract_artifacts(source_path, manifest_bytes, identities, scanned)
+    result, excerpt, expected_receipt, metadata = (artifact[name] for name in ('result', 'excerpt', 'receipt', 'metadata'))
+    excerpt_path, receipt_path = result['excerpt_path'], result['receipt_path']
+    body_hash = expected_receipt['body_sha256']
     with _source_index_guard(root):
         _reject_unindexed_human_history(root)
         existing = [asdict(row) for row in _repair_index_rows(root)]
@@ -670,6 +709,211 @@ def extract_field_source_subset(root: Path, source_path: str, identities: list[d
         verify_field_source_extract(root, excerpt_path)
         if not _repair_human_index_agrees(root, _repair_index_rows(root)):
             raise ValueError('field extraction index publication incomplete; replay required')
+    return result
+
+
+def extract_field_source_batches(root: Path, source_paths: list[str], *,
+                                 max_batches: int = DEFAULT_FIELD_EXTRACT_BATCHES,
+                                 max_fields: int = DEFAULT_FIELD_EXTRACT_FIELDS,
+                                 identities_by_source: dict | None = None,
+                                 _on_row=None, _defer_finalize: bool = False) -> dict:
+    """Input: vault Path, canonical captures list, finite batch/field ints. Output: bounded local extract report.
+
+    Streams each capture once; retains at most max_batches*512KB selected raw
+    material across the invocation. Sorted exact identities split by capture
+    epoch, thirty rows and rendered bytes. Replay preserves immutable receipts;
+    larger limits extend a deterministic prefix. Optional exact identity lists
+    select the next missing bounded subset without rewriting prior batches.
+    Limits cannot exceed 64 batches/1920 fields (32,768,000 retained raw bytes).
+    Pending rows are not coverage.
+    Internal deferred mode hands the genuine session to inventory for its final
+    digest check, rather than reparsing originals. No model or freshness authority.
+    """
+    _check_index_path(Path(root))
+    root = Path(root).resolve()
+    for name, value, limit in (('max_batches', max_batches, MAX_BULK_FIELD_BATCHES),
+                               ('max_fields', max_fields, MAX_BULK_FIELD_FIELDS)):
+        if type(value) is not int or not 1 <= value <= limit:
+            raise ValueError(name + ' must be a finite positive integer <= ' + str(limit))
+    if not isinstance(source_paths, list) or any(not isinstance(p, str) for p in source_paths):
+        raise ValueError('source_paths must be a list of canonical paths')
+    if len(source_paths) > MAX_BULK_FIELD_SOURCES:
+        raise ValueError('source_paths exceeds finite bulk source bound')
+    sources = {}
+    # Validate every path before opening any source or publishing artifacts.
+    for relative in sorted(set(source_paths)):
+        source = _source_contract_path(root, relative)
+        parts = PurePosixPath(relative).parts
+        if (len(parts) != 5 or parts[:3] != ('raw', 'platform', 'data_fields')
+                or parts[-1] != 'data_fields.jsonl'):
+            raise ValueError('field source must be a canonical captured JSONL')
+        sources[relative] = source
+    if identities_by_source is not None:
+        from wqb.semantic_contracts import resource_scope_from_dict
+        if not isinstance(identities_by_source, dict) or set(identities_by_source) != set(sources):
+            raise ValueError('exact identity plan must match source_paths')
+        total = 0
+        for identities in identities_by_source.values():
+            if not isinstance(identities, list) or not identities:
+                raise ValueError('exact identity plan requires nonempty identity lists')
+            keys = set()
+            for identity in identities:
+                if (not isinstance(identity, dict) or set(identity) != {'dataset_id', 'field_id', 'scope'}
+                        or any(not isinstance(identity[k], str) or not identity[k].strip() for k in ('dataset_id', 'field_id'))):
+                    raise ValueError('invalid exact field identity')
+                resource_scope_from_dict(identity['scope'])
+                key = json.dumps(identity, sort_keys=True)
+                if key in keys:
+                    raise ValueError('duplicate requested field identity')
+                keys.add(key)
+            total += len(identities)
+        if total > max_fields:
+            raise ValueError('exact identity plan exceeds field bound')
+    previous = {}
+    for row in _repair_index_rows(root):
+        if row.content_status != 'verified_raw_extract':
+            continue
+        original = str(PurePosixPath(row.path).parent / 'data_fields.jsonl')
+        if original in sources:
+            request = _field_extract_request(root, row.path)
+            previous[row.path] = request
+    scans, manifests, artifacts = {}, {}, []
+    remaining_fields, remaining_bytes = max_fields, max_batches * MAX_FIELD_EXTRACT_BYTES
+    remaining_snapshot_bytes = MAX_SOURCE_REPAIR_BYTES
+    for relative, source in sources.items():
+        manifest_path = _source_contract_path(root, source.with_name('manifest.json').relative_to(root).as_posix())
+        raw = _source_contract_bytes(manifest_path, MAX_CAPTURE_MANIFEST_BYTES)
+        manifest = _capture_json(raw)
+        timestamp = _capture_timestamp(manifest.get('generated_at'))
+        if (timestamp.date().isoformat() != PurePosixPath(relative).parts[3]
+                or not isinstance(manifest.get('capture_generation_id'), str)
+                or not manifest['capture_generation_id'].strip()
+                or manifest.get('certification_status') not in ('complete', 'partial')):
+            raise ValueError('unverified capture manifest')
+
+        def consume(row):
+            """Input: raw row dict. Output: None; route unverified presence to the inventory caller."""
+            if _on_row is not None:
+                _on_row(relative, row)
+
+        existing_identities = {key: identity for request in previous.values() if request['original_path'] == relative
+                               for key, identity in zip(request['keys'], request['identities'])}
+        requested = (None if identities_by_source is None else
+                     {json.dumps(identity, sort_keys=True): identity for identity in identities_by_source[relative]})
+        expected = dict(existing_identities)
+        if requested is not None:
+            expected.update(requested)
+        scanned = _scan_field_source(source, list(expected.values()), manifest, _on_row=consume,
+            _bulk_limits=dict(max_fields=remaining_fields, max_bytes=remaining_bytes, requested_keys=requested,
+                              max_snapshot_bytes=remaining_snapshot_bytes))
+        remaining_snapshot_bytes -= len(scanned.get('source_bytes') or b'')
+        if requested is not None and not requested.keys() <= scanned['selected_by_identity'].keys():
+            raise ValueError('missing exact field capture identities')
+        scans[relative], manifests[relative] = scanned, (manifest_path, raw)
+        remaining_fields -= len(scanned['selected'])
+        remaining_bytes -= sum(item['raw_bytes'] for item in scanned['selected'])
+        batch, epoch = [], None
+
+        def render(items):
+            """Input: selected row list. Output: existing-schema bounded artifact dict."""
+            identities = [dict(dataset_id=i['row']['data_set']['id'], field_id=i['row']['field']['id'],
+                               scope=i['row']['scope']) for i in items]
+            return _field_extract_artifacts(relative, raw, identities, dict(scanned, selected=items))
+
+        for item in scanned['selected']:
+            item_epoch = (item['captured_at'], item['capture_generation_id'])
+            if batch and (epoch != item_epoch or len(batch) == MAX_FIELD_EXTRACT_ROWS
+                          or sum(i['raw_bytes'] for i in batch) + item['raw_bytes'] > MAX_FIELD_EXTRACT_BYTES):
+                artifacts.append(render(batch))
+                batch = []
+            try:
+                render(batch + [item])
+            except ValueError:
+                if batch:
+                    artifacts.append(render(batch))
+                    batch = []
+                try:
+                    render([item])
+                except ValueError:
+                    continue
+            batch.append(item)
+            epoch = item_epoch
+        if batch:
+            artifacts.append(render(batch))
+    artifacts = artifacts[:max_batches]
+    with _source_index_guard(root):
+        _reject_unindexed_human_history(root)
+        existing = {row.path: row for row in _repair_index_rows(root)}
+        rows = []
+        for relative, scanned in scans.items():
+            origin = SourceIndexRow(path=relative, source_family='raw/platform/data_fields',
+                source_type='platform_data_field_capture', contents='Original captured rows; subset receipts do not certify global coverage.',
+                update_check='verify complete original bytes and capture manifest', compiled_targets=['machine/data_ledger.jsonl'],
+                captured_at=scanned['original_captured_at'], record_count=scanned['original_rows'],
+                content_hash=scanned['original_sha256'], content_status='raw_jsonl')
+            if relative in existing:
+                for name in ('source_family', 'source_type', 'captured_at', 'record_count', 'content_hash', 'content_status'):
+                    if getattr(existing[relative], name) != getattr(origin, name):
+                        raise ValueError('original source index conflicts; explicit repair required')
+            else:
+                rows.append(origin)
+            manifest_path, raw = manifests[relative]
+            if _source_contract_bytes(manifest_path, MAX_CAPTURE_MANIFEST_BYTES) != raw:
+                raise ValueError('capture manifest changed before extract publication')
+        # Check all replay/conflict evidence before writing either index view.
+        for artifact in artifacts:
+            result, expected = artifact['result'], artifact['receipt']
+            path = result['excerpt_path']
+            row = SourceIndexRow(path=path, source_family='raw/platform/data_fields',
+                source_type='platform_data_field_capture', contents='Verified raw rows; derived semantics are not included.',
+                update_check=artifact['metadata']['update_check'], compiled_targets=['machine/data_ledger.jsonl'],
+                captured_at=expected['captured_at'], record_count=result['selected_rows'],
+                content_hash=expected['body_sha256'], content_status='verified_raw_extract')
+            if path in existing:
+                for name in ('source_family', 'source_type', 'captured_at', 'record_count', 'content_hash', 'content_status'):
+                    if getattr(existing[path], name) != getattr(row, name):
+                        raise ValueError('excerpt source index conflict')
+            rows.append(row)
+            receipt_path = _source_contract_path(root, result['receipt_path'])
+            if receipt_path.exists():
+                receipt = _capture_json(_source_contract_bytes(receipt_path, MAX_FIELD_EXTRACT_BYTES))
+                _capture_timestamp(receipt.get('extracted_at'))
+                if {k: v for k, v in receipt.items() if k != 'extracted_at'} != expected:
+                    raise ValueError('source extraction receipt mismatch')
+            else:
+                receipt = dict(expected, extracted_at=datetime.now(timezone.utc).isoformat())
+            artifact['receipt_bytes'] = (json.dumps(receipt, sort_keys=True, indent=2, ensure_ascii=False, allow_nan=False) + '\n').encode('utf-8')
+            excerpt = _source_contract_path(root, path)
+            if excerpt.exists() and _source_contract_bytes(excerpt, MAX_FIELD_EXTRACT_BYTES) != artifact['excerpt']:
+                raise ValueError('existing source extraction artifact differs')
+        for artifact in artifacts:
+            _write_immutable_source(_source_contract_path(root, artifact['result']['excerpt_path']), artifact['excerpt'])
+            _write_immutable_source(_source_contract_path(root, artifact['result']['receipt_path']), artifact['receipt_bytes'])
+        if rows:
+            _upsert_source_index_rows_unlocked(root, rows)
+        if rows and not _repair_human_index_agrees(root, _repair_index_rows(root)):
+            raise ValueError('field extraction index publication incomplete; replay required')
+    paths = sorted(set(previous) | {artifact['result']['excerpt_path'] for artifact in artifacts})
+    session = _FieldExtractSession(root, paths, _scans=scans)
+    for path in paths:
+        session.proof(path)
+    # Include captures that produced zero excerpts in final digest validation.
+    for relative, scan in scans.items():
+        session._originals[relative] = scan
+        session._evidence[relative] = (scan['original_sha256'], None)
+        manifest_path, raw = manifests[relative]
+        session._evidence[manifest_path.relative_to(root).as_posix()] = (hashlib.sha256(raw).hexdigest(), MAX_CAPTURE_MANIFEST_BYTES)
+    selected = sum(artifact['result']['selected_rows'] for artifact in artifacts)
+    result = dict(extracts=[a['result'] for a in artifacts], selected_fields=selected,
+        pending_rows=sum(scan['original_rows'] for scan in scans.values()) - selected,
+        partial=True, model_calls=0, freshness_status='not_evaluated',
+        mappings=[dict(excerpt_path=a['result']['excerpt_path'], receipt_path=a['result']['receipt_path'],
+                       source_path=a['result']['source_path'], identities=[json.loads(key) for key in
+                           a['receipt']['identity']['identities']]) for a in artifacts])
+    if _defer_finalize:
+        result['_verification_session'] = session
+    else:
+        session.finalize()
     return result
 
 
@@ -858,7 +1102,7 @@ def verify_field_source_extract(root: Path, source_path: str) -> dict:
 
 
 class _FieldExtractSession:
-    def __init__(self, root: Path, paths: list[str], on_row=None):
+    def __init__(self, root: Path, paths: list[str], on_row=None, *, _scans=None):
         """Input: vault Path/excerpt paths/optional row callback. Output: invocation-local evidence session."""
         self.root = Path(root).resolve()
         self._proofs, self._errors, self._evidence, self._originals = {}, {}, {}, {}
@@ -888,8 +1132,9 @@ class _FieldExtractSession:
                     """Input: captured row dict. Output: None; route presence without granting source authority."""
                     if on_row is not None:
                         on_row(original_path, row)
-                scanned = _scan_field_source(batch[0]['original'], list(identities.values()),
-                    batch[0]['manifest'], _receipts_only=True, _on_row=consume)
+                scanned = (_scans[original_path] if _scans is not None else
+                    _scan_field_source(batch[0]['original'], list(identities.values()),
+                        batch[0]['manifest'], _receipts_only=True, _on_row=consume))
                 self._originals[original_path] = scanned
                 self._evidence[original_path] = (scanned['original_sha256'], None)
             except (OSError, ValueError, TypeError, KeyError) as exc:
@@ -938,6 +1183,10 @@ class _FieldExtractSession:
         if self._invalid or path not in self._proofs:
             raise ValueError(self._errors.get(path, 'invalid field extraction verification session'))
         return dict(self._proofs[path])
+
+    def paths(self) -> list[str]:
+        """Input: none. Output: attempted excerpt paths list; inclusion alone does not certify a proof."""
+        return sorted(set(self._proofs) | set(self._errors))
 
     def original(self, path: str) -> dict | None:
         """Input: original path str. Output: streamed presence snapshot, not source certification."""

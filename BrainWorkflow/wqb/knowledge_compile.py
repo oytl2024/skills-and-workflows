@@ -38,10 +38,10 @@ def run_full_semantic_compile(root: Path, plan: dict, *, executor) -> dict:
     return execute(root, plan, executor=executor)
 
 
-def build_full_semantic_report(root: Path, plan: dict) -> dict:
+def build_full_semantic_report(root: Path, plan: dict, *, binding_requests=None, consumer_run_dirs=None) -> dict:
     """Input: vault Path/frozen plan dict. Output: source-verified four-level coverage report, no activation."""
     from wqb.full_semantic_coverage import build_full_semantic_report as report
-    return report(root, plan)
+    return report(root, plan, binding_requests=binding_requests, consumer_run_dirs=consumer_run_dirs)
 
 
 def resolve_field_semantics(root: Path, row: dict) -> dict:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from wqb.lockfile import json_lock_transition_guard
 from wqb.research_seed_stage import normalize_measured_row
-from wqb.research_tree import advance_tree, execute_tree_round, _boundary
+from wqb.research_tree import advance_tree, execute_tree_round, _boundary, _load
 from wqb.runtime_control import RuntimePaused, _write, read_runtime_control
 from wqb.semantic_compilation import _safe
 from wqb.source_bridge import _decision_for_source
@@ -78,7 +78,19 @@ def _collect(run: Path, sources: list[tuple[Path, dict]]) -> list[dict]:
         for row in raw:
             if row['expression_hash'] not in plan['reserved_simulation_identities']:
                 raise ValueError('source result was not reserved by its tree plan')
-            rows.append(measured_row(row, run.name))
+            measured = measured_row(row, run.name)
+            if row.get('experiment_arms'):
+                candidates = [candidate for candidate in plan['config_patch']['scheduled_hypotheses']
+                    if candidate['bound_expression'] == row.get('expression')
+                    and candidate['settings'] == row.get('settings')]
+                if not candidates:
+                    raise ValueError('paired source expression/settings differs from its tree plan')
+                # Paired record lineage needs the frozen planning scope, including
+                # its source cutoff. Actual measured dates remain in test_period.
+                measured.setdefault('scope', deepcopy(candidates[0]['scope']))
+                if 'scope' not in row:
+                    measured['scope'] = deepcopy(candidates[0]['scope'])
+            rows.append(measured)
     return rows
 
 
@@ -146,11 +158,9 @@ def continue_tree(run: Path, config: dict, now: str, *, enable_live_api: bool = 
             _boundary(run)
         except RuntimePaused as error:
             return dict(next_action='runtime-paused', message=str(error))
+        _load(run)
         sources = _sources(run)
-        rows = _collect(run, sources)
-        tree = advance_tree(run, rows, MAXIMUM)
-        if tree['status'] == 'stopped':
-            return dict(next_action='runtime-paused', tree=tree)
+        _collect(run, sources)
         # Reconcile an existing source before funding further branches; a single
         # early candidate never means the entire pair/batch has completed.
         for source, _ in sources:
@@ -159,22 +169,47 @@ def continue_tree(run: Path, config: dict, now: str, *, enable_live_api: bool = 
                 continue
             action = decision.action
             if action in {'rate_limit_wait', 'maintenance_blocker'}:
-                return dict(next_action=ACTION_NAMES[action], tree=tree, source_bridge=decision.to_dict())
+                return dict(next_action=ACTION_NAMES[action], source_bridge=decision.to_dict())
+            checks_only = (decision.metadata or {}).get('pending_check_recovery') is True
             runner = complete_in_flight_runner if action == 'complete_in_flight' else retry_planned_runner
             if not enable_live_api:
-                return dict(next_action='enable-live-api-required', tree=tree)
-            if runner is None:
-                return dict(next_action='maintenance-blocker', tree=tree, message='Tree source recovery runner missing')
+                return dict(next_action='enable-live-api-required')
+            if runner is None and not checks_only:
+                return dict(next_action='maintenance-blocker', message='Tree source recovery runner missing')
             lock_action = ACTION_NAMES[action]
             lock = acquire_source_run_lock(str(source), lock_action, now)
             if lock.get('status') != 'acquired':
-                return dict(next_action='source-lock-wait', tree=tree)
+                return dict(next_action='source-lock-wait')
             try:
                 _boundary(run)
-                output = runner(str(source))
+                if checks_only:
+                    from wqb.discovery_runtime import DiscoveryRuntimeExecutor
+                    from wqb.repair_runtime import RepairRateLimited, RepairRecoveryPending
+                    try:
+                        output = DiscoveryRuntimeExecutor(config).recover_checks(source)
+                    except RepairRateLimited:
+                        output = None
+                    except RepairRecoveryPending as error:
+                        return dict(next_action='maintenance-blocker', message=str(error),
+                                    source_bridge=decision.to_dict())
+                    _boundary(run)
+                    pending = _decision_for_source(source, now, require_complete_batch=True)
+                    if pending is not None and pending.action in {'rate_limit_wait', 'maintenance_blocker'}:
+                        return dict(next_action=ACTION_NAMES[pending.action], source_bridge=pending.to_dict())
+                else:
+                    output = runner(str(source))
+                _boundary(run)
+            except RuntimePaused as error:
+                return dict(next_action='runtime-paused', message=str(error))
             finally:
                 release_source_run_lock(str(source), lock_action, now, owner_id=str(lock.get('owner_id', '')))
-            return dict(next_action='workflow-auto-continue', tree=tree, source_recovery=output)
+            return dict(next_action='workflow-auto-continue', source_recovery=output)
+        # Check recovery may replace pending observations. Only terminal source
+        # batches enter immutable tree decisions, never their intermediate checks.
+        rows = _collect(run, sources)
+        tree = advance_tree(run, rows, MAXIMUM)
+        if tree['status'] == 'stopped':
+            return dict(next_action='runtime-paused', tree=tree)
         if tree['status'] == 'finished':
             _boundary(run)
             _publish(run, tree, rows, sources, now)
@@ -200,6 +235,13 @@ def continue_tree(run: Path, config: dict, now: str, *, enable_live_api: bool = 
             """Input: authenticated patch/metadata. Output: existing executor result, without replanning."""
             source_config = dict(config, **patch, active_workflow_run_dir=str(run), run_root=str(run.parent),
                                  allow_live_source_fallback=False)
+            controls = patch['scheduled_hypotheses'][0]['settings']
+            for local, platform in (('instrument_type', 'instrumentType'), ('region', 'region'),
+                    ('universe', 'universe'), ('delay', 'delay'), ('decay', 'decay'),
+                    ('neutralization', 'neutralization'), ('truncation', 'truncation'),
+                    ('pasteurization', 'pasteurization'), ('unit_handling', 'unitHandling'),
+                    ('nan_handling', 'nanHandling'), ('language', 'language')):
+                source_config[local] = controls[platform]
             return source_batch_runner(source_config, metadata)
         executed = execute_tree_round(run, execute, rows, MAXIMUM)
         return dict(next_action='workflow-auto-continue', tree=executed)

@@ -229,9 +229,9 @@ class FullSemanticCoverageTests(unittest.TestCase):
         self.execute(plan)
         validate = coverage._validate_explanation
 
-        def mutate(*args):
+        def mutate(*args, **kwargs):
             """Input: validator args. Output: actual validation then deliberately corrupted fixture source."""
-            checked = validate(*args)
+            checked = validate(*args, **kwargs)
             self.write(self.source_path, '### rank\nChanged after checking.\n')
             return checked
 
@@ -389,9 +389,9 @@ class FullSemanticCoverageTests(unittest.TestCase):
         plan = self.plan(1)
         self.execute(plan)
         validate = coverage._validate_explanation
-        def mutate(*args):
+        def mutate(*args, **kwargs):
             """Input: validation args. Output: real validation followed by a simulated concurrent inventory write."""
-            result = validate(*args)
+            result = validate(*args, **kwargs)
             with (self.root / plan['inventory_ref']['path']).open('ab') as stream:
                 stream.write(b'\n')
             return result

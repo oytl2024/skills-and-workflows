@@ -14,6 +14,13 @@ from wqb.desktop import DesktopConfig, DesktopError
 
 
 class DesktopApplicationTests(unittest.TestCase):
+    def test_packaging_cache_is_workspace_local_and_environment_is_restored(self):
+        """Input: packaged build script. Output: guard against writes to a user's global PyInstaller cache."""
+        script = (Path(__file__).resolve().parents[1] / 'scripts/build_desktop.ps1').read_text(encoding='utf-8')
+        self.assertIn('$PreviousInstallerCache = $env:PYINSTALLER_CONFIG_DIR', script)
+        self.assertIn('$env:PYINSTALLER_CONFIG_DIR = Join-Path $BuildRoot "cache"', script)
+        self.assertIn('$env:PYINSTALLER_CONFIG_DIR = $PreviousInstallerCache', script)
+
     def test_frozen_backend_argv_preserves_roots(self):
         with tempfile.TemporaryDirectory(prefix="desktop space ") as directory:
             root = Path(directory) / "\u4e2d\u6587"

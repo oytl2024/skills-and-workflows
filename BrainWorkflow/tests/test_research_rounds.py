@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -60,6 +61,27 @@ def round_fixture(root: Path, stage: str = 'triage') -> tuple:
 
 
 class ResearchRoundTests(unittest.TestCase):
+    def test_preplanned_frozen_context_never_rotates_legacy_rounds(self):
+        """Input: genuine frozen Start lane. Output: no-op legacy adapter without budget/state changes."""
+        from tests.test_preplanned_start import PreplannedStartTests
+        fixture = PreplannedStartTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        result = fixture.prepare()
+        self.assertEqual(result['status'], 'completed', result)
+        run = fixture.paths.run_root / result['group']['lanes'][0]['run_id']
+        before = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in run.rglob('*')
+                  if path.is_file() and path.suffix != '.guard'}
+        decision = research_rounds.advance_research_round(run, '2026-11-03T00:00:00Z', {})
+        self.assertEqual(decision['status'], 'not_applicable')
+        self.assertEqual(before, {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in run.rglob('*')
+                                if path.is_file() and path.suffix != '.guard'})
+        write_json(run / research_rounds.ROUND_STATE_FILENAME, dict(pending_transition={'original': True}))
+        pending = (run / research_rounds.ROUND_STATE_FILENAME).read_bytes()
+        with self.assertRaisesRegex(ValueError, 'legacy pending round transition'):
+            research_rounds.advance_research_round(run, '2026-11-03T00:00:00Z', {})
+        self.assertEqual((run / research_rounds.ROUND_STATE_FILENAME).read_bytes(), pending)
+
     def test_daily_activation_reconciles_only_obsolete_budget_marker(self):
         from wqb.daily_simulation_budget import activate_daily_policy
         from wqb.runtime_control import read_runtime_control

@@ -28,6 +28,51 @@ COMPILE_LOCK_STALE_SECONDS = 3600.0
 DATA_LEDGER_MAX_AGE_DAYS = KNOWLEDGE_MAX_AGE_DAYS
 
 
+def _bounded_field_sources(root: Path, source: Path) -> tuple[dict, Any]:
+    """Input: vault Path/original capture Path. Output: exact identity-to-excerpt map and invocation-local proof session."""
+    from wqb.semantic_compilation import MAX_SOURCE_BYTES, _safe
+    from wqb.knowledge_contracts import _repair_index_rows, _field_extract_request, verify_field_source_extracts
+    if source.stat().st_size <= MAX_SOURCE_BYTES:
+        return {}, None
+    paths = sorted(row.path for row in _repair_index_rows(root)
+        if row.content_status == 'verified_raw_extract'
+        and _safe(root, row.path).parent == source.parent)
+    if not paths:
+        return {}, None
+    session = verify_field_source_extracts(root, paths)
+    mapping = {}
+    original = source.relative_to(root).as_posix()
+    for path in paths:
+        proof = session.proof(path)
+        if proof['source_path'] != original:
+            raise ValueError('bounded field source belongs to another original capture')
+        request = _field_extract_request(root, path)
+        for identity in request['identities']:
+            key = (identity['dataset_id'], identity['field_id'], _scope_key(identity['scope']))
+            mapping.setdefault(key, {}).setdefault(path, set()).add(_scope_key(identity['scope']))
+    return mapping, session
+
+
+def _project_field_source(root: Path, row: dict, mapping: dict, prior: DataLedgerRecord | None) -> dict:
+    """Input: vault/fresh row/verified map/prior record. Output: bounded source, preferring compatible selected explanations."""
+    scopes = _ledger_row_scope_keys(row)
+    possible = None
+    for scope in scopes:
+        paths = set(mapping.get((row['dataset_id'], row['field_id'], scope), {}))
+        possible = paths if possible is None else possible & paths
+    if possible:
+        preferred = set(prior.source_paths) & possible if prior else set()
+        if prior and prior.field_semantics_ref is not None:
+            from wqb.knowledge_compile import resolve_field_semantics
+            resolved = resolve_field_semantics(root, data_ledger_record_to_dict(prior))
+            if resolved['status'] == 'supported':
+                explained = {proof['proof_path'] for proof in resolved['source_proofs']} & possible
+                if explained:
+                    return dict(row, source_paths=sorted(explained))
+        return dict(row, source_paths=[sorted(preferred or possible)[0]])
+    return row
+
+
 def merge_field_enrichment(root: Path, captured: dict, prior: dict | None) -> dict:
     """Input: vault Path/fresh captured dict/optional prior dict. Output: merged copy with verified enrichment only.
 
@@ -606,6 +651,7 @@ def compile_data_ledger_from_raw(
             certification_complete = _capture_certification_complete(manifest, scope_outcomes)
             source_day = _capture_source_day(manifest, selected_capture)
             prior_ledger_path = existing_machine_resource_path(root, DATA_LEDGER_RESOURCE)
+            source_projection, source_session = _bounded_field_sources(root, fields_path)
             prior_rows = _read_jsonl(prior_ledger_path)
             prior_records_by_field: dict[tuple[str, str], DataLedgerRecord] = {}
             prior_records_by_exact: dict[tuple[str, str, tuple[str, str, int, str]], DataLedgerRecord] = {}
@@ -636,6 +682,7 @@ def compile_data_ledger_from_raw(
                     else None
                 ) or prior_records_by_field.get(key[:2])
                 captured = _record_from_group(root, fields_path, grouped[key], source_day, prior) | {"coverage_status": "measured_raw" if measured else "partial"}
+                captured = _project_field_source(root, captured, source_projection, prior)
                 output_rows.append(merge_field_enrichment(root, captured,
                     data_ledger_record_to_dict(prior) if prior else None))
             attempted_field_keys = {
@@ -652,6 +699,9 @@ def compile_data_ledger_from_raw(
             records = load_data_ledger(ledger_tmp_path)
             write_data_ledger_markdown(markdown_tmp_path, records, generated)
             _update_manifest(root, source_day, generated, manifest_tmp_path)
+
+            if source_session is not None:
+                source_session.finalize()
 
             _publish_staged_outputs([(ledger_tmp_path, ledger_path), (markdown_tmp_path, markdown_path), (manifest_tmp_path, manifest_path)])
         finally:

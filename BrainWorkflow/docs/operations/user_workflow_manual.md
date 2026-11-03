@@ -229,6 +229,16 @@ waits; actual 429 uses platform Retry-After and the existing threshold policy.
 An exhausted or malformed check stays blocked, never qualified. Recovery progress
 is persisted in `stages/backtest/check_recovery.json`, preserving identity and
 artifact provenance across restarts.
+Preplanned trees also recover these existing checks automatically before freezing
+the batch's branch decision, including mixed batches with another qualified
+candidate. Waiting does not qualify the pending Alpha. Repair reuses the owning
+run's validated frozen Start context while still requiring current scope coverage,
+source certification and freshness; new global templates cannot replace it.
+The opt-in preplanned mission has a finite frozen experiment tree and finite
+Repair search. When it exhausts without a qualified Alpha, it records the outcome
+and finishes without submission; it does not enter legacy rounds replaying the
+same tree. Completion is not qualification. Another tree/model-planning epoch
+requires its own authorized Start; this never expands the current mission.
 
 Knowledge manifests use a 90-day default, configured by `wqb/knowledge_age_policy.py`.
 The current vault manifest was explicitly migrated to 90 days without changing
@@ -339,6 +349,9 @@ read-only Codex worker at medium reasoning effort. It preserves complete
 per-target answers, not just a summary. Cancelled, rejected and uncertain calls
 remain charged; uncertain outcomes are not automatically replayed. Completed
 results are reusable only after current-source and full-result verification.
+Preparation's `cached_jobs` counts unchanged prepared job artifacts, not completed
+model answers. Use the explanation report's validated/processed counts to judge
+actual explanation coverage; zero model allowance never creates explanations.
 
 Each target retains its literal source meaning, sourced typed facts where
 available, hypothesis cards, conditional uses, missing facts and conflicts.
@@ -348,9 +361,28 @@ remain explicit gaps. Processing every target is not full semantic coverage,
 compiler eligibility, reviewed publication or research readiness.
 
 Ordinary maintenance of a selected semantic release preserves that release and
-its publication-owned wiki pages. It compiles only its own experience outputs;
+its publication-owned wiki pages. It compiles local captured fields and its own experience outputs;
 active-release cleanup is refused until source preservation can be verified.
 No maintenance command silently selects generated explanations for research.
+
+`build_full_semantic_report(root, plan, binding_requests=None,
+consumer_run_dirs=None)` measures four separate layers: source-byte inventory,
+current validated explanations, explicitly requested compiler/binder operations,
+and existing frozen Start lanes. The last two remain `not_evaluated` unless
+explicit bounded inputs are supplied. It reads existing evidence only: no model,
+platform request, new Start, research resume or publication occurs. Failed
+attempts stay in the denominator; duplicate identities do not inflate coverage.
+Consumer lanes must belong to the same workspace and knowledge vault. Reports
+do not authorize research even when a measured subset passes.
+
+Local extraction preparation accepts finite `local_field_extracts` settings:
+explicit captured `source_paths`, `max_batches` (at most 64) and `max_fields`
+(at most 1,920). It creates original-bound raw excerpts, not economic facts.
+Each batch retains at most 30 exact scope rows; at most 64 original sources and
+2 MB of aggregate original-byte snapshots are retained per call. Large originals
+are streamed and rechecked. Unselected fields remain visible as pending inventory,
+not silently removed from the coverage denominator. This operation does not
+renew capture dates or spend a model allowance.
 
 ### Submitted Result Unavailable
 

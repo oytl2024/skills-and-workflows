@@ -72,7 +72,7 @@ def _ref(root: Path, ref: dict, limit: int, base: str) -> bytes:
     return raw
 
 
-def load_bound_explanation_job(job_dir: Path) -> dict:
+def load_bound_explanation_job(job_dir: Path, *, _verification_session=None) -> dict:
     """Input: canonical machine/semantic_jobs/<hex> Path. Output: authenticated worker job dict.
 
     Returned keys: manifest,input,brief,job_dir,root,source_index,source_texts.
@@ -155,7 +155,7 @@ def load_bound_explanation_job(job_dir: Path) -> dict:
                                              != {k: v for k, v in source.items() if k != 'file_sha256'}):
             raise ValueError('source registration differs from bound job')
         if path not in index:
-            checked, text = _material(root, current)
+            checked, text = _material(root, current, _verification_session=_verification_session)
             for claim in (current, source):
                 if 'file_sha256' in claim and claim['file_sha256'] != checked['file_sha256']:
                     raise ValueError('asserted source digest mismatch')
@@ -312,7 +312,7 @@ def _field_result(root: Path, job: dict, target: dict, bound: dict, canonical_fi
 
 
 def validate_full_semantic_output(root: Path, job: dict, answer: dict,
-                                  *, persist_field_results: bool = True) -> dict:
+                                  *, persist_field_results: bool = True, _verification_session=None) -> dict:
     """Input: root/job/answer dicts and persistence bool. Output: validated envelope with per-target proofs/K3 refs.
 
     Raising ValueError rejects the whole job; no target is silently dropped. A
@@ -320,7 +320,7 @@ def validate_full_semantic_output(root: Path, job: dict, answer: dict,
     Readonly mode verifies existing deterministic field artifacts without writes.
     """
     root = _root(root)
-    job = load_bound_explanation_job(Path(job['job_dir']))
+    job = load_bound_explanation_job(Path(job['job_dir']), _verification_session=_verification_session)
     if job['root'] != str(root):
         raise ValueError('validation root mismatch')
     if not isinstance(answer, dict) or set(answer) != {'summary', 'targets'} or len(_bytes(answer)) > MAX_OUTPUT_BYTES:

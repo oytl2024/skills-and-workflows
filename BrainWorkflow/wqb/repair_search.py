@@ -1,8 +1,9 @@
-"""Pure finite Repair search; no IO, AI receipt, dispatch or new authority.
+"""Finite Repair producer/search; no AI receipt, dispatch or new authority.
 
 Policy v1 supplies rules, traits and (for transforms) typed binding resources.
-Like template_binding, this module consumes caller-verified frozen sources; an
-EvidenceRef is a structural contract, not proof that this module read raw files.
+The opt-in compiler verifies supplied full source bytes and premises; persisted
+planning additionally revalidates the owning operational snapshot. Legacy pure
+search still treats EvidenceRef as a structural contract, not raw-file proof.
 The integrating caller must bind this output to that verified snapshot and still
 enforce durable Stop, reservations, time, recovery and unknown-POST fences.
 
@@ -22,6 +23,7 @@ import copy
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 
 from wqb.cli import simulation_identity_hash
@@ -47,6 +49,203 @@ ECONOMIC_CONTEXT_KEYS = ('core_fields', 'economic_roles', 'conditions', 'directi
                          'prediction_direction', 'orientation', 'condition_filter_applied',
                          'measurement_scope', 'test_period', 'lane_id')
 APPLICABILITY_LIMIT = 1600
+COMPILED_INVARIANTS = {
+    'positive_averaging': ('ts_mean', 'smoothing', 'window', 'INTEGER',
+        'Returns the average value of x over the past d days.'),
+    'positive_signed_power': ('signed_power', 'bounded_weights', 'scalar', 'FLOAT',
+        'Raises the absolute value of x to the power y while preserving its sign.'),
+}
+COMPILED_TRAIT_FACTS = {'nuisance_exposure': 'nuisance_exposure', 'grain': 'vector_grain'}
+
+
+def compile_repair_search_policy(resources: dict, project_policy: dict) -> dict:
+    """Input: frozen source resources/project finite policy dicts. Output: strict policy dict.
+
+    Source facts authorize prerequisites, not platform parameter domains or
+    measured improvements. Parent binding is deferred until Repair acceptance.
+    """
+    from wqb.resource_evidence import _source, verify_premise, resolve_operator_definition
+    from wqb.knowledge_compile import _coverage_field_supported, _coverage_source_fields
+    if (type(project_policy.get('compile_version')) is not int or project_policy['compile_version'] != 1
+            or set(project_policy) - {'compile_version', 'rules', 'traits'}):
+        raise ValueError('unsupported Repair compiler input')
+    if resources.get('resource_contract_version') != 2:
+        raise ValueError('Repair compiler requires V2 sources')
+    index, texts = resources['source_index'], resources['source_texts']
+    scope = resources['evidence_pack']['scope']
+    refs = {}
+    for path, source in index.items():
+        ref = dict(source_path=path, sha256=source['content_hash'],
+                   capture_date=source['captured_at'][:10], kind='documented', experiment_refs=[])
+        _source(ref, index, texts)
+        refs[path] = ref
+    fields = resources['field_rows']
+    if not fields or any(not _coverage_field_supported(row, texts, index, scope,
+            resource_contract_version=2) for row in fields):
+        raise ValueError('Repair field facts differ from sourced scope/type/timing/grain')
+    traits = {}
+    field_refs = [refs[p] for p in sorted({p for row in fields for p in row['source_paths']})]
+    if all(row['field_type'] == 'MATRIX' for row in fields):
+        traits['matrix_observation'] = dict(basis='source', value=True, evidence_refs=field_refs)
+    frequencies = []
+    for row in fields:
+        values = [field.get('sampling_frequency_sessions') for path in row['source_paths']
+            for field, dataset, captured in _coverage_source_fields(texts[path])
+            if field.get('id') == row['field_id'] and dataset.get('id') == row['dataset_id']
+            and all(type(captured.get(k)) is type(scope[k]) and captured.get(k) == scope[k]
+                    for k in ('instrument_type', 'region', 'delay', 'universe'))]
+        if values and all(type(v) is int and v > 0 for v in values) and len(set(values)) == 1:
+            frequencies.append(values[0])
+    if len(frequencies) == len(fields) and len(set(frequencies)) == 1:
+        traits['sampling_frequency_sessions'] = dict(basis='source', value=frequencies[0],
+            units='sessions', evidence_refs=field_refs)
+    for name, fact in project_policy.get('traits', {}).items():
+        if (name not in COMPILED_TRAIT_FACTS or name in traits
+                or set(fact) != {'value', 'premises'} or not fact['premises']):
+            raise ValueError('explicit traits require exact source premises')
+        if name == 'nuisance_exposure' and fact['value'] is not True:
+            raise ValueError('nuisance exposure requires an explicit true fact')
+        for premise in fact['premises']:
+            locator = premise.get('locator', {})
+            field_fact = COMPILED_TRAIT_FACTS[name]
+            if (locator.get('kind') != 'json_value'
+                    or locator.get('value_path') not in ([field_fact], ['field', field_fact])):
+                raise ValueError('Repair trait premise has unsupported meaning')
+            identity = locator.get('row_identity', {})
+            if (identity.get('scope') != {k: scope[k] for k in ('instrument_type', 'region', 'delay', 'universe')}
+                    or not any(identity.get('dataset_id') == row['dataset_id']
+                               and identity.get('field_id') == row['field_id'] for row in fields)):
+                raise ValueError('Repair trait requires an exact bound-field scope premise')
+            value = verify_premise(premise, index, texts)
+            if type(value) is not type(fact['value']) or value != fact['value']:
+                raise ValueError('Repair trait premise mismatch')
+        traits[name] = dict(basis='source', value=fact['value'],
+            evidence_refs=[p['evidence_ref'] for p in fact['premises']])
+    rules = copy.deepcopy(project_policy['rules'])
+    for rule in rules:
+        if any(name not in traits or type(traits[name]['value']) is not type(value)
+               or traits[name]['value'] != value for name, value in rule['requires'].items()):
+            raise ValueError('unsupported Repair trait prerequisite')
+        if rule['edit'] == 'transform':
+            invariant = rule.pop('invariant', None)
+            if invariant not in COMPILED_INVARIANTS:
+                raise ValueError('transform requires explicit supported mathematical invariant')
+            name, effect, kind, scalar, meaning = COMPILED_INVARIANTS[invariant]
+            transform = rule['transform']
+            rows = [r for r in resources['operator_rows'] if r.get('operator') == name]
+            if len(rows) != 1:
+                raise ValueError('missing or ambiguous transform definition')
+            row = rows[0]
+            receipt = resolve_operator_definition(row, index, texts, resource_contract_version=2)
+            definition = row['definition']
+            parameters = definition['parameters']
+            if (receipt['status'] != 'supported' or definition['description'] != meaning
+                    or definition['input_types'] != ['MATRIX'] or definition['output_type'] != 'MATRIX'
+                    or len(parameters) != 2 or [p['type'] for p in parameters] != ['MATRIX', scalar]
+                    or any(not p['required'] or 'default' in p for p in parameters)
+                    or transform['operator'] != name or transform['parameter'] != parameters[1]['name']
+                    or transform['parameter_kind'] != kind or rule['effect'] != effect
+                    or kind == 'window' and transform['frequency_trait'] != 'sampling_frequency_sessions'):
+                raise ValueError('unsupported transform meaning/signature/invariant')
+            rule['evidence_refs'] = copy.deepcopy(definition['evidence_refs'])
+        else:
+            if (rule['edit'] == 'neutralization'
+                    and (rule['requires'].get('nuisance_exposure') is not True
+                         or 'nuisance_exposure' not in project_policy.get('traits', {}))):
+                raise ValueError('neutralization requires explicit sourced exposure')
+            rule['evidence_refs'] = [ref for name in sorted(rule['requires'])
+                                     for ref in traits[name]['evidence_refs']]
+    policy = _policy(dict(schema_version=1, rules=rules, traits=traits))
+    policy['resources'] = dict(resource_contract_version=2, field_rows=copy.deepcopy(fields),
+        operator_rows=copy.deepcopy(resources['operator_rows']), scope=copy.deepcopy(scope),
+        evidence_context=dict(source_index=copy.deepcopy(index), source_texts=copy.deepcopy(texts)),
+        producer=dict(compile_version=1, project_policy=copy.deepcopy(project_policy)))
+    return policy
+
+
+def _materialize_parent(policy: dict, parent: dict) -> dict:
+    """Input: compiled policy/accepted parent dicts. Output: copied, revalidated parent-bound policy.
+
+    Explicit traits require premises for every actual parent field. Uncovered
+    traits and dependent rules are omitted; independent rules remain eligible.
+    """
+    if not policy.get('resources', {}).get('producer'):
+        return policy
+    result = copy.deepcopy(policy)
+    resources = result['resources']
+    tree = ast.parse(parent['expression'], mode='eval')
+    functions = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    leaves = sorted({node.id for node in ast.walk(tree)
+                     if isinstance(node, ast.Name) and id(node) not in functions})
+    selected, slots, tokens = [], [], {}
+    for i, name in enumerate(leaves):
+        rows = [r for r in resources['field_rows'] if r['field_id'] == name]
+        if len(rows) != 1 or rows[0]['field_type'] not in ('MATRIX', 'VECTOR'):
+            raise ValueError('parent field missing/ambiguous or unsupported type')
+        row = rows[0]
+        reduction = None
+        if row['field_type'] == 'VECTOR':
+            reducers = set()
+            for leaf in ast.walk(tree):
+                if not isinstance(leaf, ast.Name) or leaf.id != name or id(leaf) in functions:
+                    continue
+                call = parents.get(id(leaf))
+                if (not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name)
+                        or len(call.args) != 1 or call.args[0] is not leaf or call.keywords):
+                    raise ValueError('VECTOR parent needs explicit unary sourced reducer')
+                reducers.add(call.func.id)
+            if len(reducers) != 1 or not row.get('vector_grain'):
+                raise ValueError('VECTOR grain/reducer missing or ambiguous')
+            reducer = next(iter(reducers))
+            definitions = [r['definition'] for r in resources['operator_rows'] if r.get('operator') == reducer]
+            if (len(definitions) != 1 or definitions[0]['input_types'] != ['VECTOR']
+                    or definitions[0]['output_type'] != 'MATRIX' or len(definitions[0]['parameters']) != 1):
+                raise ValueError('VECTOR reducer requires explicit VECTOR to MATRIX signature')
+            reduction = dict(operator=reducer, parameters={})
+        slot = 'repair_field_' + str(i)
+        token = '__repair_slot_' + str(i)
+        if token in parent['expression']:
+            raise ValueError('parent placeholder collision')
+        tokens[name] = token
+        selected.append(row)
+        slots.append(dict(name=slot, role='signal', required_semantics=[row['field_description']],
+                          field_type=row['field_type'], required_metadata=[], reduction=reduction))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and id(node) not in functions:
+            node.id = tokens[node.id]
+    skeleton = ast.unparse(tree)
+    replacements = {tokens[name]: '{repair_field_' + str(i) + '}' for i, name in enumerate(leaves)}
+    skeleton = re.sub(r'\b__repair_slot_\d+\b', lambda match: replacements[match.group()], skeleton)
+    # A resource-pack fact cannot authorize unrelated fields in the accepted parent.
+    project = copy.deepcopy(resources['producer']['project_policy'])
+    identities = {(row['dataset_id'], row['field_id']) for row in selected}
+    applicable = {}
+    for name, fact in project.get('traits', {}).items():
+        premises = [premise for premise in fact['premises']
+                    if (premise['locator']['row_identity']['dataset_id'],
+                        premise['locator']['row_identity']['field_id']) in identities]
+        covered = {(p['locator']['row_identity']['dataset_id'],
+                    p['locator']['row_identity']['field_id']) for p in premises}
+        if identities and covered == identities:
+            applicable[name] = dict(fact, premises=premises)
+    removed = set(project.get('traits', {})) - set(applicable)
+    project['traits'] = applicable
+    project['rules'] = [rule for rule in project['rules'] if not removed.intersection(rule['requires'])]
+    result = compile_repair_search_policy(dict(resource_contract_version=2, field_rows=selected,
+        operator_rows=resources['operator_rows'], evidence_pack=dict(scope=resources['scope']),
+        **resources['evidence_context']), project)
+    if 'stop' in policy:
+        result['stop'] = policy['stop']
+    resources = result['resources']
+    resources['template'] = dict(template_id='repair-accepted-parent', binding_version=2,
+        skeleton=skeleton, input_slots=slots)
+    resources['field_rows'] = selected
+    bound = bind_template(resources['template'], selected, resources['operator_rows'], resources['scope'],
+        resource_contract_version=2, evidence_context=resources['evidence_context'])
+    if ast.dump(ast.parse(bound['bound_expression'], mode='eval')) != ast.dump(ast.parse(parent['expression'], mode='eval')):
+        raise ValueError('materialized template differs from accepted parent')
+    return result
 
 
 def _digest(value: object) -> str:
@@ -346,6 +545,18 @@ def _frozen_policy(run: Path) -> tuple[dict, str]:
     if not context:
         raise ValueError('deterministic Repair requires verified operational resources')
     policy = _policy(snapshot['repair_search_policy'])
+    producer = policy.get('resources', {}).get('producer')
+    if producer:
+        resources = policy['resources']
+        frozen_context = resources['evidence_context']
+        for key in ('source_index', 'source_texts'):
+            if any(context[key].get(path) != value for path, value in frozen_context[key].items()):
+                raise ValueError('compiled Repair sources differ from frozen context')
+        rebuilt = compile_repair_search_policy(dict(resource_contract_version=2,
+            field_rows=resources['field_rows'], operator_rows=resources['operator_rows'],
+            evidence_pack=dict(scope=resources['scope']), **frozen_context), producer['project_policy'])
+        if rebuilt != policy:
+            raise ValueError('compiled Repair producer policy changed')
     if policy.get('resources'):
         resources = policy['resources']
         for key, snapshot_key in (('field_rows', 'data_ledger_rows'), ('operator_rows', 'operator_rows')):
@@ -353,7 +564,7 @@ def _frozen_policy(run: Path) -> tuple[dict, str]:
                 raise ValueError('Repair transform resources differ from owning frozen snapshot')
         from wqb.hypothesis_template_compiler import _operator
         for rule in policy['rules']:
-            if rule['edit'] == 'transform':
+            if rule['edit'] == 'transform' and not producer:
                 _operator(rule['transform']['operator'], resources['operator_rows'], context)
     refs = [ref for rule in policy['rules'] for ref in rule['evidence_refs']]
     refs.extend(ref for trait in policy['traits'].values() for ref in trait.get('evidence_refs', []))
@@ -373,6 +584,7 @@ def prepare_persisted_search(run: Path, parent: dict, history: list, allowance: 
     if type(allowance) is not int or not 1 <= allowance <= MAX_VARIANTS:
         raise ValueError('Repair allowance must be 1..8')
     policy, manifest_digest = _frozen_policy(run)
+    policy = _materialize_parent(policy, parent)
     evidence = dict(parent=parent, history=history, allowance=1, policy=policy,
                     manifest_sha256=manifest_digest)
     digest = _digest(evidence)
@@ -406,6 +618,7 @@ def verify_persisted_search(run: Path, plan: dict) -> dict:
     saved = json.loads(path.read_text(encoding='utf-8'))
     evidence = json.loads(path.with_suffix('.input.json').read_text(encoding='utf-8'))
     policy, manifest_digest = _frozen_policy(run)
+    policy = _materialize_parent(policy, evidence['parent'])
     if (_digest(evidence) != digest or policy != evidence['policy']
             or manifest_digest != evidence['manifest_sha256']):
         raise ValueError('deterministic Repair frozen evidence changed')

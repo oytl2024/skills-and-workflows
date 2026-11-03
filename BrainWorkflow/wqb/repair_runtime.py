@@ -203,11 +203,8 @@ class RepairRuntimeExecutor:
                     check_source_retry_authorization(subrun)
                 except RateLimitRecoveryRequired as exc:
                     raise RepairRateLimited(exc.retry_at, exc.source_run_dir) from exc
-                cli.require_readiness_gate(
-                    knowledge_root=self.config.get('knowledge_root', cli.default_knowledge_root()),
-                    output_dir=subrun, mode='research', batch_size=30, live_api_enabled=True,
-                    region=self.config.get('region', 'USA'), universe=self.config.get('universe', 'TOP3000'),
-                    delay=int(self.config.get('delay', 1)))
+                cli.require_readiness_gate(**cli._live_gate_kwargs(
+                    dict(self.config, max_alphas_per_round=30), subrun))
                 try:
                     client = cli.build_client({**self.config, 'max_retries': 0, 'request_timeout_seconds': 20})
                     client.authenticate()
@@ -245,11 +242,8 @@ class RepairRuntimeExecutor:
             from wqb import cli
             from wqb.runtime_control import check_submission_allowed
             check_submission_allowed()
-            cli.require_readiness_gate(
-                knowledge_root=self.config.get("knowledge_root", cli.default_knowledge_root()),
-                output_dir=root, mode="research", batch_size=30, live_api_enabled=True,
-                region=self.config.get("region", "USA"), universe=self.config.get("universe", "TOP3000"),
-                delay=int(self.config.get("delay", 1)))
+            cli.require_readiness_gate(**cli._live_gate_kwargs(
+                dict(self.config, max_alphas_per_round=30), Path(root)))
             try:
                 parent = recover_parent_settings(Path(root), parent, None)
             except FileNotFoundError:
@@ -309,13 +303,11 @@ class RepairRuntimeExecutor:
         rate_state = read_rate_limit_state(subrun / "rate_limit_state.json")
         if cooldown_is_active(rate_state, now):
             raise RepairRateLimited(str(rate_state["retry_at"]), str(subrun))
-        cli.require_readiness_gate(
-            knowledge_root=self.config.get("knowledge_root", cli.default_knowledge_root()),
-            output_dir=subrun, mode="research", batch_size=30, live_api_enabled=True,
-            region=str(parent["settings"].get("region", self.config.get("region", "USA"))),
-            universe=str(parent["settings"].get("universe", self.config.get("universe", "TOP3000"))),
-            delay=int(parent["settings"].get("delay", self.config.get("delay", 1))),
-        )
+        gate_config = dict(self.config, max_alphas_per_round=30,
+            region=str(parent['settings'].get('region', self.config.get('region', 'USA'))),
+            universe=str(parent['settings'].get('universe', self.config.get('universe', 'TOP3000'))),
+            delay=int(parent['settings'].get('delay', self.config.get('delay', 1))))
+        cli.require_readiness_gate(**cli._live_gate_kwargs(gate_config, subrun))
         wait_path = subrun / REPAIR_PROGRESS_WAIT_FILE
         if wait_path.exists():
             wait = json.loads(wait_path.read_text(encoding='utf-8'))

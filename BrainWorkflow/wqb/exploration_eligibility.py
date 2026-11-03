@@ -215,7 +215,10 @@ def validate_exploration_attachment(run: Path, knowledge_root: Path, receipt: di
     inputs = verified['compiler_input']
     bound = _verify_certificate(certificate, inputs['resources'], inputs['scope'])
     current = _resource_certificate(run, knowledge_root, inputs['resources'], inputs['scope'])
-    if current != bound:
+    # The full index digest is historical audit evidence. Other lanes may append
+    # research sources; selected registration/bytes and owning authority remain exact.
+    selected_keys = CERTIFICATE_KEYS - {'source_index_sha256', 'content_sha256'}
+    if _digest({key: current[key] for key in selected_keys}) != _digest({key: bound[key] for key in selected_keys}):
         raise ValueError('exploration resource certification is stale or belongs to another run')
     root = Path(run).resolve(strict=True)
     path = _safe(root, 'runtime/exploration/resources/' + bound['content_sha256'] + '.json')

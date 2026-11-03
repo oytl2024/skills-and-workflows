@@ -201,6 +201,7 @@ def _maintain_active_release(root: Path, generated: str, apply_cleanup: bool, ma
         {"status": "skipped", "removed_count": 0}, {"status": "not_started"},
     ))
     report["verification_report_path"] = None
+    report['data_compile'] = dict(status='not_started')
     step = "migration"
     try:
         receipt = read_semantic_release(root)
@@ -208,6 +209,8 @@ def _maintain_active_release(root: Path, generated: str, apply_cleanup: bool, ma
             raise ValueError("active semantic pointer disappeared during maintenance")
         report["migration"].update(status="completed", release_id=receipt["release_id"])
         ensure_knowledge_dirs(root)
+        step = 'data_compile'
+        report[step] = _compile_active_fields(root, generated)
         step = "wiki"
         report[step] = compile_human_experience_wiki(root, generated, max_case_reports=max_case_reports)
         report[step]["status"] = "completed"
@@ -233,3 +236,86 @@ def _maintain_active_release(root: Path, generated: str, apply_cleanup: bool, ma
         report["error"] = f"{step}: {error}"
     _write_report(root, report)
     return report
+
+
+def _compile_active_fields(root: Path, generated: str) -> dict[str, Any]:
+    """Input: vault Path/compile timestamp str. Output: chronological local capture reports; preserve source dates and release."""
+    from wqb.data_ledger_compile import compile_data_ledger_from_raw, _read_jsonl, merge_field_enrichment
+    from wqb.knowledge_paths import existing_machine_resource_path
+    from wqb.knowledge_contracts import (
+        MAX_CAPTURE_MANIFEST_BYTES, _capture_json, _capture_timestamp, _source_contract_bytes,
+    )
+    from wqb.semantic_compilation import _safe
+    base = _safe(root, 'raw/platform/data_fields')
+    captures = []
+    if base.exists():
+        for candidate in sorted(base.iterdir()):
+            checked = _safe(root, candidate.relative_to(root).as_posix())
+            if checked.is_dir() and (checked / 'data_fields.jsonl').is_file() and (checked / 'manifest.json').is_file():
+                for name in ('data_fields.jsonl', 'manifest.json', 'scopes.jsonl'):
+                    _safe(root, (checked / name).relative_to(root).as_posix())
+                manifest = _capture_json(_source_contract_bytes(checked / 'manifest.json', MAX_CAPTURE_MANIFEST_BYTES))
+                timestamp = _capture_timestamp(manifest.get('generated_at'))
+                if checked.name != timestamp.date().isoformat():
+                    raise ValueError('capture directory/date mismatch: ' + checked.relative_to(root).as_posix())
+                captures.append((timestamp, checked))
+    if not captures:
+        return dict(status='skipped', reason='No complete local raw capture directory; existing ledger retained')
+    selections = []
+    for row in _read_jsonl(existing_machine_resource_path(root, 'data_ledger'), strict_objects=True):
+        if row.get('field_semantics_ref') is not None or row.get('timing_contract'):
+            captured = {key: value for key, value in row.items()
+                        if key not in ('field_semantics_ref', 'timing_contract')}
+            selections.append(merge_field_enrichment(root, captured, row))
+    # A later capture may cover another scope; replay in actual source-time order
+    # so the existing compiler preserves unattempted scopes and partial outcomes.
+    results = []
+    for _, capture in sorted(captures):
+        result = compile_data_ledger_from_raw(root, capture_dir=capture, generated_at=generated)
+        results.append(dict(result, capture_path=capture.relative_to(root).as_posix()))
+    if selections:
+        _preserve_active_field_selections(root, selections, generated)
+    return dict(results[-1], status='completed', captures=results)
+
+
+def _preserve_active_field_selections(root: Path, selections: list[dict], generated: str) -> None:
+    """Input: vault Path/initially verified selection rows/timestamp str. Output: None; revalidate compatible final-row enrichment atomically."""
+    from uuid import uuid4
+    from wqb.data_ledger import load_data_ledger, write_data_ledger_markdown
+    from wqb.data_ledger_compile import (
+        COMPILE_LOCK_NAME, COMPILE_LOCK_TIMEOUT_SECONDS, COMPILE_LOCK_SLEEP_SECONDS,
+        COMPILE_LOCK_STALE_SECONDS, DATA_LEDGER_MD, _ledger_row_scope_keys,
+        _read_jsonl, _write_jsonl, _publish_staged_outputs, merge_field_enrichment,
+    )
+    from wqb.knowledge_paths import machine_resource_path
+    from wqb.lockfile import exclusive_json_lock
+
+    selected = {(row['dataset_id'], row['field_id'], frozenset(_ledger_row_scope_keys(row))): row
+                for row in selections}
+    ledger = machine_resource_path(root, 'data_ledger')
+    preview = root / DATA_LEDGER_MD
+    with exclusive_json_lock(root / COMPILE_LOCK_NAME, COMPILE_LOCK_TIMEOUT_SECONDS,
+                             COMPILE_LOCK_SLEEP_SECONDS, COMPILE_LOCK_STALE_SECONDS,
+                             'data ledger compile lock is busy'):
+        rows = _read_jsonl(ledger, strict_objects=True)
+        output = []
+        for row in rows:
+            prior = selected.get((row['dataset_id'], row['field_id'], frozenset(_ledger_row_scope_keys(row))))
+            candidate = dict(row)
+            if prior is not None:
+                for key in ('field_semantics_ref', 'timing_contract'):
+                    if key not in candidate and key in prior:
+                        candidate[key] = prior[key]
+            output.append(merge_field_enrichment(root, row, candidate) if candidate != row else row)
+        if output == rows:
+            return
+        token = uuid4().hex
+        staged = [(ledger.with_name(ledger.name + '.' + token + '.tmp'), ledger),
+                  (preview.with_name(preview.name + '.' + token + '.tmp'), preview)]
+        try:
+            _write_jsonl(staged[0][0], output)
+            write_data_ledger_markdown(staged[1][0], load_data_ledger(staged[0][0]), generated)
+            _publish_staged_outputs(staged)
+        finally:
+            for temporary, _ in staged:
+                temporary.unlink(missing_ok=True)

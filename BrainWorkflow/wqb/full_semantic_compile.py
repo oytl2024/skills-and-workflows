@@ -17,7 +17,9 @@ import re
 
 from wqb.knowledge_contracts import (
     MAX_FIELD_CAPTURE_LINE_BYTES, _capture_json_object, _write_immutable_source,
-    parse_markdown_front_matter, verify_field_source_extracts,
+    parse_markdown_front_matter, verify_field_source_extracts, extract_field_source_batches,
+    DEFAULT_FIELD_EXTRACT_BATCHES, DEFAULT_FIELD_EXTRACT_FIELDS,
+    MAX_BULK_FIELD_BATCHES, MAX_BULK_FIELD_FIELDS,
 )
 from wqb.knowledge_paths import LEGACY_MACHINE_RESOURCE_PATHS, machine_resource_path
 from wqb.semantic_compilation import (
@@ -401,6 +403,19 @@ def prepare_full_semantic_compile(root: Path, config: dict) -> dict:
         raise ValueError('target batch limit cannot exceed existing bounded default')
     if not isinstance(config.get('rules_version', ''), str):
         raise ValueError('rules_version must be a string')
+    local_extracts = config.get('local_field_extracts')
+    if local_extracts is not None:
+        if (not isinstance(local_extracts, dict) or 'source_paths' not in local_extracts
+                or set(local_extracts) - {'source_paths', 'max_batches', 'max_fields', 'identities_by_source'}
+                or not isinstance(local_extracts['source_paths'], list)
+                or any(not isinstance(p, str) for p in local_extracts['source_paths'])):
+            raise ValueError('local_field_extracts requires explicit source_paths and finite bounds')
+        local_extracts = dict(local_extracts)
+        for name, default, limit in (('max_batches', DEFAULT_FIELD_EXTRACT_BATCHES, MAX_BULK_FIELD_BATCHES),
+                                      ('max_fields', DEFAULT_FIELD_EXTRACT_FIELDS, MAX_BULK_FIELD_FIELDS)):
+            value = local_extracts.setdefault(name, default)
+            if type(value) is not int or not 1 <= value <= limit:
+                raise ValueError(name + ' must be a finite positive integer <= ' + str(limit))
     root = Path(root).absolute()
     # Check root ancestors before resolving so a symlink/junction cannot disappear.
     for parent in (root, *root.parents):
@@ -409,6 +424,21 @@ def prepare_full_semantic_compile(root: Path, config: dict) -> dict:
     root = root.resolve(strict=True)
     _safe(root, 'machine/semantic_jobs')
     diagnostics, indexed, conflicts, targets, dependencies = [], {}, set(), {}, {}
+    captured_targets, large_originals = {}, {}
+
+    def captured_presence(relative, row):
+        """Input: original path str/captured row dict. Output: None; preserve unverified inventory occurrences."""
+        if relative not in large_originals:
+            large_originals[relative] = (root / relative).stat().st_size > MAX_SOURCE_BYTES
+        if large_originals[relative]:
+            _add(captured_targets.setdefault(relative, {}), row, relative, 'raw', False)
+
+    preparation = None
+    extra_session = None
+    if local_extracts is not None:
+        preparation = extract_field_source_batches(root, **local_extracts,
+            _on_row=captured_presence, _defer_finalize=True)
+        session = preparation.pop('_verification_session')
     index_path = _safe(root, 'machine/source_index.jsonl')
     for row in _rows(index_path, diagnostics):
         path = row.get('path')
@@ -421,19 +451,20 @@ def prepare_full_semantic_compile(root: Path, config: dict) -> dict:
         indexed[path] = row
     paths = set(indexed)
     paths.update(_raw_paths(root, diagnostics))
-    captured_targets, large_originals = {}, {}
-    def captured_presence(relative, row):
-        """Input: original path str/captured row dict. Output: None; preserve unverified inventory occurrences."""
-        if relative not in large_originals:
-            large_originals[relative] = (root / relative).stat().st_size > MAX_SOURCE_BYTES
-        if large_originals[relative]:
-            _add(captured_targets.setdefault(relative, {}), row, relative, 'raw', False)
     extract_paths = [path for path, row in indexed.items()
                      if row.get('content_status') == 'verified_raw_extract'
                      or path.startswith('raw/platform/data_fields/') and Path(path).name.startswith('semantic-subset-')]
-    session = verify_field_source_extracts(root, extract_paths, _on_row=captured_presence)
+    if preparation is None:
+        session = verify_field_source_extracts(root, extract_paths, _on_row=captured_presence)
+    else:
+        extra_paths = sorted(set(extract_paths) - set(session.paths()))
+        if extra_paths:
+            # Unselected existing extracts keep their ordinary independent proof;
+            # never claim the finite new preparation verified other identities.
+            extra_session = verify_field_source_extracts(root, extra_paths, _on_row=captured_presence)
     for relative, source_targets in captured_targets.items():
-        if session.original(relative) is not None:
+        if (session.original(relative) is not None
+                or extra_session is not None and extra_session.original(relative) is not None):
             for target in source_targets.values():
                 for occurrence in target['occurrences'].values():
                     for _ in range(occurrence['count']):
@@ -442,6 +473,8 @@ def prepare_full_semantic_compile(root: Path, config: dict) -> dict:
     for relative in sorted(paths):
         source = indexed.get(relative)
         verified, text, safe, before, source_gap = False, None, None, None, None
+        active_session = (extra_session if extra_session is not None
+                          and (relative in extra_paths or extra_session.original(relative) is not None) else session)
         try:
             safe = _safe(root, relative, source=True)
             before = safe.stat()
@@ -449,7 +482,7 @@ def prepare_full_semantic_compile(root: Path, config: dict) -> dict:
                 raise ValueError('conflicting source registrations')
             if source is None:
                 raise ValueError('unindexed raw presence only')
-            normalized, text = _material(root, source, _verification_session=session)
+            normalized, text = _material(root, source, _verification_session=active_session)
             if source.get('file_sha256', normalized['file_sha256']) != normalized['file_sha256']:
                 raise ValueError('asserted full-file hash mismatch')
             source, verified = normalized, True
@@ -470,7 +503,7 @@ def prepare_full_semantic_compile(root: Path, config: dict) -> dict:
         if verified:
             actual_hash = source['file_sha256']
         if text is None:
-            captured = session.original(relative)
+            captured = active_session.original(relative)
             if captured is not None and before.st_size > MAX_SOURCE_BYTES:
                 actual_hash = captured['original_sha256']
             else:
@@ -538,12 +571,16 @@ def prepare_full_semantic_compile(root: Path, config: dict) -> dict:
             target['gaps'].append(dict(code='conflicting_literal_meanings', meanings=sorted(meanings)))
         inventory.append(target)
     session.finalize()
+    if preparation is not None and extra_paths:
+        extra_session.finalize()
     contracts = _contracts(config)
     jobs, cached = _jobs(root, inventory, materials, contracts, config)
     raw_inventory = b''.join(_bytes(row) + b'\n' for row in inventory)
     identity = dict(root=str(root), contracts=contracts, sources=dependencies,
                     inventory_sha256=_hash(raw_inventory), jobs=jobs, diagnostics=diagnostics,
                     config={key: config[key] for key in defaults})
+    if preparation is not None:
+        identity['local_field_extracts'] = dict(config=local_extracts, result=preparation)
     key = _digest(identity)
     base = 'machine/semantic_jobs/' + key
     inventory_ref = _freeze(root, base + '/inventory.jsonl', raw_inventory)
@@ -563,6 +600,8 @@ def prepare_full_semantic_compile(root: Path, config: dict) -> dict:
                 jobs=jobs, diagnostics=diagnostics, coverage=coverage, estimates=estimates,
                 budget=dict(model_call_budget=config['model_call_budget'], execution_authorized=False),
                 model_calls=0, publication_authorized=False, research_authorized=False)
+    if preparation is not None:
+        plan['local_field_extracts'] = preparation
     _freeze(root, plan['plan_path'], _bytes(plan))
     # Cache counters are observations of preparation, never part of immutable identity.
     return dict(plan, estimates=dict(estimates, cached_jobs=cached, changed_jobs=len(jobs) - cached))
