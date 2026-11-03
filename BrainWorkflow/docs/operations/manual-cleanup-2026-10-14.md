@@ -180,3 +180,33 @@ skills-and-workflows\BrainWorkflow\NVIDIA Corporation
   readiness remain open. This is a verified maintenance slice, not complete
   workflow delivery, formal app deployment or old-run proof renewal. No model,
   WQB, research resume, budget change, Alpha submission or deletion occurred.
+
+## 2026-11-03 Verified Integration Audit
+
+- Before this audit, non-forced GitHub push and local/remote equality verified:
+  `agent/brainworkflow-phase2` = `58e6cae7c86deb6eb8ed2fe1a243bee1ee1f6434`.
+- Exact deletion set: empty. Updated/new files are required product modules,
+  focused regressions, build confinement and operating documentation. The owned
+  transport module serves the existing group driver; legacy readers remain
+  required for old-run recovery. No unrelated replacement framework was added.
+- Preserve outer `AGENTS.md`, `todo.md`, `milestone.md`, launchers, Git history,
+  `knowledge/`, `runs/`, `archive/`, Signboard, credentials/configuration/profiles,
+  and the pre-existing product `output/` and `tests/full-suite-maintenance.log`.
+- Actual raw captures/excerpts, semantic job inputs/results, failed verification
+  logs, native fixtures and staged packages remain referenced recovery evidence.
+  Intermediate package snapshots are not assumed Git-recoverable merely because
+  the final source is synced. No wildcard, link/junction traversal or deletion ran.
+- Current frozen offline proof: 2,816 tests, zero failures/errors, four skips,
+  687.819 seconds; source before/after
+  `075c350ad133e77b32ec116fe4f0a2326cb25d0e7b27c44a24c35794b9824f0c`.
+  React15/typecheck/build passed. Build `20261103-145837-8680` matches that source;
+  three isolated native launches each passed16 checks. No private vault, runtime
+  data or build artifacts were uploaded with the source commit.
+- Actual-vault acceptance remains blocked by stale/incomplete sources and the
+  absence of a new finite explanation allowance; a date-only historical user note
+  remains unresolved. The offline deployment-readiness receipt is not formal
+  entry/resource activation, old-proof renewal or research/Alpha authority.
+- Affected knowledge/desktop/root-entry regressions after this no-deletion audit:
+  95 tests passed in 15.500 seconds; source remains the frozen digest above.
+  Commit/push the audit and reverify local/remote equality; final results belong
+  in outer `todo.md`. No proof or quota is silently renewed by this audit.
