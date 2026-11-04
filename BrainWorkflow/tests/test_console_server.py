@@ -105,6 +105,30 @@ class ConsoleServerTests(unittest.TestCase):
 
         self.assertEqual(status, 403)
 
+    def test_all_foreign_post_routes_drain_bounded_bodies_before_refusal(self):
+        """Input: foreign-origin legacy/application requests. Output: body consumed, closed refusal, zero actions."""
+        import io
+        from unittest.mock import Mock
+        from wqb.console_server import ConsoleRequestHandler
+
+        for path in ('/actions/run', '/api/application/commands'):
+            with self.subTest(path=path), tempfile.TemporaryDirectory() as tmp:
+                body = b'action=workflow-auto-continue'
+                handler = ConsoleRequestHandler.__new__(ConsoleRequestHandler)
+                handler.server = SimpleNamespace(console_paths=make_paths(Path(tmp)), server_address=('127.0.0.1', 8765))
+                handler.path = path
+                handler.headers = {'Host': '127.0.0.1:8765', 'Origin': 'http://evil.example',
+                                   'Content-Length': str(len(body))}
+                handler.rfile = io.BytesIO(body)
+                handler.connection = SimpleNamespace(settimeout=Mock())
+                handler._send_html = Mock()
+                handler._send_json = Mock()
+                with patch('wqb.console_server.run_console_action') as action:
+                    handler.do_POST()
+                self.assertEqual(handler.rfile.tell(), len(body))
+                self.assertTrue(handler.close_connection)
+                action.assert_not_called()
+
     def test_post_accepts_current_resume_revision_without_live_action(self):
         from urllib.parse import urlencode
 

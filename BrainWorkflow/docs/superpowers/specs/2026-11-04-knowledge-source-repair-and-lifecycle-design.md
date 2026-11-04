@@ -1,14 +1,14 @@
 # Knowledge Source Repair And Derived Artifact Lifecycle
 
 Date: 2026-11-04
-Status: proposed implementation supplement; priorities confirmed, detailed contract awaits review.
+Status: local maintenance implementation in progress; SQLite approach and detailed contract explicitly confirmed. Acceptance/progress: outer todo.md.
 Supersedes only the affected source-ingestion/derived-storage parts of the Oct23 semantic compilation design. Research meaning/eligibility policies are unchanged in this first slice.
 
 ## Outcome
 
 Repair local engineering barriers before weakening research gates: large catalog reading, index/body inconsistencies, user-note metadata classification, repeated inventories and uncollected superseded derived files. Reuse raw/machine/wiki and the existing compiler, publication, maintenance and Console boundaries. This slice performs no database migration and creates no agent framework or second source authority.
 
-Later discussion accepted SQLite as a candidate machine storage/read optimization; it is not yet implemented or an exemption from source validation. The detailed migration must preserve raw/wiki Markdown, source identities, frozen run readers and transactional publication, with one authoritative machine generation rather than concurrent independent SQL/JSON authorities. Resolve its implementation scope before changing storage; do not lose this requirement while closing Repair.
+The subsequently approved SQLite scope is a rebuildable field-directory cache, now implemented and under acceptance. It is not a machine-store migration or an exemption from source validation. Raw/wiki Markdown, source identities, frozen run readers and transactional publication remain unchanged; SQL never becomes a second fact authority.
 
 ## Confirmed Evidence
 
@@ -23,6 +23,16 @@ The Nov3 source probe had 298 gap items: 296 local sources above the 2MB read bo
 - Preserve path/link checks, malformed/duplicate-key JSON rejection and exact raw identities. Source-byte verification does not imply semantic completeness, freshness or platform availability.
 
 ## 2. Index And Metadata Repair
+
+### Approved SQLite Approach And Confirmed Detailed Contract
+
+The user selected a rebuildable field-directory index, not a machine-store migration. Use Python's sqlite3 only; no server, new dependency or second fact authority. Store the derived index under `machine/field_catalogs/`. Its generation key binds original capture bytes, capture manifest and index schema, not timestamps, model budget or runtime limits.
+
+Build through a bounded JSONL stream and parameterized SQL transaction, with immutable generation publication and cleanup of only owned temporary build files. Index exact dataset/field/scope, raw byte offset/length, row digest and capture epoch; do not duplicate full raw payloads or turn index metadata into semantic explanations. A damaged index is rejected/rebuilt, never accepted by status alone. Reject links/junctions, unsafe cache paths, malformed records and ambiguous identities.
+
+Queries return a finite identity selection. The source reader seeks selected original rows and verifies their identities, bytes, manifest scope/epoch and current original digest before producing existing bounded excerpt receipts. Freshness, source facts, typed binding and model material limits remain independent. An index hit avoids JSON parsing of unrelated rows; original digest checks still read bytes as needed. Full inventory operations requiring every raw row remain explicitly more expensive, not secretly counted as cache-only queries.
+
+Integrate through the existing local extraction/maintenance entry, preserving old JSONL/Markdown/source-extract readers and frozen receipt reconstruction. Start may consume certified local materials, not implicitly capture or rebuild the entire vault. Keep legacy default behavior where required; an explicit incremental mode skips only verified prior excerpts, reports cumulative completion and never conflates extraction completion with platform coverage. Existing ledger/release/run formats do not migrate. Prove unchanged raw bytes/dates, bounded query memory, constant parsing per generation, cache tamper/rebuild, restart and index-free compatibility before actual-vault use.
 
 - Explain each drift before repair: canonical-body hashing, newline/frontmatter conversion, documented derivation, missing index, or unexplained content change. Do not fix a mismatch by blindly replacing its hash with the current file hash.
 - Rebuild current indexes only from corroborated local captures and receipts; preserve capture dates and previous evidence. Never edit frozen run snapshots to make a new index fit.

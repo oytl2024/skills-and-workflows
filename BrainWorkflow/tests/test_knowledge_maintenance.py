@@ -10,6 +10,41 @@ from wqb.knowledge_maintenance import run_knowledge_maintenance
 
 
 class KnowledgeMaintenanceTests(unittest.TestCase):
+    def test_source_preparation_finishes_all_fresh_bounded_chunks_and_replays(self):
+        """Input: 65 modern captured rows. Output: automatic three-chunk local preparation, no prefix padding."""
+        from tests.test_bulk_field_extracts import BulkFieldExtractTests
+        from wqb.knowledge_maintenance import _prepare_capture_sources
+        fixture = BulkFieldExtractTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        before = fixture.source.read_bytes()
+        result = _prepare_capture_sources(fixture.root, fixture.source.parent, '2026-10-30T00:00:00Z',
+                                          max_batches=1, max_fields=30)
+        self.assertEqual(result['status'], 'completed', result)
+        self.assertEqual(result['rounds'], 3)
+        self.assertEqual(result['certified_fields'], 65)
+        self.assertTrue(result['extraction_complete'])
+        self.assertEqual(fixture.source.read_bytes(), before)
+        prior = {p: p.read_bytes() for p in fixture.root.rglob('*') if p.is_file()}
+        repeated = _prepare_capture_sources(fixture.root, fixture.source.parent, '2026-10-30T00:00:00Z',
+                                            max_batches=1, max_fields=30)
+        self.assertEqual(repeated['new_fields'], 0)
+        self.assertEqual(prior, {p: p.read_bytes() for p in fixture.root.rglob('*') if p.is_file()})
+
+    def test_source_preparation_indexes_old_capture_without_refresh_or_expansion(self):
+        """Input: stale raw generation. Output: readable directory only, no thousands of unusable fresh-looking excerpts."""
+        from tests.test_bulk_field_extracts import BulkFieldExtractTests
+        from wqb.knowledge_maintenance import _prepare_capture_sources
+        fixture = BulkFieldExtractTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        result = _prepare_capture_sources(fixture.root, fixture.source.parent, '2027-02-01T00:00:00Z')
+        self.assertEqual(result['status'], 'deferred_source_age')
+        self.assertEqual(result['source_updated_at'], '2026-10-23')
+        self.assertEqual(result['catalog_rows'], 65)
+        self.assertFalse(list(fixture.source.parent.glob('semantic-subset-*.md')))
+        self.assertFalse((fixture.root / 'machine/data_ledger.jsonl').exists())
+
     def _field_capture(self, root: Path, day: str, region: str, description: str,
                        timestamp: str | None = None, partial: bool = False) -> Path:
         """Input: temporary root/date/scope/text and optional timestamp/status. Output: isolated raw capture Path."""
@@ -292,23 +327,24 @@ class KnowledgeMaintenanceTests(unittest.TestCase):
                 report = run_knowledge_maintenance(root, "2026-08-02T00:00:00Z", apply_cleanup=True)
             self.assertTrue(source.exists(), "active maintenance must not delete unique evidence")
             self.assertEqual(source.read_bytes(), before)
-            cleanup.assert_not_called()
+            cleanup.assert_called_once()
             self.assertEqual(report["status"], "blocked")
             self.assertEqual(report["cleanup"]["status"], "blocked")
-            self.assertIn("preservation", report["cleanup"]["error"])
+            self.assertGreater(report["cleanup"]["refused_count"], 0)
             self.assertEqual(report["cleanup"]["removed_count"], 0)
-            self.assertIsNone(report["verification_report_path"])
+            self.assertIsNotNone(report["verification_report_path"])
 
-    def test_active_explicit_cleanup_is_refused_even_without_candidates(self):
+    def test_active_explicit_cleanup_completes_without_candidates(self):
         from wqb import knowledge_maintenance as maintenance
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._active_release(root)
             with patch.object(maintenance, "apply_obsolete_active_cleanup", wraps=maintenance.apply_obsolete_active_cleanup) as cleanup:
                 report = run_knowledge_maintenance(root, "2026-08-02T00:00:00Z", apply_cleanup=True)
-            cleanup.assert_not_called()
-            self.assertEqual(report["status"], "blocked")
-            self.assertIn("preservation", report["error"])
+            cleanup.assert_called_once()
+            self.assertEqual(report["status"], "completed")
+            self.assertEqual(report["cleanup"]["removed_count"], 0)
+            self.assertIsNotNone(report["verification_report_path"])
 
     def test_malformed_research_rows_block_before_writes_and_replace_successful_latest(self):
         for invalid in (None, [], 42, "not an object", False):

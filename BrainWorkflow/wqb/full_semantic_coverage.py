@@ -8,10 +8,11 @@ from collections import Counter
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 from uuid import uuid4
 
-from wqb.full_semantic_compile import _bytes, _digest, _hash, _json
+from wqb.full_semantic_compile import _bytes, _digest, _hash, _json, inventory_reference_base
 from wqb.full_semantic_execution import (
     HASH, _read, _ref, _root, _verify_state,
     load_bound_explanation_job, validate_full_semantic_output,
@@ -20,7 +21,7 @@ from wqb.knowledge_age_policy import KNOWLEDGE_MAX_AGE_DAYS
 from wqb.semantic_compilation import MAX_OUTPUT_BYTES, _safe
 
 
-REPORT_VERSION = 1
+REPORT_VERSION = 2
 MAX_REASON_CHARS = 600
 MAX_INVENTORY_LINE_BYTES = 16 * 1024 * 1024
 MAX_CONSUMER_REQUESTS = 32
@@ -59,9 +60,7 @@ def _report_inventory(root: Path, plan: dict) -> tuple:
             or type(config['max_runtime_seconds']) is not int or config['max_runtime_seconds'] < 1):
         raise ValueError('invalid finite plan budget/runtime')
     ref = saved['inventory_ref']
-    if (set(ref) != {'path', 'sha256'} or not HASH.fullmatch(str(ref['sha256']))
-            or not ref['path'].startswith(base + '/') or ref['sha256'] != saved['identity']['inventory_sha256']):
-        raise ValueError('invalid bound inventory reference')
+    inventory_reference_base(saved)
     assigned = [tid for job in saved['jobs'] for tid in job['target_ids']]
     if len(assigned) != len(set(assigned)):
         raise ValueError('duplicate job targets')
@@ -99,6 +98,32 @@ def _write_report(path: Path, report: dict) -> None:
         with staged.open('w', encoding='utf-8', newline='\n') as stream:
             json.dump(report, stream, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
         staged.replace(path)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def _shared_targets(root: Path, values: list[dict]) -> dict:
+    """Input: safe vault Path/validated targets list. Output: immutable JSONL reference; share unchanged details."""
+    directory = _safe(root, 'machine/reports/semantic_targets')
+    directory.mkdir(parents=True, exist_ok=True)
+    staged = _safe(root, 'machine/reports/semantic_targets/' + uuid4().hex + '.tmp')
+    digest = hashlib.sha256()
+    try:
+        with staged.open('xb') as stream:
+            for row in values:
+                raw = _bytes(row) + b'\n'
+                digest.update(raw)
+                stream.write(raw)
+        sha256 = digest.hexdigest()
+        relative = 'machine/reports/semantic_targets/' + sha256 + '.jsonl'
+        target = _safe(root, relative)
+        try:
+            os.link(staged, target)
+        except FileExistsError:
+            with _safe(root, relative).open('rb') as stream:
+                if hashlib.file_digest(stream, 'sha256').hexdigest() != sha256:
+                    raise ValueError('immutable coverage target details differ')
+        return dict(path=relative, sha256=sha256, row_count=len(values))
     finally:
         staged.unlink(missing_ok=True)
 
@@ -284,7 +309,8 @@ def _markdown(report: dict) -> str:
     return '\n'.join(lines)
 
 
-def build_full_semantic_report(root: Path, plan: dict, *, binding_requests=None, consumer_run_dirs=None) -> dict:
+def build_full_semantic_report(root: Path, plan: dict, *, binding_requests=None, consumer_run_dirs=None,
+                               detailed: bool = False) -> dict:
     """Input: knowledge-root Path/authenticated K4 plan dict. Output: four-level report dict and JSON/Markdown files.
 
     Only machine/reports is written. Invalid plans raise before report creation;
@@ -292,6 +318,8 @@ def build_full_semantic_report(root: Path, plan: dict, *, binding_requests=None,
     Binder and Start denominators stay unknown until existing consumer validators
     are integrated; claimed flags or execution_result summaries are never evidence.
     """
+    if type(detailed) is not bool:
+        raise ValueError('detailed must be boolean')
     root = _root(root)
     saved, targets = _report_inventory(root, plan)
     plans = {saved['content_key']: saved}
@@ -387,11 +415,13 @@ def build_full_semantic_report(root: Path, plan: dict, *, binding_requests=None,
             processing_counts=dict(counts), unresolved_targets=total - explained),
         compiler_binder=bindings,
         start_consumption=consumption,
-        targets=values, diagnostics=diagnostics, model_calls=0, platform_calls=0,
+        targets_ref=_shared_targets(root, values), diagnostics=diagnostics, model_calls=0, platform_calls=0,
         publication_authorized=False, research_authorized=False, research_ready=False)
     json_path = _safe(root, paths['json'])
     markdown_path = _safe(root, paths['markdown'])
     markdown = _markdown(report)
     _write_report(json_path, report)
     markdown_path.write_text(markdown, encoding='utf-8')
+    if detailed:
+        report['targets'] = values
     return report

@@ -15,7 +15,7 @@ import time
 
 from wqb.full_semantic_compile import (
     BRIEF, OUTPUT_CONTRACT, _bytes, _contracts, _digest, _freeze, _hash,
-    _json, _parse, _rows,
+    _json, _parse, _rows, inventory_reference_base,
 )
 from wqb.knowledge_paths import machine_resource_path
 from wqb.lockfile import json_lock_transition_guard
@@ -434,7 +434,7 @@ def _load_plan(root: Path, plan: dict) -> tuple:
             or type(config['max_runtime_seconds']) is not int or config['max_runtime_seconds'] < 1):
         raise ValueError('invalid finite plan budget/runtime')
     inventory_path = _safe(root, saved['inventory_ref']['path'])
-    inventory_raw = _ref(root, saved['inventory_ref'], max(inventory_path.stat().st_size, 1), base)
+    inventory_raw = _ref(root, saved['inventory_ref'], max(inventory_path.stat().st_size, 1), inventory_reference_base(saved))
     if _hash(inventory_raw) != saved['identity']['inventory_sha256']:
         raise ValueError('inventory identity mismatch')
     inventory = [_json(line.decode()) for line in inventory_raw.splitlines() if line.strip()]

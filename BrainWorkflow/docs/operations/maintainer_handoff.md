@@ -365,3 +365,32 @@ workflow rule. Human approval remains required for durable rule changes and
 Alpha submission. Preserve append-only records and existing legacy/stage1
 archive material; update compiled wiki or benchmark artifacts through their
 normal maintenance commands.
+
+## Local Source And Derived Storage
+
+`field_source_catalog.py` owns disposable SQLite offsets under
+`machine/field_catalogs`, not source facts or research authority. Explicit
+maintenance may build/rebuild them; ordinary reads only consume existing caches.
+Selected rows, physical ordinals and the original capture date are checked from
+raw bytes. Uniform epochs need one raw date witness; mixed epochs require a
+raw date pass. Incremental extraction skips only verified prior receipts and
+reports pending rows without padding or renewing capture dates.
+
+Shared inventory format 3 stores compact row references, never execution job
+IDs. Budget/rule/worker bindings remain in each immutable plan. Old plan-local
+inventories are readable without migration. Coverage report v2 defaults to
+aggregates and a content-addressed `targets_ref`; `detailed=True` expands only
+the returned Python object, not another persisted full JSON report.
+
+Obsolete-path cleanup uses the publication lock, explicit reference-owner
+contracts, per-candidate validation and an intent journal. Recovery/job reports
+and run JSONL remain protection roots; generic filenames are not exemptions.
+Unsafe reference ancestors mean uncertainty, not an empty reference set.
+`knowledge_derivative_lifecycle.py` is read-only auditing only: machine-plan
+retirement/deletion still requires shared writer serialization, authenticated
+replacement and interruption recovery. Do not interpret its audit as GC approval.
+
+For browser verification, wait for DOM and the required state, not network idle:
+the Console's persistent SSE connection intentionally remains open. Use isolated
+workspace/knowledge/runs roots and a credential-free packaged subprocess; an
+offline screenshot or build does not authorize formal deployment or research.

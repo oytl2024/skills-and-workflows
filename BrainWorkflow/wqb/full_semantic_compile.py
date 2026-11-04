@@ -236,7 +236,11 @@ def _add(targets: dict, row: dict, path: str, origin: str, verified: bool,
     refs = [path] if origin == 'raw' else _source_refs(row)
     for ref in refs:
         target['source_refs'][ref] = dict(source) if source and ref == path else dict(path=ref)
-    occurrence = dict(origin=origin, path=path, row=row, scopes=scopes, source_refs=refs,
+    field = row.get('field', row)
+    description = field.get('field_description', field.get('description')) if isinstance(field, dict) else None
+    if isinstance(description, str) and description:
+        target.setdefault('_literal_meanings', {})[description] = True
+    occurrence = dict(origin=origin, path=path, row_ref=dict(sha256=_digest(row)), scopes=scopes, source_refs=refs,
                       source_validated=verified and not row.get('ambiguous', False))
     occurrence_key = _digest(occurrence)
     if occurrence_key in target['occurrences']:
@@ -247,6 +251,20 @@ def _add(targets: dict, row: dict, path: str, origin: str, verified: bool,
         item = dict(target_id=key, source_index=source, scopes=scopes, content=material,
                     sha256=_hash(material.encode('utf-8')))
         target['materials'][_digest(item)] = item
+
+
+def _merge_presence(targets: dict, captured: dict) -> None:
+    """Input: destination/source target maps. Output: None. Merge compact raw occurrences without reconstructing payloads."""
+    for key, source in captured.items():
+        target = targets.setdefault(key, dict(target_id=source['target_id'], kind=source['kind'],
+            identity=source['identity'], occurrences={}, scopes={}, source_refs={}, materials={}))
+        for name in ('scopes', 'source_refs', 'materials', '_literal_meanings'):
+            target.setdefault(name, {}).update(source.get(name, {}))
+        for occurrence_key, occurrence in source['occurrences'].items():
+            if occurrence_key in target['occurrences']:
+                target['occurrences'][occurrence_key]['count'] += occurrence['count']
+            else:
+                target['occurrences'][occurrence_key] = dict(occurrence)
 
 
 def _presence_material(path: Path, relative: str, diagnostics: list, targets: dict) -> tuple:
@@ -295,11 +313,26 @@ def _freeze(root: Path, relative: str, raw: bytes) -> dict:
     return dict(path=relative, sha256=_hash(raw))
 
 
+def inventory_reference_base(plan: dict) -> str:
+    """Input: authenticated plan dict. Output: exact legacy/shared inventory parent; reject substituted paths."""
+    reference, digest = plan['inventory_ref'], plan['identity']['inventory_sha256']
+    key = plan['content_key']
+    if (not isinstance(reference, dict) or set(reference) != {'path', 'sha256'}
+            or not isinstance(digest, str) or not re.fullmatch(r'[a-f0-9]{64}', digest)
+            or not isinstance(key, str) or not re.fullmatch(r'[a-f0-9]{64}', key)
+            or reference['sha256'] != digest):
+        raise ValueError('invalid bound inventory reference')
+    for base in ('machine/semantic_jobs/' + key, 'machine/semantic_inventories/' + digest):
+        if reference['path'] == base + '/inventory.jsonl':
+            return base
+    raise ValueError('inventory path differs from its bound identity')
+
+
 def _contracts(config: dict) -> dict:
     """Input: config dict. Output: source/rule/schema-bound contracts; no increased material bounds."""
     code = Path(__file__).parent
     owners = ('semantic_compilation.py', 'semantic_contracts.py', 'resource_evidence.py',
-              'knowledge_contracts.py', 'operator_semantics.py', 'data_ledger.py', 'full_semantic_compile.py')
+              'knowledge_contracts.py', 'field_source_catalog.py', 'operator_semantics.py', 'data_ledger.py', 'full_semantic_compile.py')
     return dict(schema_version=SCHEMA_VERSION, prepare_version=PREPARE_VERSION,
                 rules_version=config.get('rules_version', ''),
                 code_digests={name: _hash((code / name).read_bytes()) for name in owners},
@@ -406,11 +439,16 @@ def prepare_full_semantic_compile(root: Path, config: dict) -> dict:
     local_extracts = config.get('local_field_extracts')
     if local_extracts is not None:
         if (not isinstance(local_extracts, dict) or 'source_paths' not in local_extracts
-                or set(local_extracts) - {'source_paths', 'max_batches', 'max_fields', 'identities_by_source'}
+                or set(local_extracts) - {'source_paths', 'max_batches', 'max_fields', 'identities_by_source', 'resume_existing', 'use_catalog'}
                 or not isinstance(local_extracts['source_paths'], list)
                 or any(not isinstance(p, str) for p in local_extracts['source_paths'])):
             raise ValueError('local_field_extracts requires explicit source_paths and finite bounds')
         local_extracts = dict(local_extracts)
+        if 'use_catalog' in local_extracts and type(local_extracts['use_catalog']) is not bool:
+            raise ValueError('use_catalog must be a bool')
+        if ('resume_existing' in local_extracts and type(local_extracts['resume_existing']) is not bool
+                or local_extracts.get('resume_existing') is True and 'identities_by_source' in local_extracts):
+            raise ValueError('resume_existing requires a bool and no exact identity selector')
         for name, default, limit in (('max_batches', DEFAULT_FIELD_EXTRACT_BATCHES, MAX_BULK_FIELD_BATCHES),
                                       ('max_fields', DEFAULT_FIELD_EXTRACT_FIELDS, MAX_BULK_FIELD_FIELDS)):
             value = local_extracts.setdefault(name, default)
@@ -465,10 +503,7 @@ def prepare_full_semantic_compile(root: Path, config: dict) -> dict:
     for relative, source_targets in captured_targets.items():
         if (session.original(relative) is not None
                 or extra_session is not None and extra_session.original(relative) is not None):
-            for target in source_targets.values():
-                for occurrence in target['occurrences'].values():
-                    for _ in range(occurrence['count']):
-                        _add(targets, occurrence['row'], relative, 'raw', False)
+            _merge_presence(targets, source_targets)
     del captured_targets
     for relative in sorted(paths):
         source = indexed.get(relative)
@@ -560,13 +595,7 @@ def prepare_full_semantic_compile(root: Path, config: dict) -> dict:
             target['gaps'].append(dict(code='no_verified_material', message='Presence is not source validation'))
         if any(not occurrence['source_validated'] for occurrence in target['occurrences']):
             target['gaps'].append(dict(code='unverified_occurrences', message='Only exact source-validated occurrences supply job facts'))
-        meanings = set()
-        for occurrence in target['occurrences']:
-            row = occurrence['row']
-            field = row.get('field', row)
-            description = field.get('field_description', field.get('description')) if isinstance(field, dict) else None
-            if isinstance(description, str) and description:
-                meanings.add(description)
+        meanings = set(target.pop('_literal_meanings', {}))
         if len(meanings) > 1:
             target['gaps'].append(dict(code='conflicting_literal_meanings', meanings=sorted(meanings)))
         inventory.append(target)
@@ -575,15 +604,17 @@ def prepare_full_semantic_compile(root: Path, config: dict) -> dict:
         extra_session.finalize()
     contracts = _contracts(config)
     jobs, cached = _jobs(root, inventory, materials, contracts, config)
-    raw_inventory = b''.join(_bytes(row) + b'\n' for row in inventory)
+    # Job bindings belong to the authority-bearing plan, not shared source content.
+    raw_inventory = b''.join(_bytes({key: value for key, value in row.items() if key != 'job_id'}) + b'\n'
+                             for row in inventory)
     identity = dict(root=str(root), contracts=contracts, sources=dependencies,
-                    inventory_sha256=_hash(raw_inventory), jobs=jobs, diagnostics=diagnostics,
+                    inventory_format_version=3, inventory_sha256=_hash(raw_inventory), jobs=jobs, diagnostics=diagnostics,
                     config={key: config[key] for key in defaults})
     if preparation is not None:
         identity['local_field_extracts'] = dict(config=local_extracts, result=preparation)
     key = _digest(identity)
     base = 'machine/semantic_jobs/' + key
-    inventory_ref = _freeze(root, base + '/inventory.jsonl', raw_inventory)
+    inventory_ref = _freeze(root, 'machine/semantic_inventories/' + identity['inventory_sha256'] + '/inventory.jsonl', raw_inventory)
     unresolved = [dict(d) for d in diagnostics if d['code'] in INVENTORY_GAP_CODES or d.get('inventory_unresolved')]
     coverage = dict(target_count=len(inventory), source_validated_targets=sum(t['source_validated'] for t in inventory),
                     prepared_targets=sum(t['status'] == 'prepared' for t in inventory),

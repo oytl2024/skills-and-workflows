@@ -64,6 +64,48 @@ class BulkFieldExtractTests(unittest.TestCase):
         self.assertEqual(replay['extracts'], result['extracts'])
         self.assertTrue(all(p.read_bytes() == raw for p, raw in before.items()))
 
+    def test_incremental_resume_covers_remaining_fields_without_prefix_republication(self):
+        """Input: 65 captured rows/three bounded maintenance calls. Output: all identities, no duplicate excerpts."""
+        paths = set()
+        for added, pending, total in ((30, 35, 30), (30, 5, 60), (5, 0, 65)):
+            result = self.produce(max_batches=1, max_fields=30, resume_existing=True)
+            self.assertEqual(result['selected_fields'], added)
+            self.assertEqual(result['pending_rows'], pending)
+            self.assertEqual(result['certified_fields'], total)
+            self.assertEqual(result['extraction_complete'], pending == 0)
+            new = {row['excerpt_path'] for row in result['extracts']}
+            self.assertFalse(paths & new)
+            paths.update(new)
+        before = {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        replay = self.produce(max_batches=1, max_fields=30, resume_existing=True)
+        self.assertEqual(replay['selected_fields'], 0)
+        self.assertTrue(replay['extraction_complete'])
+        self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
+        self.assertEqual(len(paths), 3)
+        self.assertTrue(replay['partial'], 'extraction completion does not certify full platform coverage')
+
+    def test_resume_checks_previous_proof_before_publishing_next_batch(self):
+        """Input: corrupted prior receipt. Output: rejection without any new excerpt/index publication."""
+        first = self.produce(max_batches=1, max_fields=30)
+        receipt = self.root / first['extracts'][0]['receipt_path']
+        payload = json.loads(receipt.read_text(encoding='utf-8'))
+        payload['identity']['source_sha256'] = '0' * 64
+        receipt.write_text(json.dumps(payload), encoding='utf-8')
+        before = {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        with self.assertRaises(ValueError):
+            self.produce(max_batches=1, max_fields=30, resume_existing=True)
+        self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
+
+    def test_resume_flag_is_strict_and_cannot_change_an_exact_identity_request(self):
+        """Input: malformed flags or conflicting selectors. Output: rejection before writing machine resources."""
+        for value in (1, 'yes', None):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.produce(resume_existing=value)
+        exact = {self.relative: [dict(dataset_id='prices', field_id='f000', scope=self.scope)]}
+        with self.assertRaises(ValueError):
+            self.produce(resume_existing=True, identities_by_source=exact)
+        self.assertFalse((self.root / 'machine').exists())
+
     def test_finite_limits_and_byte_splitting_do_not_promote_coverage(self):
         self.rows = self.rows[:3]
         for row in self.rows:

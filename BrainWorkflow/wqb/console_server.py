@@ -1643,18 +1643,17 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
         origin = urlparse(self.headers.get("Origin", ""))
         if (self.headers.get("Host") != expected_host or origin.scheme != "http"
                 or origin.netloc != expected_host):
+            # Bound every rejected route's drain so Windows can deliver its refusal.
+            from wqb.console_api import MAX_COMMAND_BYTES
+            length = self.headers.get('Content-Length', '')
+            self.close_connection = True
+            if length.isdigit() and len(length) <= 10 and int(length) <= MAX_COMMAND_BYTES:
+                self.connection.settimeout(2)
+                try:
+                    self.rfile.read(int(length))
+                except OSError:
+                    pass
             if parsed.path == '/api/application/commands':
-                # Drain only bounded rejected bodies so Windows does not reset
-                # the connection before the JSON refusal reaches the caller.
-                from wqb.console_api import MAX_COMMAND_BYTES
-                length = self.headers.get('Content-Length', '')
-                self.close_connection = True
-                if length.isdigit() and int(length) <= MAX_COMMAND_BYTES:
-                    self.connection.settimeout(2)
-                    try:
-                        self.rfile.read(int(length))
-                    except OSError:
-                        pass
                 self._send_json({'command_id': None, 'status': 'refused', 'job_id': None,
                                  'message': 'Foreign POST origin refused'}, status=403)
                 return

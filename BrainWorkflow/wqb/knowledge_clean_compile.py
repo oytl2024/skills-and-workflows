@@ -4,13 +4,16 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
+import stat
 from typing import Any
 
 from wqb.knowledge_paths import (
     ACTIVE_TOP_LEVELS,
     DECISION_ARTIFACTS_ROOT,
     LEGACY_DECISION_ARTIFACTS_ROOT,
+    MACHINE_RESOURCE_FILES,
     active_top_level_names,
 )
 
@@ -40,6 +43,10 @@ OBSOLETE_ACTIVE_PREFIXES = (
     Path("wiki") / "90_index",
 )
 WIKI_MACHINE_EXTENSIONS = {".json", ".jsonl", ".csv"}
+REFERENCE_FILE_LIMIT = 16 * 1024 * 1024
+REFERENCE_TOTAL_LIMIT = 64 * 1024 * 1024
+REFERENCE_ENTRY_LIMIT = 10000
+RAW_REFERENCE_MANIFESTS = {'manifest.json', 'capture_manifest.json', 'learn_capture_manifest.json'}
 
 
 @dataclass(frozen=True)
@@ -65,7 +72,153 @@ def _now() -> str:
 
 def _sha256(path: Path) -> str:
     """Input: file path. Output: SHA-256 hex digest. Hash cleanup candidates before removal."""
-    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _safe_local_path(root: Path, path: Path) -> str:
+    """Input: root/path (Path). Output: reason (str); reject escapes, links and special files."""
+    root = Path(os.path.abspath(root))
+    path = Path(os.path.abspath(path))
+    if not path.is_relative_to(root):
+        return 'outside knowledge root'
+    for part in (*reversed(path.parents), path):
+        try:
+            info = part.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return 'unreadable path'
+        if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+            return 'link or reparse point'
+        if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
+            return 'special file'
+        if stat.S_ISREG(info.st_mode) and info.st_nlink > 1:
+            return 'hard-linked file'
+    return ''
+
+
+def _walk_local(root: Path, base: Path):
+    """Input: root/base (Path). Output: Path iterator; never descend into unsafe directories."""
+    if not os.path.lexists(base):
+        return
+    if _safe_local_path(root, base) or not base.is_dir():
+        yield base
+        return
+    for path in sorted(base.iterdir()):
+        if not _safe_local_path(root, path) and path.is_dir():
+            yield from _walk_local(root, path)
+        else:
+            yield path
+
+
+def _reference_refusal(root: Path, target: Path, digest: str) -> str:
+    """Input: root/target (Path), digest (str). Output: reason (str); bound structured evidence scan."""
+    from wqb.semantic_publication import _load
+
+    roots = [root / 'raw', root / 'machine', root / 'runs']
+    if root.name == 'knowledge':
+        roots.append(root.parent / 'runs')
+    total = entries = 0
+    for base in roots:
+        boundary = root.parent if base == root.parent / 'runs' else root
+        for owner in _walk_local(boundary, base):
+            if _safe_local_path(boundary, owner):
+                return 'uncertain evidence references'
+            if not _is_reference_owner(root, owner):
+                continue
+            entries += 1
+            if entries > REFERENCE_ENTRY_LIMIT:
+                return 'uncertain evidence references'
+            if owner.suffix.lower() not in {'.json', '.jsonl'} or not owner.is_file():
+                continue
+            # These owned reports describe migration/cleanup, not execution authority.
+            if any(owner.is_relative_to(root / 'raw/maintenance' / name)
+                   for name in ('cleanup_logs', 'compile_reports', 'migration_reports')):
+                continue
+            try:
+                size = owner.stat().st_size
+                total += size
+                if size > REFERENCE_FILE_LIMIT or total > REFERENCE_TOTAL_LIMIT:
+                    return 'evidence reference scan limit'
+                with owner.open('rb') as handle:
+                    data = handle.read(REFERENCE_FILE_LIMIT + 1)
+                if len(data) != size:
+                    return 'evidence changed during scan'
+                values = ([_load(line) for line in data.splitlines() if line.strip()]
+                          if owner.suffix.lower() == '.jsonl' else [_load(data)])
+                while values:
+                    value = values.pop()
+                    if isinstance(value, dict):
+                        values.extend(value.keys())
+                        values.extend(value.values())
+                    elif isinstance(value, list):
+                        values.extend(value)
+                    elif isinstance(value, str):
+                        if digest and value == digest:
+                            return 'referenced evidence digest'
+                        name = value.replace('\\', '/')
+                        if not name or '\n' in name or '\x00' in name:
+                            continue
+                        for origin in (root, root.parent, owner.parent):
+                            ref = Path(os.path.abspath(origin / name))
+                            if ref == target or ref in target.parents:
+                                return 'referenced evidence path'
+            except (OSError, ValueError, RecursionError):
+                return 'uncertain evidence references'
+    return ''
+
+
+def _is_reference_owner(root: Path, path: Path) -> bool:
+    """Input: root/path (Path). Output: bool; select declared contracts, not capture/inventory payloads."""
+    if path.is_relative_to(root / 'runs') or (root.name == 'knowledge' and path.is_relative_to(root.parent / 'runs')):
+        return path.suffix.lower() in {'.json', '.jsonl'} or path.suffix == ''
+    relative = path.relative_to(root)
+    if (relative.parts[:2] in {('machine', 'semantic_jobs'), ('machine', 'semantic_inventories')}
+            and len(relative.parts) == 4 and relative.name == 'inventory.jsonl'
+            and len(relative.parts[2]) == 64 and all(c in '0123456789abcdef' for c in relative.parts[2])):
+        return False
+    if relative.is_relative_to(Path('raw/research')):
+        return path.suffix.lower() in {'.json', '.jsonl'} or path.suffix == ''
+    if relative.parts[0] == 'raw':
+        return path.name in RAW_REFERENCE_MANIFESTS
+    if relative.parent == Path('machine'):
+        return path.name in {*MACHINE_RESOURCE_FILES.values(), 'semantic_release.json'}
+    for prefix in ('machine/semantic_jobs', 'machine/decisions', 'machine/candidate_evidence'):
+        if relative.is_relative_to(Path(prefix)):
+            return path.suffix.lower() in {'.json', '.jsonl'} or path.suffix == ''
+    if relative.is_relative_to(Path('machine/semantic_releases')):
+        return path.name in {'manifest.json', *MACHINE_RESOURCE_FILES.values()} or path.suffix == ''
+    return False
+
+
+def _candidate_refusal(root: Path, path: Path, digest: str) -> str:
+    """Input: root/path (Path), planned digest (str). Output: concise refusal reason or empty str."""
+    reason = _safe_local_path(root, path)
+    if reason:
+        return reason
+    path = Path(os.path.abspath(path))
+    relative = path.relative_to(root)
+    if not ((len(relative.parts) == 1 and path.name not in COORDINATION_FILES)
+            or any(relative.is_relative_to(prefix) for prefix in OBSOLETE_ACTIVE_PREFIXES)):
+        return 'outside obsolete allowlist'
+    if _is_sensitive(path, root):
+        return 'sensitive path'
+    if relative.is_relative_to(Path('raw')):
+        return 'protected raw evidence'
+    try:
+        if not path.is_file() or not digest or _sha256(path) != digest:
+            return 'candidate changed or missing'
+        if relative.is_relative_to(LEGACY_DECISION_ARTIFACTS_ROOT):
+            canonical = root / DECISION_ARTIFACTS_ROOT / relative.relative_to(LEGACY_DECISION_ARTIFACTS_ROOT)
+            if _safe_local_path(root, canonical) or not canonical.is_file() or _sha256(canonical) != digest:
+                return 'canonical migration changed or missing'
+        return _reference_refusal(root, path, digest)
+    except OSError:
+        return 'candidate unreadable'
 
 
 def _is_sensitive(path: Path, root: Path) -> bool:
@@ -163,44 +316,27 @@ def plan_obsolete_active_cleanup(knowledge_root: str | Path) -> list[CleanupCand
     """Input: knowledge root. Output: cleanup candidates. Plan ordinary removals and sensitive refusals."""
     root = Path(knowledge_root)
     rows: list[CleanupCandidate] = []
+    def candidate(path: Path, reason: str) -> CleanupCandidate:
+        """Input: path (Path), reason (str). Output: guarded CleanupCandidate without following links."""
+        refusal = _safe_local_path(root, path)
+        digest = ''
+        if not refusal:
+            try:
+                digest = _sha256(path)
+            except OSError:
+                refusal = 'candidate unreadable'
+        if not refusal:
+            refusal = _candidate_refusal(Path(os.path.abspath(root)), path, digest)
+        return CleanupCandidate(str(path), refusal or reason, 'refuse' if refusal else 'remove', digest)
+
     if root.exists():
-        for path in sorted(item for item in root.iterdir() if item.is_file() and item.name not in COORDINATION_FILES):
-            action = "refuse" if _is_sensitive(path, root) else "remove"
-            rows.append(
-                CleanupCandidate(
-                    str(path),
-                    "file at knowledge root",
-                    action,
-                    _sha256(path),
-                )
-            )
+        for path in sorted(root.iterdir()):
+            if path.name not in COORDINATION_FILES and (_safe_local_path(root, path) or path.is_file()):
+                rows.append(candidate(path, 'file at knowledge root'))
     for prefix in OBSOLETE_ACTIVE_PREFIXES:
         base = root / prefix
-        if not base.exists():
-            continue
-        for path in sorted(base.rglob("*")):
-            if path.is_file():
-                migrated = True
-                if prefix == LEGACY_DECISION_ARTIFACTS_ROOT:
-                    relative = path.relative_to(base)
-                    canonical = root / DECISION_ARTIFACTS_ROOT / relative
-                    migrated = canonical.is_file() and _sha256(canonical) == _sha256(path)
-                action = "refuse" if _is_sensitive(path, root) or not migrated else "remove"
-                reason = f"obsolete active prefix {prefix.as_posix()}"
-                if prefix == LEGACY_DECISION_ARTIFACTS_ROOT:
-                    reason += (
-                        " with exact canonical migration"
-                        if migrated
-                        else " without exact canonical migration"
-                    )
-                rows.append(
-                    CleanupCandidate(
-                        str(path),
-                        reason,
-                        action,
-                        _sha256(path),
-                    )
-                )
+        for path in _walk_local(root, base):
+            rows.append(candidate(path, f'obsolete active prefix {prefix.as_posix()}'))
     return rows
 
 
@@ -247,12 +383,27 @@ def migrate_legacy_decision_artifacts(knowledge_root: str | Path) -> dict[str, A
 
 def write_cleanup_log(knowledge_root: str | Path, rows: list[dict[str, Any]], generated_at: str) -> Path:
     """Input: knowledge root, cleanup rows, timestamp. Output: log path. Persist cleanup evidence."""
-    root = Path(knowledge_root).resolve()
-    path = root / "raw" / "maintenance" / "cleanup_logs" / f"{generated_at[:10]}.jsonl"
+    root = Path(os.path.abspath(knowledge_root))
+    path = _cleanup_log_path(root, generated_at)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    return path
+
+
+def _cleanup_log_path(root: Path, generated_at: str) -> Path:
+    """Input: root (Path), timestamp (str). Output: Path; reject unsafe audit destinations before deletion."""
+    day = generated_at[:10]
+    try:
+        datetime.strptime(day, '%Y-%m-%d')
+    except ValueError as error:
+        raise ValueError('unsafe cleanup log date') from error
+    path = root / 'raw/maintenance/cleanup_logs' / f'{day}.jsonl'
+    if _safe_local_path(root, path):
+        raise ValueError('unsafe cleanup log path')
     return path
 
 
@@ -260,12 +411,12 @@ def _remove_empty_obsolete_directories(root: Path) -> None:
     """Input: knowledge root. Output: none. Remove empty directories under obsolete active prefixes."""
     for prefix in OBSOLETE_ACTIVE_PREFIXES:
         base = root / prefix
-        if not base.is_dir():
+        if _safe_local_path(root, base) or not base.is_dir():
             continue
         for directory in sorted((path for path in base.rglob("*") if path.is_dir()), reverse=True):
-            if not any(directory.iterdir()):
+            if not _safe_local_path(root, directory) and not any(directory.iterdir()):
                 directory.rmdir()
-        if not any(base.iterdir()):
+        if not _safe_local_path(root, base) and not any(base.iterdir()):
             base.rmdir()
 
 
@@ -280,7 +431,9 @@ def _compile_verification_evidence(
     if verification_report_path is None:
         return {"verification_report_path": None, "verification_status": "missing", "verified": False}
 
-    report_path = Path(verification_report_path).resolve()
+    report_path = Path(os.path.abspath(verification_report_path))
+    if _safe_local_path(root, report_path):
+        return {'verification_report_path': str(report_path), 'verification_status': 'unsafe', 'verified': False}
     report_root = (root / "raw" / "maintenance" / "compile_reports").resolve()
     try:
         report_path.relative_to(report_root)
@@ -329,9 +482,33 @@ def apply_obsolete_active_cleanup(
     dry_run: bool = True,
     verification_report_path: str | Path | None = None,
 ) -> dict[str, Any]:
+    """Input: root/path, timestamp str, dry-run bool, report/path. Output: dict; serialize cleanup with publication."""
+    from wqb.semantic_publication import _acquire_lock, _release_lock
+
+    root = Path(os.path.abspath(knowledge_root))
+    if _safe_local_path(root, root):
+        raise ValueError('unsafe knowledge root')
+    generated = generated_at or _now()
+    _cleanup_log_path(root, generated)
+    handle = _acquire_lock(root)
+    try:
+        return _apply_obsolete_active_cleanup_locked(root, generated, dry_run, verification_report_path)
+    finally:
+        _release_lock(handle)
+
+
+def _apply_obsolete_active_cleanup_locked(
+    knowledge_root: Path,
+    generated_at: str,
+    dry_run: bool,
+    verification_report_path: str | Path | None,
+) -> dict[str, Any]:
     """Input: root, timestamp, dry run, compile report path. Output: cleanup summary with audit log."""
     generated = generated_at or _now()
-    root = Path(knowledge_root).resolve()
+    root = Path(os.path.abspath(knowledge_root))
+    if _safe_local_path(root, root):
+        raise ValueError('unsafe knowledge root')
+    _cleanup_log_path(root, generated)
     candidates = plan_obsolete_active_cleanup(root)
     evidence = _compile_verification_evidence(root, verification_report_path, dry_run)
     blocked = not evidence["verified"]
@@ -346,8 +523,21 @@ def apply_obsolete_active_cleanup(
             "verification_status": evidence["verification_status"],
         }
         if candidate.action == "remove" and not dry_run and not blocked:
-            path.unlink(missing_ok=True)
-            row["applied"] = True
+            refusal = _candidate_refusal(root, path, candidate.sha256)
+            if not refusal:
+                write_cleanup_log(root, [row | {'event': 'cleanup_intent', 'applied': False}], generated)
+                try:
+                    # Recheck after the reference scan, immediately before unlink.
+                    refusal = _safe_local_path(root, path)
+                    if not refusal and _sha256(path) != candidate.sha256:
+                        refusal = 'candidate changed'
+                    if not refusal:
+                        path.unlink()
+                except OSError:
+                    refusal = 'candidate removal failed'
+            row['applied'] = not refusal
+            if refusal:
+                row.update(action='refuse', reason=refusal)
         else:
             row["applied"] = False
         rows.append(row)
@@ -374,5 +564,7 @@ def apply_obsolete_active_cleanup(
         "removed_count": summary_row["removed_count"],
         "refused_count": summary_row["refused_count"],
         "candidate_count": summary_row["candidate_count"],
+        "refusals": [{'path': row['path'], 'reason': row['reason']}
+                     for row in rows if row['action'] == 'refuse'],
         "cleanup_log_path": str(log_path),
     }

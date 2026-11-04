@@ -4,7 +4,7 @@
 
 **Goal:** Remove measured local source-ingestion and retention defects, then expose remaining real readiness gaps without changing research eligibility policy.
 
-**Architecture:** Extend existing capture extraction, indexes, semantic compilation and cleanup ownership. Share catalog/inventory generations; retain separately bound jobs/releases/runs. No new framework or database.
+**Architecture:** Extend existing capture extraction, indexes, semantic compilation and cleanup ownership. The user approved a rebuildable sqlite3 field-directory index, not canonical ledger/run migration. Share catalog/inventory generations; retain separately bound jobs/releases/runs. No new framework/server or external dependency.
 
 **Tech stack:** Existing Python312/unittest, JSONL/Markdown, local Console and established offline UI verification.
 
@@ -12,13 +12,19 @@
 
 ## P1: Correct Local Source Consumption
 
+SQLite implementation contract (user confirmed approach and detailed spec):
+- Add `wqb/field_source_catalog.py` and isolated `tests/test_field_source_catalog.py` only for derived directory ownership. Store identities/scope, ordinal, offset/length and row digest, not full raw payloads. Key generation by exact source/manifest bytes and schema; parameterized SQL, bounded reads, atomic build and safe read-only open.
+- `catalog_field_scan(source, identities, manifest, *, bulk_limits=None, create=False)` returns the existing scan dict or None for an absent/unusable optional cache. It validates original hash/count/current stat and reads selected raw offsets; creates/rebuilds only when explicitly requested by local maintenance. Full-inventory callbacks remain a deliberate full parse, not a claimed SQL-only hit.
+- `knowledge_contracts._scan_field_source` consumes an existing verified catalog when no full-row callback is needed. `extract_field_source_batches(..., use_catalog=True)` explicitly prepares it; default False preserves prior opt-in behavior. Incremental `resume_existing=True` is strict, verifies prior receipts and reports cumulative extraction completion separately from platform certification. Preserve v1 receipts and finite query/grid limits.
+- RED tests: >2MB source, selected exact scopes, no repeated JSON parse on index hit, bounded reads, changed raw/manifest, cache corruption/rebuild, unsafe paths, missing identities, valid prior-excerpt continuation and unchanged default replay. Keep actual raw/release/run evidence unchanged during initial implementation.
+
 Files: wqb/knowledge_contracts.py, semantic_compilation.py, full_semantic_compile.py, data_ledger_compile.py as needed; tests/test_bulk_field_extracts.py, test_full_semantic_inventory.py and existing source/extraction tests.
 
-- [ ] Reproduce the >2MB failure using a real-format multiscope temporary capture and assert exact requested fields can be consumed without enlarging model packs.
-- [ ] Add RED tests for single-generation streaming, bounded pages, partial/resumed work, no silent prefix-only completion, changed source bytes/counts and unsafe paths.
-- [ ] Extend existing extractor/resolver; reuse exact identity/source receipts. No unbounded text reads or per-field whole-catalog rescans.
-- [ ] Preserve existing small-source jobs/readers and test absence of fabricated timing/units/grain, freshness renewal, release publication or model calls.
-- [ ] Run focused regressions and a bounded actual-vault diagnostic; report direct source-reader failures separately from later semantic gates.
+- [x] Reproduce the >2MB failure using a real-format multiscope temporary capture and assert exact requested fields can be consumed without enlarging model packs.
+- [x] Add RED tests for single-generation streaming, bounded pages, partial/resumed work, no silent prefix-only completion, changed source bytes/counts and unsafe paths.
+- [x] Extend existing extractor/resolver; reuse exact identity/source receipts. No unbounded text reads or per-field whole-catalog rescans.
+- [x] Preserve existing small-source jobs/readers and test absence of fabricated timing/units/grain, freshness renewal, release publication or model calls.
+- [x] Run focused regressions and a bounded actual-vault diagnostic; report direct source-reader failures separately from later semantic gates.
 
 ## P2: Index And Nonplatform Metadata
 
@@ -26,23 +32,23 @@ Files: wqb/knowledge_contracts.py, knowledge_freshness.py, knowledge_maintenance
 
 - [ ] Add RED fixtures for body/full hash disagreement, canonical newline/frontmatter conversion, unindexed verified captures and genuine unexplained content drift.
 - [ ] Implement only corroborated local repairs with receipts and unchanged capture dates; keep unexplained selected facts blocked rather than refreshing hashes blindly.
-- [ ] Test date-only user-note classification: missing platform capture metadata is not global resource failure; required official capture fields remain enforced.
+- [x] Test date-only user-note classification: missing platform capture metadata is not global resource failure; required official capture fields remain enforced.
 - [ ] Extend maintenance reporting with stage/target/reason/severity/scope and demonstrate unchanged authoritative raw, selected releases and run evidence.
 
 ## P3: Shared Inventory And Idempotent Projection
 
 Files: wqb/full_semantic_compile.py, full_semantic_coverage.py, full_semantic_execution.py, knowledge_paths.py and consumers requiring storage compatibility; existing inventory/execution/coverage tests.
 
-- [ ] Add RED tests for repeated preparation with changed execution budget but identical catalog bytes; reuse content storage while authority remains distinct.
-- [ ] Replace repeated embedded source/ledger rows with shared bounded pages and identity/digest locators. Preserve all scopes and complete inventory counts.
-- [ ] Default reports to compact aggregates/references; provide explicit detailed output without multiplying copies.
-- [ ] Test selected evidence reconstruction, old-plan reading, interrupted writes, cache validation and stable replay. Do not enable old results via status edits.
+- [x] Add RED tests for repeated preparation with changed execution budget but identical catalog bytes; reuse content storage while authority remains distinct.
+- [x] Replace repeated embedded source/ledger rows with shared bounded pages and identity/digest locators. Preserve all scopes and complete inventory counts.
+- [x] Default reports to compact aggregates/references; provide explicit detailed output without multiplying copies.
+- [x] Test selected evidence reconstruction, old-plan reading, interrupted writes, cache validation and stable replay. Do not enable old results via status edits.
 
 ## P4: Reference-Aware Compile Cleanup
 
 Files: wqb/knowledge_clean_compile.py, knowledge_maintenance.py and existing cleanup/maintenance tests. Add a narrowly scoped helper only if existing ownership otherwise becomes tangled; no second resource authority.
 
-- [ ] Add RED tests for active-release maintenance currently refusing every apply_cleanup request.
+- [x] Add RED tests for active-release maintenance currently refusing every apply_cleanup request.
 - [ ] Implement inventory/current publication/job/run/recovery protection roots, compact retirement of only superseded unexecuted maintenance derivatives and exact allowlisted candidates.
 - [ ] Test duplicate generation removal, protected raw/research/results, symlink/junction refusal, publication races, candidate replacement and interrupted cleanup recovery.
 - [ ] Integrate cleanup at maintenance completion; repeated unchanged compile must not grow inventories/reports or duplicate current records.
@@ -55,3 +61,51 @@ Files: wqb/knowledge_clean_compile.py, knowledge_maintenance.py and existing cle
 - [ ] List remaining semantic gates by actual reason and scope. Bring semantic policy changes, truly missing capture and finite model allowance back for review rather than bypassing them.
 - [ ] Confirm no research/API/submit/model-budget or old-run proof changes. Verify loaded Console state and documented next legal action.
 - [ ] Commit/push verified implementation without force; audit/execute approved derivative cleanup, run affected regression and synchronize cleanup receipts. Formal EXE activation remains gated on resource acceptance and explicit deployment review, not implicit in this plan.
+
+## Verified Slice And Remaining Closure
+
+P1/P3 and protected obsolete-path cleanup are implemented. Shared inventory
+format 3 excludes job IDs; rules/helper fingerprints still bind execution plans,
+not copied source content. Default report v2 shares detailed JSONL and returns
+compact aggregates. SQLite verifies actual raw date witnesses and physical
+record positions, including coordinated cache/checksum alteration regressions.
+Uniform epochs need one date witness; mixed epochs retain the full raw date
+pass. This deliberately preserves correctness over the fastest possible query.
+
+Fresh reviews reproduced and closed five findings with RED-to-GREEN tests:
+cached original dates, cache-dependent ordinals, job-dependent inventory copies,
+excluded recovery/event references and unsafe reference ancestors. The first
+full suite ran 2,942 tests with one Windows foreign-POST connection error. A
+deterministic regression verified that the legacy refusal path did not drain
+its bounded body; it now shares the application's bounded refusal handling.
+Console targeted regression: 109 tests passed, one skipped. Interrupted and
+failed logs/builds are retained as diagnostics, never acceptance evidence.
+
+Stable full suite: 2,943 tests passed, eight skips, 703.688 seconds. Source/test/
+catalog digest before and after:
+`e87cd30998d4a734bf39d4f05805f38a1b7696dce9981f755c9660dd2d3d70fd`.
+Log: `output/desktop-validation/source-lifecycle-verified-full-suite-20261104.log`.
+Package: `output/desktop-application/20261104-234500-7080`; self-test and CLI
+smoke passed. Isolated packaged backend and desktop/mobile browser checks
+passed with source-matching loaded revision
+`858b3beed212af61e7bac802b7860ed58bdeb0bf655d38ba2ac266900772b9cc`.
+No real roots, credentials, button actions or research were used in that check.
+
+Actual current plan `666c07de` has 88,670 identities and a 182,941,296-byte
+inventory (old plan-local files were approximately 693-697 MB). Report JSON is
+3,456 bytes; details are shared rather than repeatedly embedded. Zero model
+calls. Only 229 identities have verified material; 88,441 remain blocked.
+Earlier replay verified unchanged raw/ledger/index/release hashes and zero new
+job directories. Subsequent raw date validation took 0.408 seconds for 85,569
+catalog rows, retaining the Jul30 date. Health: zero blockers, eleven local-note
+warnings; this is not semantic or research readiness.
+
+The plan is NOT fully closed. P2's two actual Markdown hash drifts lack original
+corroboration; the operators repair preflight reports missing `operators.json`.
+Jul29/30 field captures remain over 90 days. New capture/model explanation,
+publication, proof renewal and deployment need their own authority. P4 machine
+retirement is audit-only: all three legacy inventories validate structurally,
+but shared-writer serialization, authenticated supersession and external
+reference/recovery proofs remain unimplemented. Apply refuses; no inventories
+were deleted. This conservative limitation retains about 2.1 GB and must not
+be reported as completed automatic GC or whole-project readiness.

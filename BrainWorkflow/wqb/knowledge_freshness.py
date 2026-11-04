@@ -1,15 +1,17 @@
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import date, datetime
 import json
 from pathlib import Path
 from typing import Any
 
 from wqb.knowledge_clean_compile import evaluate_clean_knowledge_structure
 from wqb.knowledge_contracts import (
+    RAW_REQUIRED_FIELDS,
     canonical_source_family,
     parse_markdown_front_matter,
     validate_raw_metadata,
     validate_wiki_metadata,
+    verify_field_source_extracts,
 )
 
 
@@ -19,6 +21,7 @@ REQUIRED_RESEARCH_RUN_MANIFEST_NAMES = {
     "benchmark_rules",
     "activity_snapshot",
 }
+USER_NOTE_HOUSEKEEPING_MESSAGES = {f"missing {field}" for field in RAW_REQUIRED_FIELDS}
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,51 @@ def _resolve_vault_reference(root: Path, value: str) -> Path | None:
     except ValueError:
         return None
     return resolved
+
+
+def _is_local_design_note(path: Path, root: Path, metadata: dict[str, Any]) -> bool:
+    """Input: safe file/root Paths and metadata dict. Output: bool. Classify only canonical local design notes."""
+    relative = path.absolute().relative_to(root.absolute())
+    return (
+        relative.parts[:3] == ("raw", "community", "user_messages")
+        and len(relative.parts) > 3
+        and metadata.get("source_type") == "user_design_input"
+        and metadata.get("status") == "design_discussion_not_implemented"
+    )
+
+
+def _user_note_provenance_issues(metadata: dict[str, Any], root: Path) -> list[str]:
+    """Input: note metadata dict and vault Path. Output: list[str]. Reject invalid declared dates and local references."""
+    issues = []
+    if "captured_at" in metadata:
+        value = metadata["captured_at"]
+        try:
+            if not isinstance(value, str) or len(value) < 10 or date.fromisoformat(value[:10]).isoformat() != value[:10]:
+                raise ValueError("invalid captured_at")
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            issues.append("Declared captured_at is invalid; preserve the original date precision.")
+    references = []
+    if "source_path" in metadata:
+        references.append(metadata["source_path"])
+    targets = metadata.get("compiled_targets", [])
+    if isinstance(targets, list):
+        references.extend(targets)
+    for value in references:
+        if (not isinstance(value, str) or not value
+                or ".." in Path(value.replace("\\", "/")).parts
+                or _resolve_vault_reference(root, value) is None):
+            issues.append(f"Declared local provenance path is unsafe: {value}")
+            continue
+        candidate = Path(value.replace("\\", "/"))
+        if not candidate.is_absolute():
+            if candidate.parts and candidate.parts[0].lower() == root.name.lower():
+                candidate = Path(*candidate.parts[1:])
+            candidate = root / candidate
+        if any(part.is_symlink() or (hasattr(part, "is_junction") and part.is_junction())
+               for part in (candidate.absolute(), *candidate.absolute().parents)):
+            issues.append(f"Declared local provenance path is linked: {value}")
+    return issues
 
 
 def _record_from_dict(row: dict[str, Any]) -> KnowledgeFreshnessRecord:
@@ -156,6 +204,7 @@ def evaluate_knowledge_contract_health(knowledge_root: str | Path) -> dict[str, 
     """Input: vault root. Output: health dict. Validate canonical raw/wiki contracts."""
     root = Path(knowledge_root)
     issues: list[KnowledgeHealthIssue] = []
+    warnings: list[KnowledgeHealthIssue] = []
     legacy_count = 0
     raw_root = root / "raw"
     wiki_root = root / "wiki"
@@ -215,7 +264,52 @@ def evaluate_knowledge_contract_health(knowledge_root: str | Path) -> dict[str, 
                 )
             )
     index_text = source_index.read_text(encoding="utf-8") if source_index.exists() else ""
+    raw_metadata: dict[Path, dict[str, Any]] = {}
+    excerpt_paths: list[str] = []
     for path in raw_paths:
+        if (not path.resolve().is_relative_to(root.resolve())
+                or any(part.is_symlink() or (hasattr(part, "is_junction") and part.is_junction())
+                       for part in (path.absolute(), *path.absolute().parents))):
+            issues.append(KnowledgeHealthIssue(
+                code="raw_source_path_unsafe", path=str(path),
+                message="Raw source path escapes the vault or traverses a link.",
+                action="Restore an unlinked canonical source path before using this source.",
+            ))
+            continue
+        try:
+            metadata, _ = parse_markdown_front_matter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError) as error:
+            issues.append(KnowledgeHealthIssue(
+                code="raw_source_unreadable", path=str(path), message=str(error),
+                action="Restore readable original source evidence before using this source.",
+            ))
+            continue
+        raw_metadata[path] = metadata
+        if (metadata.get("content_status") == "verified_raw_extract"
+                or path.name.startswith("semantic-subset-")
+                or any(key in metadata for key in ("extraction_receipt", "original_source_path", "original_sha256"))
+                or metadata.get("capture_tool") == "knowledge_contracts.extract_field_source_subset"):
+            excerpt_paths.append(path.relative_to(root).as_posix())
+    verification_session = verify_field_source_extracts(root, excerpt_paths) if excerpt_paths else None
+    for path, metadata in raw_metadata.items():
+        local_note = _is_local_design_note(path, root, metadata)
+        housekeeping = warnings if local_note else issues
+        if local_note:
+            captured_on = metadata.get("captured_on")
+            try:
+                if not isinstance(captured_on, str) or date.fromisoformat(captured_on).isoformat() != captured_on:
+                    raise ValueError("invalid captured_on")
+            except ValueError:
+                issues.append(KnowledgeHealthIssue(
+                    code="user_note_date_invalid", path=str(path),
+                    message="Local design note requires a valid captured_on in YYYY-MM-DD precision.",
+                    action="Recover the original note date; do not invent a capture timestamp.",
+                ))
+            for message in _user_note_provenance_issues(metadata, root):
+                issues.append(KnowledgeHealthIssue(
+                    code="user_note_provenance_invalid", path=str(path), message=message,
+                    action="Correct declared provenance from original evidence; do not fabricate capture metadata.",
+                ))
         family = canonical_source_family(path, root)
         if family == "legacy":
             legacy_count += 1
@@ -227,19 +321,22 @@ def evaluate_knowledge_contract_health(knowledge_root: str | Path) -> dict[str, 
                     action="Migrate the file into raw/platform, raw/community, or raw/research before using it as an active source.",
                 )
             )
-        for issue in validate_raw_metadata(path):
-            issues.append(
+        for issue in validate_raw_metadata(path, _verification_session=verification_session):
+            target = housekeeping if issue in USER_NOTE_HOUSEKEEPING_MESSAGES else issues
+            target.append(
                 KnowledgeHealthIssue(
                     code="raw_metadata_missing",
                     path=str(path),
                     message=issue,
-                    action="Add raw source metadata or mark the source as migration-only.",
+                    action=("Document local note housekeeping without inventing capture times or tools."
+                            if local_note and target is warnings
+                            else "Add raw source metadata or mark the source as migration-only."),
                 )
             )
         relative = _vault_relative(path, root)
         indexed = relative in index_text
         if not indexed:
-            issues.append(
+            housekeeping.append(
                 KnowledgeHealthIssue(
                     code="source_index_coverage_missing",
                     path=str(path),
@@ -248,7 +345,7 @@ def evaluate_knowledge_contract_health(knowledge_root: str | Path) -> dict[str, 
                 )
             )
         if not indexed and relative not in wiki_references:
-            issues.append(
+            housekeeping.append(
                 KnowledgeHealthIssue(
                     code="orphan_raw_source",
                     path=str(path),
@@ -256,6 +353,14 @@ def evaluate_knowledge_contract_health(knowledge_root: str | Path) -> dict[str, 
                     action="Index the raw source and compile it into a wiki target, or mark it as migration-only.",
                 )
             )
+    if verification_session is not None:
+        try:
+            verification_session.finalize()
+        except (OSError, ValueError) as error:
+            issues.append(KnowledgeHealthIssue(
+                code="raw_extract_verification_changed", path=str(raw_root), message=str(error),
+                action="Recheck unchanged original captures, excerpts, indexes and receipts before using their evidence.",
+            ))
     clean_report = evaluate_clean_knowledge_structure(root)
     for issue in clean_report["issues"]:
         issues.append(
@@ -268,12 +373,14 @@ def evaluate_knowledge_contract_health(knowledge_root: str | Path) -> dict[str, 
         )
     return {
         "issue_count": len(issues),
+        "warning_count": len(warnings),
         "legacy_count": legacy_count,
         "raw_source_count": len(raw_paths),
         "wiki_page_count": len(list(wiki_root.rglob("*.md"))) if wiki_root.exists() else 0,
         "clean_structure": clean_report["clean"],
         "clean_structure_issue_count": clean_report["issue_count"],
         "issues": [asdict(issue) for issue in issues],
+        "warnings": [asdict(issue) for issue in warnings],
     }
 
 

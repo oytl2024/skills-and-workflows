@@ -12,6 +12,33 @@ from wqb.full_semantic_compile import prepare_full_semantic_compile
 
 
 class FullSemanticInventoryTests(unittest.TestCase):
+    def test_budget_changes_share_inventory_but_not_execution_authority(self):
+        """Input: unchanged raw with different finite allowances. Output: one content-addressed inventory, distinct plans."""
+        self.source('raw/platform/data_fields/example.jsonl', json.dumps(self.field()))
+        first = prepare_full_semantic_compile(self.root, dict(model_call_budget=0))
+        second = prepare_full_semantic_compile(self.root, dict(model_call_budget=2))
+        self.assertNotEqual(first['content_key'], second['content_key'])
+        self.assertEqual(first['inventory_ref'], second['inventory_ref'])
+        self.assertEqual(first['budget']['model_call_budget'], 0)
+        self.assertEqual(second['budget']['model_call_budget'], 2)
+        self.assertFalse(second['budget']['execution_authorized'])
+        self.assertEqual(first['model_calls'], 0)
+
+    def test_inventory_keeps_row_digest_and_locator_not_full_payload(self):
+        """Input: raw presence with unnecessary large payload. Output: compact provenance without lost identity or trust."""
+        row = self.field()
+        row['irrelevant_payload'] = 'x' * 80_000
+        path = 'raw/platform/data_fields/example.jsonl'
+        self.source(path, json.dumps(row))
+        plan = prepare_full_semantic_compile(self.root, {})
+        target, = self.inventory(plan)
+        occurrence, = target['occurrences']
+        self.assertFalse('row' in occurrence, 'Do not duplicate original row payload in the inventory')
+        self.assertEqual(occurrence['row_ref']['sha256'], hashlib.sha256(json.dumps(
+            row, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode()).hexdigest())
+        self.assertEqual(occurrence['path'], path)
+        self.assertLess((self.root / plan['inventory_ref']['path']).stat().st_size, 15_000)
+
     def setUp(self):
         """Input: TestCase. Output: temporary vault Path with automatic cleanup."""
         temporary = tempfile.TemporaryDirectory()
@@ -96,6 +123,8 @@ class FullSemanticInventoryTests(unittest.TestCase):
         changed = prepare_full_semantic_compile(self.root, dict(rules_version='changed'))
         self.assertNotEqual(changed['content_key'], first['content_key'])
         self.assertNotEqual(changed['jobs'][0]['job_id'], first['jobs'][0]['job_id'])
+        self.assertEqual(changed['inventory_ref'], first['inventory_ref'],
+                         'Execution rules change jobs, not the source inventory content')
         self.source(path, '### rank\n- Description: Changed literal description.\n')
         self.assertNotEqual(prepare_full_semantic_compile(self.root, {})['content_key'], first['content_key'])
 
@@ -540,10 +569,19 @@ class FullSemanticInventoryTests(unittest.TestCase):
         second = prepare_full_semantic_compile(self.root, config)
         self.assertEqual(plan['content_key'], second['content_key'])
         self.assertEqual(plan['local_field_extracts']['selected_fields'], 65)
+        resumed_config = dict(local_field_extracts=dict(config['local_field_extracts'], resume_existing=True))
+        resumed = prepare_full_semantic_compile(self.root, resumed_config)
+        self.assertEqual(resumed['local_field_extracts']['selected_fields'], 0)
+        self.assertEqual(resumed['local_field_extracts']['certified_fields'], 65)
+        self.assertTrue(resumed['local_field_extracts']['extraction_complete'])
+        self.assertEqual(resumed['jobs'], plan['jobs'])
+        self.assertEqual(ledger.read_bytes(), before)
 
     def test_bulk_config_invalid_options_rejected_before_preparation(self):
         """Input: invalid opt-in bounds/types. Output: ValueError without frozen jobs."""
-        for option in [True, {}, dict(source_paths=[], max_batches=0), dict(source_paths=[], max_fields=True)]:
+        for option in [True, {}, dict(source_paths=[], max_batches=0), dict(source_paths=[], max_fields=True),
+                       dict(source_paths=[], resume_existing=1),
+                       dict(source_paths=[], resume_existing=True, identities_by_source={})]:
             with self.assertRaises(ValueError):
                 prepare_full_semantic_compile(self.root, dict(local_field_extracts=option))
         self.assertFalse((self.root / 'machine/semantic_jobs').exists())

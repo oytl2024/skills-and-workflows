@@ -202,7 +202,7 @@ def _missing_fields(metadata: dict[str, Any], required: tuple[str, ...]) -> list
     return issues
 
 
-def validate_raw_metadata(path: Path) -> list[str]:
+def validate_raw_metadata(path: Path, *, _verification_session=None) -> list[str]:
     """Input: raw Markdown path. Output: issue strings. Validate raw source metadata."""
     metadata, _ = parse_markdown_front_matter(path.read_text(encoding="utf-8"))
     issues = _missing_fields(metadata, RAW_REQUIRED_FIELDS)
@@ -218,7 +218,14 @@ def validate_raw_metadata(path: Path) -> list[str]:
             if len(absolute.parents) < 5:
                 raise ValueError('canonical field excerpt path required')
             root = absolute.parents[4]
-            verify_field_source_extract(root, absolute.relative_to(root).as_posix())
+            relative = absolute.relative_to(root).as_posix()
+            if _verification_session is None:
+                verify_field_source_extract(root, relative)
+            else:
+                if (type(_verification_session) is not _FieldExtractSession
+                        or _verification_session.root != root.resolve()):
+                    raise ValueError('invalid field extraction verification session')
+                _verification_session.proof(relative)
         except (ValueError, OSError, UnicodeDecodeError) as error:
             issues.append('verified_raw_extract verification failed: ' + str(error))
     elif content_status not in (None, "", []) and str(content_status) != "raw_markdown":
@@ -460,12 +467,19 @@ def _capture_manifest_outcome(manifest: dict, scope: dict) -> dict:
 
 
 def _scan_field_source(source: Path, identities: list[dict], manifest: dict, *,
-                       _receipts_only: bool = False, _on_row=None, _bulk_limits: dict | None = None) -> dict:
+                       _receipts_only: bool = False, _on_row=None, _bulk_limits: dict | None = None,
+                       _use_catalog: bool = False) -> dict:
     """Input: source/identities/manifest, internal receipt mode/callback. Output: streamed hashes and rows or receipts.
 
     Receipt mode keeps no selected row bodies and applies each extract's byte/epoch
     bounds later. Ordinary extraction retains its original aggregate bounds.
     """
+    if _on_row is None or _use_catalog:
+        from wqb.field_source_catalog import catalog_field_scan
+        cached = catalog_field_scan(source, identities, manifest, bulk_limits=_bulk_limits,
+                                    create=_use_catalog, receipts_only=_receipts_only)
+        if _on_row is None and cached is not None:
+            return cached
     from wqb.semantic_contracts import resource_scope_from_dict
     expected = {json.dumps(identity, sort_keys=True): identity for identity in identities}
     selected, retained = {}, {}
@@ -510,6 +524,7 @@ def _scan_field_source(source: Path, identities: list[dict], manifest: dict, *,
                     raise ValueError('duplicate captured field identity')
                 keep = (len(retained) < _bulk_limits['max_fields']
                         and selected_bytes + len(raw) <= _bulk_limits['max_bytes']
+                        and key not in _bulk_limits.get('excluded_keys', set())
                         and (_bulk_limits.get('requested_keys') is None or key in _bulk_limits['requested_keys']))
                 if not keep and key not in expected:
                     continue
@@ -716,6 +731,8 @@ def extract_field_source_batches(root: Path, source_paths: list[str], *,
                                  max_batches: int = DEFAULT_FIELD_EXTRACT_BATCHES,
                                  max_fields: int = DEFAULT_FIELD_EXTRACT_FIELDS,
                                  identities_by_source: dict | None = None,
+                                 resume_existing: bool = False,
+                                 use_catalog: bool = False,
                                  _on_row=None, _defer_finalize: bool = False) -> dict:
     """Input: vault Path, canonical captures list, finite batch/field ints. Output: bounded local extract report.
 
@@ -726,11 +743,17 @@ def extract_field_source_batches(root: Path, source_paths: list[str], *,
     select the next missing bounded subset without rewriting prior batches.
     Limits cannot exceed 64 batches/1920 fields (32,768,000 retained raw bytes).
     Pending rows are not coverage.
+    Explicit resume_existing skips verified prior identities and reports cumulative
+    extraction progress; it does not refresh captures or certify platform coverage.
     Internal deferred mode hands the genuine session to inventory for its final
     digest check, rather than reparsing originals. No model or freshness authority.
     """
     _check_index_path(Path(root))
     root = Path(root).resolve()
+    if type(resume_existing) is not bool or resume_existing and identities_by_source is not None:
+        raise ValueError('resume_existing requires a bool and no exact identity selector')
+    if type(use_catalog) is not bool:
+        raise ValueError('use_catalog must be a bool')
     for name, value, limit in (('max_batches', max_batches, MAX_BULK_FIELD_BATCHES),
                                ('max_fields', max_fields, MAX_BULK_FIELD_FIELDS)):
         if type(value) is not int or not 1 <= value <= limit:
@@ -803,8 +826,10 @@ def extract_field_source_batches(root: Path, source_paths: list[str], *,
         expected = dict(existing_identities)
         if requested is not None:
             expected.update(requested)
-        scanned = _scan_field_source(source, list(expected.values()), manifest, _on_row=consume,
+        scanned = _scan_field_source(source, list(expected.values()), manifest,
+            _on_row=consume if _on_row is not None else None, _use_catalog=use_catalog,
             _bulk_limits=dict(max_fields=remaining_fields, max_bytes=remaining_bytes, requested_keys=requested,
+                              excluded_keys=set(existing_identities) if resume_existing else set(),
                               max_snapshot_bytes=remaining_snapshot_bytes))
         remaining_snapshot_bytes -= len(scanned.get('source_bytes') or b'')
         if requested is not None and not requested.keys() <= scanned['selected_by_identity'].keys():
@@ -841,6 +866,10 @@ def extract_field_source_batches(root: Path, source_paths: list[str], *,
         if batch:
             artifacts.append(render(batch))
     artifacts = artifacts[:max_batches]
+    if resume_existing and previous:
+        prior_session = _FieldExtractSession(root, sorted(previous), _scans=scans)
+        for path in previous:
+            prior_session.proof(path)
     with _source_index_guard(root):
         _reject_unindexed_human_history(root)
         existing = {row.path: row for row in _repair_index_rows(root)}
@@ -910,6 +939,15 @@ def extract_field_source_batches(root: Path, source_paths: list[str], *,
         mappings=[dict(excerpt_path=a['result']['excerpt_path'], receipt_path=a['result']['receipt_path'],
                        source_path=a['result']['source_path'], identities=[json.loads(key) for key in
                            a['receipt']['identity']['identities']]) for a in artifacts])
+    if resume_existing:
+        certified = {relative: set() for relative in sources}
+        for request in previous.values():
+            certified[request['original_path']].update(request['keys'])
+        for artifact in artifacts:
+            certified[artifact['result']['source_path']].update(artifact['receipt']['identity']['identities'])
+        total = sum(len(keys) for keys in certified.values())
+        pending = sum(scan['original_rows'] for scan in scans.values()) - total
+        result.update(certified_fields=total, pending_rows=pending, extraction_complete=pending == 0)
     if _defer_finalize:
         result['_verification_session'] = session
     else:
@@ -1134,7 +1172,8 @@ class _FieldExtractSession:
                         on_row(original_path, row)
                 scanned = (_scans[original_path] if _scans is not None else
                     _scan_field_source(batch[0]['original'], list(identities.values()),
-                        batch[0]['manifest'], _receipts_only=True, _on_row=consume))
+                        batch[0]['manifest'], _receipts_only=True,
+                        _on_row=consume if on_row is not None else None))
                 self._originals[original_path] = scanned
                 self._evidence[original_path] = (scanned['original_sha256'], None)
             except (OSError, ValueError, TypeError, KeyError) as exc:

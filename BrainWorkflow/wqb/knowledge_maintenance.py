@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,10 @@ from wqb.knowledge_experience_compile import compile_human_experience_wiki
 from wqb.knowledge_freshness import evaluate_knowledge_contract_health
 from wqb.knowledge_paths import ensure_knowledge_dirs
 from wqb.knowledge_vault_migration import run_knowledge_vault_migration
+from wqb.knowledge_contracts import MAX_BULK_FIELD_BATCHES, MAX_BULK_FIELD_FIELDS
+
+
+FIELD_SOURCE_PREPARATION_SECONDS = 300.0
 
 
 @dataclass(frozen=True)
@@ -219,12 +224,16 @@ def _maintain_active_release(root: Path, generated: str, apply_cleanup: bool, ma
         if read_semantic_release(root) != receipt:
             raise ValueError("semantic release selection changed during maintenance")
         step = "cleanup"
+        verification_report_path = None
         if apply_cleanup:
-            raise ValueError("active-release cleanup refused: source preservation is not verified; legacy migration was skipped")
+            verification_report_path = _write_pre_cleanup_evidence(root, _pre_cleanup_evidence(
+                root, generated, report['wiki'], report['interaction_lessons'], report['decision_migration']))
+            report['verification_report_path'] = str(verification_report_path)
         report[step] = apply_obsolete_active_cleanup(
-            root, generated, dry_run=True,
+            root, generated, dry_run=not apply_cleanup, verification_report_path=verification_report_path,
         )
-        report[step]["status"] = "blocked" if report[step].get("blocked") else "completed"
+        report[step]["status"] = "blocked" if (report[step].get("blocked")
+            or (apply_cleanup and report[step].get("refused_count", 0))) else "completed"
         step = "health"
         report[step] = evaluate_knowledge_contract_health(root)
         if read_semantic_release(root) != receipt:
@@ -271,11 +280,61 @@ def _compile_active_fields(root: Path, generated: str) -> dict[str, Any]:
     # so the existing compiler preserves unattempted scopes and partial outcomes.
     results = []
     for _, capture in sorted(captures):
+        prepared = _prepare_capture_sources(root, capture, generated)
+        if prepared['status'] not in {'completed', 'skipped_legacy', 'deferred_source_age'}:
+            raise ValueError('field source preparation incomplete: ' + str(prepared))
         result = compile_data_ledger_from_raw(root, capture_dir=capture, generated_at=generated)
-        results.append(dict(result, capture_path=capture.relative_to(root).as_posix()))
+        results.append(dict(result, capture_path=capture.relative_to(root).as_posix(), source_preparation=prepared))
     if selections:
         _preserve_active_field_selections(root, selections, generated)
     return dict(results[-1], status='completed', captures=results)
+
+
+def _prepare_capture_sources(root: Path, capture: Path, generated: str, *, max_batches: int = MAX_BULK_FIELD_BATCHES,
+                             max_fields: int = MAX_BULK_FIELD_FIELDS, timeout_seconds: float = FIELD_SOURCE_PREPARATION_SECONDS) -> dict:
+    """Input: vault/capture Paths, maintenance date str and finite bounds. Output: resumable source preparation dict.
+
+    This local-only maintenance step warms a derived index, then prepares every
+    fresh modern row through existing certified bounded excerpts. It never
+    refreshes old capture dates or expands stale generations just to pass a gate.
+    """
+    from wqb.field_source_catalog import catalog_field_scan
+    from wqb.knowledge_contracts import (extract_field_source_batches, _capture_json, _source_contract_bytes,
+        _source_contract_path, _capture_timestamp, MAX_CAPTURE_MANIFEST_BYTES,
+        MAX_BULK_FIELD_BATCHES, MAX_BULK_FIELD_FIELDS)
+    from wqb.knowledge_age_policy import KNOWLEDGE_MAX_AGE_DAYS
+    if (type(timeout_seconds) not in (int, float) or not 0 < timeout_seconds <= FIELD_SOURCE_PREPARATION_SECONDS
+            or type(max_batches) is not int or not 1 <= max_batches <= MAX_BULK_FIELD_BATCHES
+            or type(max_fields) is not int or not 1 <= max_fields <= MAX_BULK_FIELD_FIELDS):
+        raise ValueError('invalid field source preparation bounds')
+    started = time.monotonic()
+    relative = (capture / 'data_fields.jsonl').relative_to(root).as_posix()
+    source = _source_contract_path(root, relative)
+    manifest = _capture_json(_source_contract_bytes(source.with_name('manifest.json'), MAX_CAPTURE_MANIFEST_BYTES))
+    if not manifest.get('capture_generation_id'):
+        return dict(status='skipped_legacy', reason='Legacy capture has no modern generation contract')
+    catalog = catalog_field_scan(source, [], manifest, create=True, receipts_only=True)
+    if catalog is None:
+        raise ValueError('field catalog could not be verified after preparation')
+    report = dict(status='pending', catalog_rows=catalog['original_rows'], original_sha256=catalog['original_sha256'],
+                  source_updated_at=catalog['original_captured_at'][:10] if catalog['original_captured_at'] else None,
+                  new_fields=0, rounds=0, extraction_complete=False)
+    now = _capture_timestamp(generated)
+    outcomes = manifest.get('latest_scope_outcomes') or [manifest]
+    ages = [(now - _capture_timestamp(item.get('generated_at'))).total_seconds() / 86400 for item in outcomes]
+    if not any(0 <= age <= KNOWLEDGE_MAX_AGE_DAYS for age in ages):
+        return dict(report, status='deferred_source_age', reason='No capture epoch is currently within knowledge age policy')
+    while time.monotonic() - started < timeout_seconds:
+        batch = extract_field_source_batches(root, [relative], max_batches=max_batches, max_fields=max_fields,
+                                              resume_existing=True, use_catalog=True)
+        report.update(rounds=report['rounds'] + 1, new_fields=report['new_fields'] + batch['selected_fields'],
+                      certified_fields=batch['certified_fields'], pending_rows=batch['pending_rows'],
+                      extraction_complete=batch['extraction_complete'])
+        if batch['extraction_complete']:
+            return dict(report, status='completed')
+        if batch['selected_fields'] == 0:
+            return dict(report, status='blocked', reason='Remaining raw rows do not fit supported bounded excerpt contracts')
+    return dict(report, status='pending', reason='Local source preparation time limit; verified prior chunks are resumable')
 
 
 def _preserve_active_field_selections(root: Path, selections: list[dict], generated: str) -> None:

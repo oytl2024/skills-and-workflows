@@ -1,7 +1,11 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import wqb.knowledge_clean_compile as clean_compile
 
 from wqb.knowledge_clean_compile import (
     apply_obsolete_active_cleanup,
@@ -12,6 +16,327 @@ from wqb.knowledge_clean_compile import (
 
 
 class KnowledgeCleanCompileTests(unittest.TestCase):
+    def test_recovery_reports_and_run_events_are_retention_roots(self):
+        """Input: job/recovery report or run event reference. Output: candidate retained, never successful deletion."""
+        for owner in ('runs/run/recovery/report.json', 'runs/run/workflow_events.jsonl',
+                      'machine/semantic_jobs/job/report.json'):
+            with self.subTest(owner=owner), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                target = root / 'old.md'
+                target.write_text('referenced evidence', encoding='utf-8')
+                source = root / owner
+                source.parent.mkdir(parents=True)
+                source.write_text(json.dumps({'evidence_path': str(target)}) + '\n', encoding='utf-8')
+                evidence = self._successful_compile_evidence(root, 'passed.json')
+                report = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+                self.assertTrue(target.exists())
+                self.assertEqual(report['removed_count'], 0)
+                self.assertEqual(report['refused_count'], 1)
+
+    def test_linked_reference_ancestor_is_uncertain_not_empty(self):
+        """Input: a junction hiding a capture manifest. Output: refuse deletion without following the link."""
+        if os.name != 'nt':
+            self.skipTest('Windows junction regression')
+        import _winapi
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'knowledge'
+            root.mkdir()
+            target = root / 'old.md'
+            target.write_text('protected', encoding='utf-8')
+            outside = Path(tmp) / 'captures'
+            outside.mkdir()
+            (outside / 'manifest.json').write_text(json.dumps({'source_path': str(target)}), encoding='utf-8')
+            (root / 'raw').mkdir()
+            link = root / 'raw/captures'
+            _winapi.CreateJunction(str(outside), str(link))
+            try:
+                evidence = self._successful_compile_evidence(root, 'passed.json')
+                report = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+                self.assertTrue(target.exists())
+                self.assertEqual(report['refused_count'], 1)
+            finally:
+                link.rmdir()
+
+    def test_unrelated_large_capture_and_inventories_do_not_block_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ('raw/platform/data_fields/day/data_fields.jsonl',
+                         'machine/semantic_inventories/' + 'a' * 64 + '/inventory.jsonl',
+                         'machine/semantic_jobs/' + 'b' * 64 + '/inventory.jsonl',
+                         'machine/reports/full_semantic_coverage_example.json'):
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('unrelated payload' * 100, encoding='utf-8')
+            target = root / 'wiki/20_semantics/old.md'
+            target.parent.mkdir(parents=True)
+            target.write_text('obsolete', encoding='utf-8')
+            root_target = root / 'obsolete.md'
+            root_target.write_text('obsolete', encoding='utf-8')
+            evidence = self._successful_compile_evidence(root, 'passed.json')
+            with patch.object(clean_compile, 'REFERENCE_FILE_LIMIT', 256):
+                result = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+            self.assertFalse(target.exists())
+            self.assertFalse(root_target.exists())
+            self.assertEqual(result['removed_count'], 2)
+
+    def test_cleanup_returns_per_candidate_refusals_without_blocking_unrelated_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw = root / 'raw/learn/source.json'
+            raw.parent.mkdir(parents=True)
+            raw.write_text('{}', encoding='utf-8')
+            ordinary = root / 'old.md'
+            ordinary.write_text('obsolete', encoding='utf-8')
+            evidence = self._successful_compile_evidence(root, 'passed.json')
+            result = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+            self.assertTrue(raw.exists())
+            self.assertFalse(ordinary.exists())
+            self.assertEqual(result['refusals'], [{'path': str(raw), 'reason': 'protected raw evidence'}])
+
+    def test_cleanup_refuses_hardlinked_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'knowledge'
+            root.mkdir()
+            source = Path(tmp) / 'source.md'
+            source.write_text('keep', encoding='utf-8')
+            target = root / 'old.md'
+            target.hardlink_to(source)
+            evidence = self._successful_compile_evidence(root, 'passed.json')
+            result = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+            self.assertTrue(target.exists())
+            self.assertEqual(result['refused_count'], 1)
+
+    def test_cleanup_releases_publication_lock_on_audit_failure(self):
+        from wqb import semantic_publication
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'old.md'
+            target.write_text('keep until audited', encoding='utf-8')
+            evidence = self._successful_compile_evidence(root, 'passed.json')
+            with patch.object(clean_compile, 'write_cleanup_log', side_effect=OSError('disk full')), \
+                 patch.object(semantic_publication, '_release_lock', wraps=semantic_publication._release_lock) as release:
+                with self.assertRaisesRegex(OSError, 'disk full'):
+                    apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+            release.assert_called_once()
+            self.assertTrue(release.call_args.args[0].closed)
+            self.assertTrue(target.exists())
+
+    def test_cleanup_preserves_unique_raw_learn_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'raw/learn/unique_evidence.json'
+            target.parent.mkdir(parents=True)
+            target.write_text('{}', encoding='utf-8')
+            evidence = self._successful_compile_evidence(root, 'passed.json')
+            result = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+            self.assertTrue(target.exists())
+            self.assertEqual(result['refused_count'], 1)
+
+    def test_cleanup_assesses_references_under_publication_lock(self):
+        from wqb import semantic_publication
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'old.md'
+            target.write_text('keep', encoding='utf-8')
+            evidence = self._successful_compile_evidence(root, 'passed.json')
+            acquire = semantic_publication._acquire_lock
+            held = []
+
+            def acquire_with_publication(path):
+                """Input: root (Path). Output: lock handle; publish a reference at the acquisition boundary."""
+                handle = acquire(path)
+                held.append(handle)
+                (root / 'machine/source_index.jsonl').write_text(
+                    json.dumps({'source_path': str(target)}), encoding='utf-8')
+                return handle
+
+            with patch.object(semantic_publication, '_acquire_lock', side_effect=acquire_with_publication), \
+                 patch.object(semantic_publication, '_release_lock', wraps=semantic_publication._release_lock) as release:
+                result = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+            self.assertTrue(target.exists())
+            self.assertEqual(result['refused_count'], 1)
+            release.assert_called_once_with(held[0])
+            self.assertTrue(held[0].closed)
+
+    def test_cleanup_diagnostic_paths_do_not_become_retention_roots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'old.md'
+            target.write_text('obsolete', encoding='utf-8')
+            evidence = self._successful_compile_evidence(root, 'passed.json')
+            payload = json.loads(evidence.read_text(encoding='utf-8'))
+            payload['pre_cleanup_health']['issues'] = [{'path': str(target)}]
+            evidence.write_text(json.dumps(payload), encoding='utf-8')
+            result = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+            self.assertFalse(target.exists())
+            self.assertEqual(result['removed_count'], 1)
+
+    def test_cleanup_rechecks_reference_created_after_planning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'old.md'
+            target.write_text('keep', encoding='utf-8')
+            planned = plan_obsolete_active_cleanup(root)
+            owner = root / 'machine/source_index.jsonl'
+            owner.parent.mkdir()
+            owner.write_text(json.dumps({'path': str(target)}), encoding='utf-8')
+            evidence = self._successful_compile_evidence(root, 'passed.json')
+            with patch.object(clean_compile, 'plan_obsolete_active_cleanup', return_value=planned):
+                result = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+            self.assertTrue(target.exists())
+            self.assertEqual(result['refused_count'], 1)
+
+    def test_cleanup_rechecks_canonical_migration_after_planning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'wiki/70_decisions/options.jsonl'
+            canonical = root / 'machine/decisions/options.jsonl'
+            for path in (target, canonical):
+                path.parent.mkdir(parents=True)
+                path.write_text('{}', encoding='utf-8')
+            planned = plan_obsolete_active_cleanup(root)
+            canonical.write_text('{"changed": true}', encoding='utf-8')
+            evidence = self._successful_compile_evidence(root, 'passed.json')
+            with patch.object(clean_compile, 'plan_obsolete_active_cleanup', return_value=planned):
+                result = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+            self.assertTrue(target.exists())
+            self.assertEqual(result['refused_count'], 1)
+
+    def test_cleanup_refuses_uncertain_or_oversized_reference_owner(self):
+        for payload, limit in (('{invalid', 100), ('{}', 1),
+                               ('{"path":"old.md","path":"elsewhere"}', 100),
+                               ('{"value":NaN}', 100)):
+            with self.subTest(payload=payload), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                target = root / 'old.md'
+                target.write_text('keep', encoding='utf-8')
+                owner = root / 'machine/source_index.jsonl'
+                owner.parent.mkdir()
+                owner.write_text(payload, encoding='utf-8')
+                evidence = self._successful_compile_evidence(root, 'passed.json')
+                with patch.object(clean_compile, 'REFERENCE_FILE_LIMIT', limit):
+                    result = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+                self.assertTrue(target.exists())
+                self.assertEqual(result['refused_count'], 1)
+
+    def test_cleanup_refuses_junction_installed_after_planning(self):
+        if os.name != 'nt':
+            self.skipTest('Windows junction regression')
+        import _winapi
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'knowledge'
+            base = root / 'wiki/20_semantics'
+            base.mkdir(parents=True)
+            target = base / 'old.md'
+            target.write_text('old', encoding='utf-8')
+            planned = plan_obsolete_active_cleanup(root)
+            target.unlink()
+            base.rmdir()
+            outside = Path(tmp) / 'outside'
+            outside.mkdir()
+            retained = outside / 'old.md'
+            retained.write_text('old', encoding='utf-8')
+            _winapi.CreateJunction(str(outside), str(base))
+            evidence = self._successful_compile_evidence(root, 'passed.json')
+            with patch.object(clean_compile, 'plan_obsolete_active_cleanup', return_value=planned):
+                result = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+            self.assertTrue(retained.exists())
+            self.assertEqual(result['refused_count'], 1)
+            self.assertTrue(base.is_junction())
+
+    def test_cleanup_refuses_linked_audit_destination_before_deleting(self):
+        if os.name != 'nt':
+            self.skipTest('Windows junction regression')
+        import _winapi
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'knowledge'
+            root.mkdir()
+            target = root / 'old.md'
+            target.write_text('keep', encoding='utf-8')
+            evidence = self._successful_compile_evidence(root, 'passed.json')
+            outside = Path(tmp) / 'outside'
+            outside.mkdir()
+            logs = root / 'raw/maintenance/cleanup_logs'
+            _winapi.CreateJunction(str(outside), str(logs))
+            with self.assertRaisesRegex(ValueError, 'unsafe cleanup log'):
+                apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+            self.assertTrue(target.exists())
+            self.assertEqual(list(outside.iterdir()), [])
+
+    def test_cleanup_revalidates_replaced_candidate_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'old.md'
+            target.write_text('old', encoding='utf-8')
+            planned = plan_obsolete_active_cleanup(root)
+            target.write_text('replacement', encoding='utf-8')
+            evidence = self._successful_compile_evidence(root, 'passed.json')
+            with patch.object(clean_compile, 'plan_obsolete_active_cleanup', return_value=planned):
+                result = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+            self.assertTrue(target.exists())
+            self.assertEqual(result['refused_count'], 1)
+
+    def test_cleanup_protects_structured_evidence_references(self):
+        for owner in ('machine/source_index.jsonl', 'machine/research_records.jsonl',
+                      'machine/semantic_releases/release/manifest.json',
+                      'machine/semantic_jobs/job/input.json', 'runs/run/run_state.json',
+                      'runs/console_jobs/job/state.json', 'runs/run/recovery/state.json',
+                      'raw/captures/manifest.json'):
+            with self.subTest(owner=owner), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / 'knowledge'
+                target = root / 'wiki/20_semantics/old.md'
+                target.parent.mkdir(parents=True)
+                target.write_text('evidence', encoding='utf-8')
+                owner_path = (root.parent if owner.startswith('runs/') else root) / owner
+                owner_path.parent.mkdir(parents=True, exist_ok=True)
+                owner_path.write_text(json.dumps({'source_path': 'wiki/20_semantics/old.md'}), encoding='utf-8')
+                evidence = self._successful_compile_evidence(root, 'passed.json')
+                result = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+                self.assertTrue(target.exists())
+                self.assertEqual(result['refused_count'], 1)
+
+    def test_cleanup_never_removes_research_stage1_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'raw/research/stage1/failed.json'
+            target.parent.mkdir(parents=True)
+            target.write_text('{}', encoding='utf-8')
+            evidence = self._successful_compile_evidence(root, 'passed.json')
+            result = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+            self.assertTrue(target.exists())
+            self.assertEqual(result['refused_count'], 1)
+
+    def test_cleanup_refuses_candidate_outside_original_allowlist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'machine/keep.json'
+            target.parent.mkdir()
+            target.write_text('{}', encoding='utf-8')
+            forged = clean_compile.CleanupCandidate(str(target), 'obsolete', 'remove', clean_compile._sha256(target))
+            evidence = self._successful_compile_evidence(root, 'passed.json')
+            with patch.object(clean_compile, 'plan_obsolete_active_cleanup', return_value=[forged]):
+                result = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+            self.assertTrue(target.exists())
+            self.assertEqual(result['refused_count'], 1)
+
+    def test_cleanup_refuses_linked_candidate_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'knowledge'
+            outside = Path(tmp) / 'outside'
+            outside.mkdir()
+            target = outside / 'keep.md'
+            target.write_text('keep', encoding='utf-8')
+            base = root / 'wiki/20_semantics'
+            base.parent.mkdir(parents=True)
+            try:
+                base.symlink_to(outside, target_is_directory=True)
+            except OSError:
+                self.skipTest('directory symlink creation unavailable')
+            evidence = self._successful_compile_evidence(root, 'passed.json')
+            result = apply_obsolete_active_cleanup(root, dry_run=False, verification_report_path=evidence)
+            self.assertTrue(target.exists())
+            self.assertGreater(result['refused_count'], 0)
+
     def test_platform_compile_coordination_files_are_not_knowledge_or_cleanup_targets(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

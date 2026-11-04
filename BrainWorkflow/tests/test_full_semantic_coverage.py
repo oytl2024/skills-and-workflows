@@ -14,6 +14,59 @@ from wqb.full_semantic_coverage import build_full_semantic_report
 
 
 class FullSemanticCoverageTests(unittest.TestCase):
+    def test_default_report_is_compact_and_shares_unchanged_target_details(self):
+        """Input: repeated same-source coverage. Output: compact reports sharing one immutable target object."""
+        plan = self.plan()
+        first = build_full_semantic_report(self.root, plan)
+        self.assertNotIn('targets', first)
+        ref = first['targets_ref']
+        payload = (self.root / ref['path']).read_bytes()
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), ref['sha256'])
+        self.assertEqual(len(payload.splitlines()), first['inventory']['denominator'])
+        before = (self.root / ref['path']).stat().st_mtime_ns
+        second = build_full_semantic_report(self.root, plan, detailed=True)
+        self.assertEqual(second['targets_ref'], ref)
+        self.assertEqual(len(second['targets']), 2)
+        self.assertEqual((self.root / ref['path']).stat().st_mtime_ns, before)
+        stored = json.loads((self.root / second['report_paths']['json']).read_bytes())
+        self.assertNotIn('targets', stored)
+        self.assertEqual(stored['targets_ref'], ref)
+
+    def test_changed_target_details_have_distinct_content_reference(self):
+        """Input: source mutation after coverage. Output: new details reference without overwriting old evidence."""
+        plan = self.plan()
+        first = build_full_semantic_report(self.root, plan)
+        old = (self.root / first['targets_ref']['path']).read_bytes()
+        self.write(self.source_path, '### rank\nChanged source.\n')
+        second = build_full_semantic_report(self.root, plan)
+        self.assertNotEqual(first['targets_ref'], second['targets_ref'])
+        self.assertEqual((self.root / first['targets_ref']['path']).read_bytes(), old)
+
+    def test_corrupt_shared_target_object_is_not_replaced_silently(self):
+        """Input: corrupted shared details. Output: explicit rejection, not a fresh-looking overwrite."""
+        plan = self.plan()
+        first = build_full_semantic_report(self.root, plan)
+        self.write(first['targets_ref']['path'], 'corrupt')
+        with self.assertRaisesRegex(ValueError, 'immutable'):
+            build_full_semantic_report(self.root, plan)
+
+    def test_legacy_plan_local_inventory_remains_readable_without_storage_migration(self):
+        """Input: fixture plan with original plan-local reference. Output: same denominator and no execution authority."""
+        from wqb.full_semantic_compile import _digest, _bytes
+        current = self.plan()
+        legacy = deepcopy(current)
+        legacy['identity'].pop('inventory_format_version')
+        legacy['content_key'] = _digest(legacy['identity'])
+        base = 'machine/semantic_jobs/' + legacy['content_key']
+        legacy['plan_path'] = base + '/plan.json'
+        legacy['inventory_ref']['path'] = base + '/inventory.jsonl'
+        payload = (self.root / current['inventory_ref']['path']).read_text(encoding='utf-8')
+        self.write(legacy['inventory_ref']['path'], payload)
+        self.write(legacy['plan_path'], _bytes(legacy).decode('utf-8'))
+        report = build_full_semantic_report(self.root, legacy)
+        self.assertEqual(report['inventory']['denominator'], 2)
+        self.assertEqual(report['explanations']['processed'], 0)
+
     def setUp(self):
         """Input: TestCase. Output: temporary vault with two current indexed operators."""
         temporary = tempfile.TemporaryDirectory()
@@ -61,7 +114,7 @@ class FullSemanticCoverageTests(unittest.TestCase):
     def test_unattempted_and_partial_inventory_keep_denominators(self):
         self.write('machine/operator_ledger.jsonl', dict(operator='unsupported'))
         plan = self.plan()
-        report = build_full_semantic_report(self.root, plan)
+        report = build_full_semantic_report(self.root, plan, detailed=True)
         self.assertEqual(report['inventory']['denominator'], 3)
         self.assertEqual(report['explanations']['denominator'], 3)
         self.assertEqual(report['explanations']['processed'], 0)
@@ -121,7 +174,7 @@ class FullSemanticCoverageTests(unittest.TestCase):
         self.write('machine/source_index.jsonl', self.source)
         plan = self.plan(1)
         self.execute(plan)
-        report = build_full_semantic_report(self.root, plan)
+        report = build_full_semantic_report(self.root, plan, detailed=True)
         self.assertEqual(report['inventory']['numerator'], 2)
         self.assertEqual(report['explanations']['numerator'], 0)
         self.assertTrue(all(t['freshness_status'] == 'stale' for t in report['targets']))
@@ -347,7 +400,7 @@ class FullSemanticCoverageTests(unittest.TestCase):
             return original(path)
 
         with patch.object(Path, 'read_bytes', bounded):
-            report = build_full_semantic_report(self.root, plan)
+            report = build_full_semantic_report(self.root, plan, detailed=True)
         self.assertEqual(report['inventory']['denominator'], 2)
         self.assertEqual(report['inventory_ref'], plan['inventory_ref'])
         self.assertNotIn('occurrences', report['targets'][0])
