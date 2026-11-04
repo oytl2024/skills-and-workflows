@@ -211,10 +211,17 @@ def self_test() -> dict:
     """Input: immutable package only. Output: safe diagnostics dict. Never load host/backend/user configuration."""
     root = product_root()
     sources = sorted((root / "wqb").rglob("*.py"))
+    from wqb.repair_rulebook import load_repair_rulebook
+    try:
+        rulebook = load_repair_rulebook()
+        rulebook_id, rulebook_ready = rulebook['rulebook_id'], True
+    except (OSError, ValueError, TypeError, KeyError):
+        rulebook_id, rulebook_ready = None, False
     return {"schema_version": 1, "frozen": bool(getattr(sys, "frozen", False)),
             "code_revision": LOADED_CODE_REVISION, "source_file_count": len(sources),
             "source_identity_valid": bool(sources) and LOADED_CODE_REVISION != hashlib.sha256(b"").hexdigest(),
             "frontend_ready": (root / "frontend" / "dist" / "index.html").is_file(),
+            "repair_rulebook_id": rulebook_id, "repair_rulebook_ready": rulebook_ready,
             "backend_started": False, "native_bridge": False,
             "worker_modules": sorted(WORKER_MODULES)}
 
@@ -243,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
             args.diagnostics_output.write_text(payload, encoding="utf-8")
         if sys.stdout is not None:
             print(payload, end="")
-        return 0 if diagnostics["source_identity_valid"] else 1
+        return 0 if diagnostics["source_identity_valid"] and diagnostics['repair_rulebook_ready'] else 1
     config = None
     try:
         workspace = args.workspace_root or default_workspace()

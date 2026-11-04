@@ -51,7 +51,7 @@ class PreplannedStartTests(unittest.TestCase):
         _, resource, self.scope = compiler_fixture(treatment=True)
         field = resource['field_rows'][0]
         old = field['source_paths'][0]
-        path = f'raw/platform/fictional/compiler-{number}.json'
+        path = f'raw/platform/data_fields/fictional-compiler-{number}.json'
         payload = json.loads(resource['source_texts'].pop(old))
         row = payload['fields'][0]
         row['field']['id'] = field['field_id'] = f'pulse_{number}'
@@ -65,7 +65,8 @@ class PreplannedStartTests(unittest.TestCase):
         text = json.dumps(payload)
         digest = hashlib.sha256(text.encode()).hexdigest()
         source = resource['source_index'].pop(old)
-        source.update(path=path, content_hash=digest)
+        source.update(path=path, content_hash=digest,
+            source_type='platform_data_field_capture', source_family='raw/platform/data_fields')
         resource['source_index'][path] = source
         resource['source_texts'][path] = text
         for operator in resource['operator_rows']:

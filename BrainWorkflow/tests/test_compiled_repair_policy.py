@@ -149,11 +149,12 @@ class CompiledRepairTests(unittest.TestCase):
                                      ast.dump(ast.parse(parent['expression'], mode='eval').body))
 
     def test_actual_legacy_start_keeps_empty_policy_without_producer(self):
-        """Input: default legacy Start fixture. Output: empty finite Repair and no new runtime authority."""
+        """Input: explicitly supplied legacy policy. Output: unchanged empty v1 policy and paused authority."""
         from tests.test_preplanned_start import PreplannedStartTests
         helper = PreplannedStartTests()
         helper.setUp()
         self.addCleanup(helper.doCleanups)
+        helper.config['repair_search_policy'] = dict(schema_version=1, rules=[], traits={})
         result = helper.prepare()
         self.assertEqual(result['status'], 'completed', result)
         self.assertEqual(result['group']['desired_state'], 'paused')
@@ -166,6 +167,14 @@ class CompiledRepairTests(unittest.TestCase):
 
     def test_actual_opt_in_start_seed_repair_consumes_accepted_parent(self):
         """Input: isolated certified Start/fake HTTP. Output: compiled typed Repair bound to measured Seed/incumbent."""
+        self.exercise_actual_start_repair(default_rules=False)
+
+    def test_default_metric_rules_complete_start_seed_repair_without_late_model(self):
+        """Input: certified Start without custom rules. Output: measured finite setting search, no late AI calls."""
+        self.exercise_actual_start_repair(default_rules=True)
+
+    def exercise_actual_start_repair(self, *, default_rules):
+        """Input: bool selecting default/explicit rules. Output: assertions across real composer and fake HTTP."""
         import ast
         import os
         from pathlib import Path
@@ -222,6 +231,8 @@ class CompiledRepairTests(unittest.TestCase):
             requires=dict(matrix_observation=True), evidence_refs=[], invariant='positive_averaging',
             transform=dict(operator='ts_mean', parameter='d', parameter_kind='window', bounds=[1, 5],
                            frequency_trait='sampling_frequency_sessions', preserves_direction=True))])
+        if default_rules:
+            base.config.pop('repair_search_policy')
         base.authority['enable_live_api'] = True
         base.paths.workflow_root = Path(__file__).resolve().parents[1]
         base.runner.side_effect = lambda brief: four_root_answer(base, brief)
@@ -229,7 +240,11 @@ class CompiledRepairTests(unittest.TestCase):
         helper.finish_trees()
         run = helper.runs[0]
         snapshot = json.loads((run / 'run_manifest.json').read_text())['start_snapshot']
-        self.assertEqual(snapshot['repair_search_policy']['resources']['producer']['compile_version'], 1)
+        if default_rules:
+            self.assertEqual(snapshot['repair_search_policy']['schema_version'], 2)
+            self.assertTrue(snapshot['repair_search_policy']['rules'])
+        else:
+            self.assertEqual(snapshot['repair_search_policy']['resources']['producer']['compile_version'], 1)
         self.assertNotIn('template', snapshot['repair_search_policy']['resources'])
         selection = prepare_seed_selection(run, checked_research_rows(run))
         self.assertTrue(selection['seed_rows'])
@@ -254,12 +269,21 @@ class CompiledRepairTests(unittest.TestCase):
                 plan = verify_persisted_search(root, actions[0]['repair_plan'])
                 variant = plan['variants'][0]
                 node = ast.parse(variant['expression'], mode='eval').body
-                test.assertEqual(ast.dump(node.args[0]), ast.dump(ast.parse(current['expression'], mode='eval').body))
+                if default_rules:
+                    test.assertEqual(variant['expression'], current['expression'])
+                    test.assertNotEqual(variant['settings']['decay'], current['settings']['decay'])
+                    test.assertEqual({k: v for k, v in variant['settings'].items() if k != 'decay'},
+                                     {k: v for k, v in current['settings'].items() if k != 'decay'})
+                    test.assertIn('LOW_FITNESS', plan['decision']['trigger_evidence']['failed_checks'])
+                else:
+                    test.assertEqual(ast.dump(node.args[0]), ast.dump(ast.parse(current['expression'], mode='eval').body))
                 test.assertEqual(variant['parent_expression_hash'], current['expression_hash'])
-                test.assertEqual(variant['settings'], current['settings'])
+                if not default_rules:
+                    test.assertEqual(variant['settings'], current['settings'])
                 executions.append(current['alpha_id'])
-                transport.metrics[variant['expression_hash']] = dict(
-                    current['metrics'], turnover=current['metrics']['turnover'] / 2)
+                change = dict(fitness=current['metrics']['fitness'] + .005) if default_rules else dict(
+                    turnover=current['metrics']['turnover'] / 2)
+                transport.metrics[variant['expression_hash']] = dict(current['metrics'], **change)
                 recorder = RunRecorder(root / ('stages/repair/compiled-' + str(len(executions))))
                 submit_candidate_payloads(transport.client, recorder,
                     [dict(type='REGULAR', regular=variant['expression'], settings=variant['settings'])],
@@ -277,7 +301,10 @@ class CompiledRepairTests(unittest.TestCase):
         plan = verify_persisted_search(run, second['attempts'][1]['plan'])
         evidence = json.loads(Path(plan['receipt_path']).with_suffix('.input.json').read_text(encoding='utf-8'))
         self.assertEqual(evidence['parent'], incumbent)
-        self.assertEqual(plan['decision']['rule_id'], 'certified-mean')
+        if default_rules:
+            self.assertEqual(plan['decision']['target_metric'], 'fitness')
+        else:
+            self.assertEqual(plan['decision']['rule_id'], 'certified-mean')
         self.assertEqual(plan['decision']['parent_expression_hash'], incumbent['expression_hash'])
         self.assertEqual(plan['decision']['parent_alpha_id'], incumbent['alpha_id'])
         from wqb.research_group import read_group
@@ -378,7 +405,8 @@ class CompiledRepairTests(unittest.TestCase):
         compiled = self.compile(resources, policy)
         self.assertEqual(compiled['rules'][0]['grid'], [2, 4, 8])
         self.assertEqual(_repair_policy(resources, policy), compiled)
-        self.assertEqual(_repair_policy(resources)['rules'], [])
+        self.assertTrue(_repair_policy(resources)['rules'])
+        self.assertEqual(_repair_policy(resources)['schema_version'], 2)
         self.assertNotIn('noisy', compiled['traits'])
 
     def test_hash_unknown_trait_and_authority_fail_closed(self):

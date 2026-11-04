@@ -16,6 +16,13 @@ an operator name/type, authorizes the declared semantic effect and parameter
 bounds. Window frequency facts explicitly use positive integer trading sessions.
 The typed template must reproduce the current accepted incumbent, including any
 previously accepted transformations. Hypotheses never authorize a trait.
+
+Policy v2 adds METRIC_RULE_KEYS and an optional bounded rulebook_id. Documented
+references establish actual parent-field/trait facts; project_hypothesis labels
+the unproven setting effect. Completed failure names OR a measured metric
+predicate activate a rule. Normalized gap and matching failure count rank it
+before declared priority/ID. Pending checks never become failed checks. V1
+canonicalization, fixed ordering and persisted receipt rebuilding stay unchanged.
 """
 
 import ast
@@ -30,6 +37,7 @@ from wqb.cli import simulation_identity_hash
 from wqb.repair_identity import identity_hash_scheme
 from wqb.repair_policy import DECAY_LIMIT, TRUNCATION_LIMIT, NEUTRALIZATIONS
 from wqb.repair_trace import TARGET_DIRECTIONS
+from wqb.benchmark import REPAIRABLE_CHECKS
 from wqb.semantic_contracts import evidence_ref_from_dict
 from wqb.template_binding import IDENTIFIER, UNKNOWN_METADATA, TemplateBindingError, bind_template
 
@@ -42,6 +50,9 @@ SETTING_EFFECTS = {'decay': 'smoothing', 'truncation': 'bounded_weights',
                    'neutralization': 'nuisance_exposure'}
 RULE_KEYS = {'rule_id', 'edit', 'effect', 'priority', 'target_metric', 'target_direction',
              'grid', 'requires', 'evidence_refs'}
+METRIC_RULE_KEYS = {'trigger', 'basis', 'rationale', 'parameter_direction'}
+BASELINE_FAILURES = REPAIRABLE_CHECKS - {'SELF_CORRELATION', 'PROD_CORRELATION'}
+MAX_POLICY_TEXT = 1600
 TRANSFORM_KEYS = {'operator', 'parameter', 'parameter_kind', 'bounds', 'frequency_trait',
                   'preserves_direction'}
 ECONOMIC_CONTEXT_KEYS = ('core_fields', 'economic_roles', 'conditions', 'direction',
@@ -80,7 +91,8 @@ def compile_repair_search_policy(resources: dict, project_policy: dict) -> dict:
         _source(ref, index, texts)
         refs[path] = ref
     fields = resources['field_rows']
-    if not fields or any(not _coverage_field_supported(row, texts, index, scope,
+    # Repair consumes numeric/type/timing facts, not advisory semantic tags.
+    if not fields or any(not _coverage_field_supported(dict(row, semantic_tags=[]), texts, index, scope,
             resource_contract_version=2) for row in fields):
         raise ValueError('Repair field facts differ from sourced scope/type/timing/grain')
     traits = {}
@@ -169,7 +181,8 @@ def _materialize_parent(policy: dict, parent: dict) -> dict:
     Explicit traits require premises for every actual parent field. Uncovered
     traits and dependent rules are omitted; independent rules remain eligible.
     """
-    if not policy.get('resources', {}).get('producer'):
+    metric_directed = policy.get('schema_version') == 2
+    if not metric_directed and not policy.get('resources', {}).get('producer'):
         return policy
     result = copy.deepcopy(policy)
     resources = result['resources']
@@ -178,6 +191,8 @@ def _materialize_parent(policy: dict, parent: dict) -> dict:
     parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     leaves = sorted({node.id for node in ast.walk(tree)
                      if isinstance(node, ast.Name) and id(node) not in functions})
+    if metric_directed and not leaves:
+        raise ValueError('accepted parent requires frozen field leaves')
     selected, slots, tokens = [], [], {}
     for i, name in enumerate(leaves):
         rows = [r for r in resources['field_rows'] if r['field_id'] == name]
@@ -218,23 +233,46 @@ def _materialize_parent(policy: dict, parent: dict) -> dict:
     replacements = {tokens[name]: '{repair_field_' + str(i) + '}' for i, name in enumerate(leaves)}
     skeleton = re.sub(r'\b__repair_slot_\d+\b', lambda match: replacements[match.group()], skeleton)
     # A resource-pack fact cannot authorize unrelated fields in the accepted parent.
-    project = copy.deepcopy(resources['producer']['project_policy'])
-    identities = {(row['dataset_id'], row['field_id']) for row in selected}
-    applicable = {}
-    for name, fact in project.get('traits', {}).items():
-        premises = [premise for premise in fact['premises']
-                    if (premise['locator']['row_identity']['dataset_id'],
-                        premise['locator']['row_identity']['field_id']) in identities]
-        covered = {(p['locator']['row_identity']['dataset_id'],
-                    p['locator']['row_identity']['field_id']) for p in premises}
-        if identities and covered == identities:
-            applicable[name] = dict(fact, premises=premises)
-    removed = set(project.get('traits', {})) - set(applicable)
-    project['traits'] = applicable
-    project['rules'] = [rule for rule in project['rules'] if not removed.intersection(rule['requires'])]
-    result = compile_repair_search_policy(dict(resource_contract_version=2, field_rows=selected,
-        operator_rows=resources['operator_rows'], evidence_pack=dict(scope=resources['scope']),
-        **resources['evidence_context']), project)
+    if metric_directed:
+        _validate_v2_sources(resources)
+        from wqb.resource_evidence import _source, resolve_operator_definition
+        context = resources['evidence_context']
+        refs = [ref for rule in result['rules'] for ref in rule['evidence_refs']]
+        refs.extend(ref for fact in result['traits'].values()
+                    if isinstance(fact, dict) for ref in fact.get('evidence_refs', []))
+        for ref in refs:
+            _source(ref, context['source_index'], context['source_texts'])
+        calls = {node.func.id for node in ast.walk(tree)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+        for name in calls:
+            rows = [row for row in resources['operator_rows'] if row.get('operator') == name]
+            if len(rows) != 1 or resolve_operator_definition(rows[0], context['source_index'],
+                    context['source_texts'], resource_contract_version=2)['status'] != 'supported':
+                raise ValueError('accepted parent operator differs from frozen source definition')
+        scope = resources['scope']
+        if (any(type(scope.get(key)) is not type(parent['settings'].get(key))
+                or scope.get(key) != parent['settings'].get(key) for key in ('region', 'delay', 'universe'))
+                or scope.get('instrument_type') != parent['settings'].get('instrumentType')):
+            raise ValueError('frozen scope differs from accepted parent settings')
+        result['traits'] = _parent_traits(result['traits'], selected, resources)
+    else:
+        project = copy.deepcopy(resources['producer']['project_policy'])
+        identities = {(row['dataset_id'], row['field_id']) for row in selected}
+        applicable = {}
+        for name, fact in project.get('traits', {}).items():
+            premises = [premise for premise in fact['premises']
+                        if (premise['locator']['row_identity']['dataset_id'],
+                            premise['locator']['row_identity']['field_id']) in identities]
+            covered = {(p['locator']['row_identity']['dataset_id'],
+                        p['locator']['row_identity']['field_id']) for p in premises}
+            if identities and covered == identities:
+                applicable[name] = dict(fact, premises=premises)
+        removed = set(project.get('traits', {})) - set(applicable)
+        project['traits'] = applicable
+        project['rules'] = [rule for rule in project['rules'] if not removed.intersection(rule['requires'])]
+        result = compile_repair_search_policy(dict(resource_contract_version=2, field_rows=selected,
+            operator_rows=resources['operator_rows'], evidence_pack=dict(scope=resources['scope']),
+            **resources['evidence_context']), project)
     if 'stop' in policy:
         result['stop'] = policy['stop']
     resources = result['resources']
@@ -248,6 +286,64 @@ def _materialize_parent(policy: dict, parent: dict) -> dict:
     return result
 
 
+def _validate_v2_sources(resources: dict) -> None:
+    """Input: v2 frozen resources dict. Output: None or ValueError; verify exact source bytes/fields."""
+    from wqb.knowledge_compile import _coverage_field_supported
+    from wqb.resource_evidence import _source
+    if resources.get('resource_contract_version') != 2:
+        raise ValueError('metric-directed Repair requires v2 field sources')
+    context, scope = resources['evidence_context'], resources['scope']
+    fields = resources['field_rows']
+    for path in sorted({path for row in fields for path in row['source_paths']}):
+        source = context['source_index'][path]
+        _source(dict(source_path=path, sha256=source['content_hash'], kind='documented',
+                     capture_date=source['captured_at'][:10], experiment_refs=[]),
+                context['source_index'], context['source_texts'])
+    if not fields or any(not _coverage_field_supported(dict(row, semantic_tags=[]), context['source_texts'], context['source_index'],
+            scope, resource_contract_version=2) for row in fields):
+        raise ValueError('Repair fields differ from frozen source scope/type/timing/grain')
+
+
+def _parent_traits(traits: dict, selected: list, resources: dict) -> dict:
+    """Input: declared traits/actual parent rows/resources. Output: only source-proven parent-local traits."""
+    from wqb.knowledge_compile import _coverage_source_fields
+    context, scope = resources['evidence_context'], resources['scope']
+    compiled = compile_repair_search_policy(dict(resource_contract_version=2, field_rows=selected,
+        operator_rows=resources['operator_rows'], evidence_pack=dict(scope=scope), **context),
+        dict(compile_version=1, rules=[], traits={}))
+    established = compiled['traits']
+    if all(row['field_type'] in ('MATRIX', 'VECTOR') for row in selected):
+        established['numeric_observation'] = dict(value=True)
+    for name, field_fact in COMPILED_TRAIT_FACTS.items():
+        values = []
+        for row in selected:
+            facts = [field.get(field_fact) for path in row['source_paths']
+                for field, dataset, captured in _coverage_source_fields(context['source_texts'][path])
+                if field.get('id') == row['field_id'] and dataset.get('id') == row['dataset_id']
+                and all(type(captured.get(k)) is type(scope[k]) and captured.get(k) == scope[k]
+                        for k in ('instrument_type', 'region', 'delay', 'universe'))]
+            if not facts or any(value is None or type(value) is not type(facts[0])
+                                or value != facts[0] for value in facts):
+                break
+            values.append(facts[0])
+        if len(values) == len(selected) and all(type(v) is type(values[0]) and v == values[0] for v in values):
+            established[name] = dict(value=values[0])
+    result = {}
+    for name, fact in traits.items():
+        proof = established.get(name)
+        if (not isinstance(fact, dict) or not proof or fact.get('basis') != 'source'
+                or type(fact.get('value')) is not type(proof['value']) or fact['value'] != proof['value']
+                or _trait_reason(traits, name, fact['value'])):
+            continue
+        paths = {ref['source_path'] for ref in fact['evidence_refs']}
+        if all(paths.intersection(row['source_paths']) for row in selected):
+            result[name] = copy.deepcopy(fact)
+    # Parent-local frequency is mandatory even when a heterogeneous batch omitted it.
+    if 'sampling_frequency_sessions' in established:
+        result['sampling_frequency_sessions'] = copy.deepcopy(established['sampling_frequency_sessions'])
+    return result
+
+
 def _digest(value: object) -> str:
     """Input: JSON-compatible object. Output: SHA256 str binding immutable planner inputs."""
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -255,7 +351,10 @@ def _digest(value: object) -> str:
 
 def _number(value: object) -> bool:
     """Input: object. Output: bool; reject booleans and nonfinite numeric measurements."""
-    return type(value) in (int, float) and math.isfinite(value)
+    try:
+        return type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _sources(refs: object, kind: str) -> bool:
@@ -271,18 +370,26 @@ def _sources(refs: object, kind: str) -> bool:
 def _policy(policy: dict) -> dict:
     """Input: policy dict. Output: canonical copy or ValueError; validate finite rules before planning."""
     if (not isinstance(policy, dict) or type(policy.get('schema_version')) is not int
-            or policy['schema_version'] != PLANNER_VERSION
-            or set(policy) - {'schema_version', 'rules', 'traits', 'stop', 'resources'}
+            or policy['schema_version'] not in (1, 2)
+            or set(policy) - ({'schema_version', 'rules', 'traits', 'stop', 'resources'}
+                              | ({'rulebook_id'} if policy['schema_version'] == 2 else set()))
             or type(policy.get('stop', False)) is not bool
             or not isinstance(policy.get('traits'), dict)):
         raise ValueError('Unsupported policy shape/version')
+    metric_directed = policy['schema_version'] == 2
+    if metric_directed and 'rulebook_id' in policy and not _bounded_text(policy['rulebook_id']):
+        raise ValueError('Expected bounded nonempty rulebook_id')
     rules = policy.get('rules')
     if not isinstance(rules, list) or len(rules) > MAX_RULES:
         raise ValueError('Expected bounded rules list')
     clean, identifiers = copy.deepcopy(policy), set()
     for rule in clean['rules']:
-        if not isinstance(rule, dict) or set(rule) != RULE_KEYS | ({'transform'} if rule.get('edit') == 'transform' else set()):
+        if not isinstance(rule, dict) or set(rule) != (RULE_KEYS
+                | (METRIC_RULE_KEYS if metric_directed else set())
+                | ({'transform'} if rule.get('edit') == 'transform' else set())):
             raise ValueError('Unknown or missing rule properties')
+        if metric_directed:
+            _metric_rule(rule)
         name, edit = rule['rule_id'], rule['edit']
         if not isinstance(name, str) or not name.strip() or name in identifiers:
             raise ValueError('Expected distinct rule IDs')
@@ -321,6 +428,102 @@ def _policy(policy: dict) -> dict:
         rule['grid'] = sorted(set(grid))
     clean['rules'].sort(key=lambda rule: (rule['priority'], rule['rule_id']))
     return clean
+
+
+def _bounded_text(value: object) -> bool:
+    """Input: object. Output: bool; require nonblank bounded policy explanation/identity strings."""
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= MAX_POLICY_TEXT
+
+
+def _metric_rule(rule: dict) -> None:
+    """Input: v2 rule dict. Output: None or ValueError; validate hypothesis and exact finite trigger."""
+    trigger = rule['trigger']
+    if (rule['basis'] != 'project_hypothesis' or not _bounded_text(rule['rationale'])
+            or rule['parameter_direction'] not in ('increase', 'decrease', 'any')
+            or not isinstance(trigger, dict) or set(trigger) != {'checks', 'metric', 'operator', 'threshold'}):
+        raise ValueError('Invalid metric-directed hypothesis/trigger')
+    checks = trigger['checks']
+    if (not isinstance(checks, list) or len(checks) > len(BASELINE_FAILURES)
+            or any(not isinstance(name, str) or name not in BASELINE_FAILURES for name in checks)
+            or len(set(checks)) != len(checks)):
+        raise ValueError('Trigger checks must be known distinct baseline failures')
+    metric = trigger['metric']
+    if metric is None:
+        valid = trigger['operator'] is None and trigger['threshold'] is None and bool(checks)
+    else:
+        valid = (isinstance(metric, str) and metric in TARGET_DIRECTIONS
+                 and trigger['operator'] in ('gt', 'lt') and _number(trigger['threshold']))
+    if not valid:
+        raise ValueError('Trigger needs named failures or a complete finite metric predicate')
+    trigger['checks'] = sorted(checks)
+
+
+def _failure_evidence(parent: dict) -> set:
+    """Input: observed parent dict. Output: completed failures set or ValueError; pending never fails."""
+    if parent.get('status') != 'CHECKED':
+        raise ValueError('Failure evidence requires a checked parent')
+    groups = []
+    for key, expected in (('failed', 'FAIL'), ('pending', 'PENDING')):
+        items = parent.get(key)
+        if not isinstance(items, list):
+            raise ValueError('Expected explicit failed/pending lists')
+        names = set()
+        for item in items:
+            name = item.get('name') if isinstance(item, dict) else item
+            if (not isinstance(name, str) or name not in REPAIRABLE_CHECKS
+                    or isinstance(item, dict) and item.get('result') != expected):
+                raise ValueError('Malformed or unknown ' + key + ' check evidence')
+            names.add(name)
+        groups.append(names)
+    if groups[0] & groups[1]:
+        raise ValueError('Checks cannot be both failed and pending')
+    return groups[0]
+
+
+def _transform_source_reason(rule: dict, resources: dict) -> str:
+    """Input: v2 rule/resources dicts. Output: reason str; retain only the existing sourced invariants."""
+    from wqb.resource_evidence import resolve_operator_definition
+    transform = rule['transform']
+    rows = [row for row in resources['operator_rows'] if row.get('operator') == transform['operator']]
+    if len(rows) != 1:
+        return 'unsupported_transform'
+    row = rows[0]
+    context = resources['evidence_context']
+    try:
+        receipt = resolve_operator_definition(row, context['source_index'], context['source_texts'],
+                                             resource_contract_version=2)
+        definition = row['definition']
+        parameters = definition['parameters']
+        supported = any(transform['operator'] == name and rule['effect'] == effect
+            and transform['parameter_kind'] == kind and definition['description'] == meaning
+            and definition['input_types'] == ['MATRIX'] and definition['output_type'] == 'MATRIX'
+            and len(parameters) == 2 and [p['type'] for p in parameters] == ['MATRIX', scalar]
+            and all(p['required'] and 'default' not in p for p in parameters)
+            and transform['parameter'] == parameters[1]['name']
+            and (kind != 'window' or transform['frequency_trait'] == 'sampling_frequency_sessions')
+            for name, effect, kind, scalar, meaning in COMPILED_INVARIANTS.values())
+        return '' if supported and receipt['status'] == 'supported' else 'unsupported_transform'
+    except (ValueError, TypeError, KeyError):
+        return 'unsupported_transform'
+
+
+def _trigger_evidence(rule: dict, parent: dict, failures: set) -> dict:
+    """Input: rule/observed parent dicts and actual failures set. Output: auditable activation/gap dict."""
+    trigger = rule['trigger']
+    checks = sorted(failures.intersection(trigger['checks']))
+    value = (parent.get('metrics') or {}).get(trigger['metric']) if isinstance(parent.get('metrics'), dict) else None
+    measured = _number(value)
+    active, gap = False, 0.
+    if trigger['metric'] is not None and measured:
+        threshold = trigger['threshold']
+        active = value > threshold if trigger['operator'] == 'gt' else value < threshold
+        if active:
+            gap = abs(value / (abs(threshold) or 1) - threshold / (abs(threshold) or 1))
+            if not _number(gap):
+                raise ValueError('Nonfinite normalized metric gap')
+    return dict(trigger=copy.deepcopy(trigger), failed_checks=checks,
+                observed_value=value if measured else None, metric_predicate=active,
+                normalized_gap=gap, activated=bool(checks) or active)
 
 
 def _transform_policy(transform: dict) -> None:
@@ -445,8 +648,11 @@ def prepare_search(run: Path, parent: dict, history: list, allowance: int, polic
         return result | dict(stop_reason='invalid_allowance')
     try:
         frozen = _policy(policy)
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, OverflowError) as exc:
         return result | dict(stop_reason='invalid_policy', reason=str(exc))
+    metric_directed = frozen['schema_version'] == 2
+    if metric_directed:
+        result['planner_version'] = 2
     try:
         if (not isinstance(parent, dict) or not parent.get('alpha_id')
                 or not identity_hash_scheme(parent) or not parent['expression'].strip()):
@@ -465,7 +671,38 @@ def prepare_search(run: Path, parent: dict, history: list, allowance: int, polic
     if frozen.get('stop') or parent.get('hard_pass') is True or allowance == 0:
         reason = 'stopped' if frozen.get('stop') else 'already_qualified' if parent.get('hard_pass') is True else 'allowance_exhausted'
         return result | dict(status='stopped', stop_reason=reason)
+    triggered, eligible, duplicate_candidates = 0, 0, []
+    prerequisites_missing = False
+    triggers = {}
+    if metric_directed:
+        try:
+            failures = _failure_evidence(parent)
+            triggers = {rule['rule_id']: _trigger_evidence(rule, parent, failures) for rule in frozen['rules']}
+        except (ValueError, TypeError, OverflowError) as exc:
+            return result | dict(stop_reason='invalid_check_evidence', reason=str(exc))
+        result['trigger_evidence'] = copy.deepcopy(triggers)
+        if not frozen['rules']:
+            return result | dict(status='exhausted', stop_reason='no_rules_configured', remaining_candidates=0)
+        if not any(evidence['activated'] for evidence in triggers.values()):
+            result['skipped'] = [dict(rule_id=rule['rule_id'], reason='trigger_not_observed',
+                trigger_evidence=triggers[rule['rule_id']]) for rule in frozen['rules']]
+            return result | dict(status='exhausted', stop_reason='no_triggered_rules', remaining_candidates=0)
+        try:
+            frozen = _materialize_parent(frozen, parent)
+        except (ValueError, TypeError, KeyError, AttributeError, SyntaxError) as exc:
+            result['skipped'] = [dict(rule_id=rule['rule_id'], reason='parent_prerequisites', detail=str(exc))
+                                 for rule in frozen['rules']]
+            return result | dict(status='exhausted', stop_reason='missing_prerequisites', remaining_candidates=0)
+        frozen['rules'].sort(key=lambda rule: (-triggers[rule['rule_id']]['normalized_gap'],
+            -len(triggers[rule['rule_id']]['failed_checks']), rule['priority'], rule['rule_id']))
     for rule in frozen['rules']:
+        if metric_directed:
+            evidence = triggers[rule['rule_id']]
+            if not evidence['activated']:
+                result['skipped'].append(dict(rule_id=rule['rule_id'], reason='trigger_not_observed',
+                                              trigger_evidence=evidence))
+                continue
+            triggered += 1
         reason = ''
         if not _sources(rule['evidence_refs'], 'documented'):
             reason = 'rule_source_missing'
@@ -474,14 +711,41 @@ def prepare_search(run: Path, parent: dict, history: list, allowance: int, polic
         metrics = parent.get('metrics')
         if not isinstance(metrics, dict) or not _number(metrics.get(rule['target_metric'])):
             reason = reason or 'target_unmeasured'
+        if metric_directed and rule['edit'] != 'transform':
+            current = parent['settings'].get(rule['edit'])
+            if (rule['edit'] in ('decay', 'truncation') and not _number(current)
+                    or rule['edit'] == 'neutralization' and current not in NEUTRALIZATIONS
+                    or rule['edit'] == 'neutralization' and rule['parameter_direction'] != 'any'):
+                reason = reason or 'parent_parameter_unmeasured'
+            if rule['edit'] == 'neutralization' and rule['requires'].get('nuisance_exposure') is not True:
+                reason = reason or 'nuisance_exposure_not_established'
+        elif metric_directed:
+            reason = reason or _transform_source_reason(rule, frozen['resources'])
         if reason:
+            prerequisites_missing = True
             result['skipped'].append(dict(rule_id=rule['rule_id'], reason=reason))
             continue
+        eligible += 1
         for value in rule['grid']:
             expression, settings = parent['expression'], copy.deepcopy(parent['settings'])
             binding = None
             reason = _frequency_reason(rule, frozen['traits'], value)
+            if metric_directed and rule['edit'] == 'decay':
+                cadence = frozen['traits'].get('sampling_frequency_sessions', {})
+                frequency = cadence.get('value')
+                if type(frequency) is int and cadence.get('units') == 'sessions' and value < frequency:
+                    reason = reason or 'frequency_constraint'
+            if metric_directed and rule['parameter_direction'] != 'any':
+                if rule['edit'] == 'transform':
+                    reason = reason or 'parent_parameter_unmeasured'
+                else:
+                    current = parent['settings'][rule['edit']]
+                    directed = value > current if rule['parameter_direction'] == 'increase' else value < current
+                    if not directed:
+                        reason = reason or 'parameter_direction'
             if reason:
+                if reason not in ('parameter_direction', 'frequency_constraint'):
+                    prerequisites_missing = True
                 result['skipped'].append(dict(rule_id=rule['rule_id'], value=value, reason=reason))
                 continue
             if rule['edit'] == 'transform':
@@ -489,6 +753,7 @@ def prepare_search(run: Path, parent: dict, history: list, allowance: int, polic
                     binding = _typed_transform(parent, rule, value, frozen.get('resources'))
                     expression = binding['bound_expression']
                 except (TemplateBindingError, ValueError, TypeError, SyntaxError) as exc:
+                    prerequisites_missing = True
                     result['skipped'].append(dict(rule_id=rule['rule_id'], value=value,
                         reason='unsupported_transform', detail=str(exc)))
                     continue
@@ -500,6 +765,8 @@ def prepare_search(run: Path, parent: dict, history: list, allowance: int, polic
             identity = simulation_identity_hash(expression, settings)
             if identity in used:
                 result['skipped'].append(dict(rule_id=rule['rule_id'], value=value, reason='duplicate_identity'))
+                if metric_directed:
+                    duplicate_candidates.append((identity, rule, value))
                 continue
             used.add(identity)
             decision = dict(action='test', edit=rule['edit'], value=value,
@@ -511,6 +778,11 @@ def prepare_search(run: Path, parent: dict, history: list, allowance: int, polic
                 falsification='Reject unless measured ' + rule['target_metric'] + ' improves in the declared '
                               'direction without Sharpe/Fitness regression or new baseline failures.',
                 trait_evidence={name: copy.deepcopy(frozen['traits'][name]) for name in sorted(rule['requires'])})
+            if metric_directed:
+                decision.update(basis=rule['basis'], rationale=rule['rationale'],
+                    parameter_direction=rule['parameter_direction'], trigger_evidence=copy.deepcopy(evidence))
+                if 'rulebook_id' in frozen:
+                    decision['rulebook_id'] = frozen['rulebook_id']
             variant = dict(expression=expression, settings=settings, expression_hash=identity,
                 simulation_identity=identity,
                 parent_alpha_id=parent['alpha_id'], parent_expression_hash=parent['expression_hash'],
@@ -527,7 +799,34 @@ def prepare_search(run: Path, parent: dict, history: list, allowance: int, polic
     result['variants'] = result['variants'][:allowance]
     if result['variants']:
         return result | dict(status='validated')
+    if metric_directed:
+        reason = ('no_triggered_rules' if not triggered else 'missing_prerequisites' if prerequisites_missing or not eligible
+                  else 'no_novel_candidates')
+        if duplicate_candidates and not prerequisites_missing:
+            reason = ('tested_without_improvement' if _tested_without_improvement(
+                parent, history, duplicate_candidates) else 'search_space_exhausted')
+        return result | dict(status='exhausted', stop_reason=reason)
     return result | dict(status='exhausted', stop_reason='search_space_exhausted')
+
+
+def _tested_without_improvement(parent: dict, history: list, candidates: list) -> bool:
+    """Input: parent/history and duplicate (identity, rule, value) tuples. Output: bool; require checked rejections."""
+    from wqb.seed_policy import compare_versions, DEFAULT_SEED_POLICY
+    for identity, rule, value in candidates:
+        rows = [row for row in history if row.get('expression_hash') == identity]
+        if not rows or any(row != rows[0] for row in rows[1:]):
+            return False
+        child = rows[0]
+        try:
+            _failure_evidence(child)
+            comparison = compare_versions(parent, child, dict(target_metric=rule['target_metric'],
+                target_direction=rule['target_direction'], edit=rule['edit'], value=value,
+                turnover_max=DEFAULT_SEED_POLICY['turnover_max']))
+        except (ValueError, TypeError, KeyError):
+            return False
+        if comparison['outcome'] != 'rejected':
+            return False
+    return True
 
 
 def _frozen_policy(run: Path) -> tuple[dict, str]:
@@ -545,6 +844,13 @@ def _frozen_policy(run: Path) -> tuple[dict, str]:
     if not context:
         raise ValueError('deterministic Repair requires verified operational resources')
     policy = _policy(snapshot['repair_search_policy'])
+    if policy['schema_version'] == 2:
+        resources = policy.get('resources', {})
+        _validate_v2_sources(resources)
+        for key in ('source_index', 'source_texts'):
+            if any(context[key].get(path) != value
+                   for path, value in resources['evidence_context'][key].items()):
+                raise ValueError('metric-directed Repair sources differ from frozen context')
     producer = policy.get('resources', {}).get('producer')
     if producer:
         resources = policy['resources']

@@ -70,6 +70,18 @@ New Start uses `research_policy.preplanned_tree_version=1`; legacy runs never
 adopt it. Exact-scope raw certification, measured report periods and source hashes
 remain mandatory. Optional `repair_search_policy` supports source-bound finite
 setting experiments; missing traits do not justify invented cadence or exposure.
+Modern V2-source Start freezes metric-directed finite project setting hypotheses
+from `configs/repair_rulebook.json`; its content is part of preparation and code
+identity. Failure/predicate evidence selects actions, known cadence bounds grids,
+and single-change comparisons retain the accepted incumbent. Defaults do not
+invent exposure/noise or authorize arbitrary transforms. Legacy v1 policy and
+source contracts remain unchanged; do not rewrite an existing frozen mission.
+Specific stop reasons and skips are in the scheduler trace/Console comparison.
+When changing Start/Repair resource consumers, include
+`tests.test_preplanned_semantic_consumption` with the rulebook, metric-directed
+and compiled-Repair suites before freezing full verification. Advisory ledger
+tags are not official raw facts; removing them from numeric-fact checks must
+not promote them into traits or bypass type/timing/grain/hash validation.
 Arbitrary Start-supplied transforms remain unsupported. Empty rules are explicit
 deterministic exhaustion, not a claim of economic falsification.
 Compiler-produced rules can opt in with `compile_version=1`; they revalidate

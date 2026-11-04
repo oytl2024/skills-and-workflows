@@ -70,6 +70,8 @@ class DesktopApplicationTests(unittest.TestCase):
             self.assertFalse(result["backend_started"])
             self.assertFalse(result["native_bridge"])
             self.assertIn("code_revision", result)
+            self.assertEqual(result['repair_rulebook_id'], 'metric-directed-defaults-v1')
+            self.assertTrue(result['repair_rulebook_ready'])
             backend.assert_not_called()
             host.assert_not_called()
 

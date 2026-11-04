@@ -47,6 +47,16 @@ foreach ($Boundary in @(@{ Source = (Join-Path $WorkflowRoot "wqb"); Target = "w
         $Manifest += @{ path = $TargetRelative; sha256 = (Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash }
     }
 }
+# Bundle one public rule table, never the private configuration directory.
+$Rulebook = Join-Path $WorkflowRoot "configs/repair_rulebook.json"
+$RulebookDirectory = Get-Item -LiteralPath (Split-Path -Parent $Rulebook)
+$RulebookItem = Get-Item -LiteralPath $Rulebook
+if (($RulebookItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+    ($RulebookDirectory.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+    $RulebookItem.PSIsContainer -or $RulebookItem.Length -gt 64000) { throw "Invalid public Repair rulebook." }
+New-Item -ItemType Directory -Path (Join-Path $Stage "configs") -Force | Out-Null
+Copy-Item -LiteralPath $Rulebook -Destination (Join-Path $Stage "configs/repair_rulebook.json")
+$Manifest += @{ path = "configs/repair_rulebook.json"; sha256 = (Get-FileHash -LiteralPath $Rulebook -Algorithm SHA256).Hash }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "desktop_entry.py") -Destination (Join-Path $Stage "scripts/desktop_entry.py")
 ConvertTo-Json -InputObject $Manifest -Depth 4 | Set-Content -LiteralPath (Join-Path $BuildRoot "input-manifest.json") -Encoding utf8
 $PreviousPythonPath = $env:PYTHONPATH
@@ -66,6 +76,7 @@ try {
         "--workpath", (Join-Path $BuildRoot "work"), "--specpath", $BuildRoot,
         "--paths", $Stage, "--paths", $DependencyRoot,
         "--add-data", ((Join-Path $Stage "wqb") + ";wqb"),
+        "--add-data", ((Join-Path $Stage "configs") + ";configs"),
         "--add-data", ((Join-Path $Stage "frontend/dist") + ";frontend/dist"),
         "--collect-submodules", "wqb", "--collect-all", "webview",
         "--collect-all", "pythonnet", "--collect-all", "clr_loader",

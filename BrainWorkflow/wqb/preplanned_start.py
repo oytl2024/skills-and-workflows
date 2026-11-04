@@ -51,10 +51,8 @@ INITIAL_MODEL_CALLBACK_CONTRACT = {
                      'the hypothesis_design checkpoint drops tree and is not a compatible fallback.',
 }
 REPAIR_DIAGNOSTICS = [
-    'No certified setting-effect/parameter-bound rules in the current semantic resources; '
-    'freeze an empty finite Repair search, not an official rule inferred from field/operator names.',
-    'Cadence, nuisance exposure and direction-preserving parent-bound transforms remain unknown; '
-    'initial Scout is allowed, deterministic Repair will report search_space_exhausted.',
+    'Default finite setting experiments are project hypotheses, not official guarantees of improvement.',
+    'Unknown cadence, exposure or transform premises stay unknown; unsupported actions carry explicit skip reasons.',
 ]
 
 
@@ -319,28 +317,34 @@ def _save(path: Path, state: dict) -> None:
     _write(path, state)
 
 
-def _repair_policy(resource: dict, supplied: dict | None = None) -> dict:
+def _repair_policy(resource: dict, supplied: dict | None = None, *, rulebook: dict | None = None) -> dict:
     """Input: already raw-validated compiler resource dict. Output: finite Repair policy dict.
 
     Field types are source facts, not evidence of noise, cadence or exposure.
     The current semantic contract has no setting-effect/bounds records. Do not
     repurpose raw as a project policy store or invent documented rule references.
-    Empty rules are a supported deterministic exhaustion, not a Scout blocker.
+    Project setting hypotheses are separate from official data facts.
     """
     from wqb.repair_search import _policy, compile_repair_search_policy
     if isinstance(supplied, dict) and 'compile_version' in supplied:
         return compile_repair_search_policy(resource, supplied)
+    defaults = None
     traits = {}
-    fields = resource['field_rows']
-    if fields and all(row['field_type'] == 'MATRIX' for row in fields):
-        paths = sorted({path for row in fields for path in row['source_paths']})
+    if resource.get('resource_contract_version', 1) == 2:
+        from wqb.repair_rulebook import build_default_repair_policy
+        defaults = build_default_repair_policy(resource, rulebook)
+        traits = defaults['traits']
+    elif resource['field_rows'] and all(row['field_type'] == 'MATRIX' for row in resource['field_rows']):
+        paths = sorted({path for row in resource['field_rows'] for path in row['source_paths']})
         refs = [dict(source_path=path, sha256=resource['source_index'][path]['content_hash'],
             capture_date=resource['source_index'][path]['captured_at'][:10],
             kind='documented', experiment_refs=[]) for path in paths]
         traits['matrix_observation'] = dict(basis='source', value=True, evidence_refs=refs)
     if supplied is None:
-        return _policy(dict(schema_version=1, rules=[], traits=traits))
+        return defaults if defaults is not None else dict(schema_version=1, rules=[], traits=traits)
     policy = _policy(supplied)
+    if policy['schema_version'] == 2:
+        raise ValueError('supplied v2 Repair policies require a certified producer; use the default resource-bound rulebook')
     if policy.get('resources') or any(rule['edit'] == 'transform' for rule in policy['rules']):
         raise ValueError('Start transforms require a separately verified parent-bound rule producer')
     if any(name not in traits or trait != traits[name] for name, trait in policy['traits'].items()):
@@ -404,9 +408,15 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
         settings = {k: config[k] for k in ('instrument_type', 'region', 'delay', 'universe', 'decay',
             'neutralization', 'truncation', 'pasteurization', 'unit_handling', 'nan_handling', 'language') if k in config}
         supplied_repair = deepcopy(config.get('repair_search_policy'))
+        default_rulebook = None
+        if supplied_repair is None:
+            from wqb.repair_rulebook import load_repair_rulebook
+            default_rulebook = load_repair_rulebook()
         identity = dict(knowledge_root=str(root), selected_option=selected_option, authority=authority,
                         scope=scope, measurement_period=period, policy=policy, settings=settings,
                         repair_search_policy=supplied_repair)
+        if default_rulebook is not None:
+            identity['repair_rulebook'] = deepcopy(default_rulebook)
         directory = _safe(runs, 'start_preflight/preplanned/' + _digest(identity))
         directory.mkdir(parents=True, exist_ok=True)
         path = _safe(directory, 'preparation.json')
@@ -421,7 +431,7 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
                 result['missing_facts'] = diagnostics
                 if not resources:
                     raise ValueError('no source-backed exact-scope lane resources; local maintenance required')
-                repair_policies = [_repair_policy(resource, supplied_repair) for resource in resources]
+                repair_policies = [_repair_policy(resource, supplied_repair, rulebook=default_rulebook) for resource in resources]
                 prepared = prepare_group_lanes(paths, resources, scope, selected_option, authority,
                     plan_depth=policy['plan_depth'], initial_hypotheses=policy['initial_hypotheses'])
                 group = prepared['group']
@@ -449,7 +459,7 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
                     list(_audit_resource_rows(machine_resource_path(root, 'data_ledger'), root)),
                     {r['path']: r for r in _audit_resource_rows(machine_resource_path(root, 'source_index'), root)})
                 run = runs / lane['run_id']
-                if _repair_policy(resource, supplied_repair) != state['repair_policies'][lane_index]:
+                if _repair_policy(resource, supplied_repair, rulebook=default_rulebook) != state['repair_policies'][lane_index]:
                     raise ValueError('frozen initial Repair rules or traits changed')
 
                 def bound_runner(brief: dict) -> dict:

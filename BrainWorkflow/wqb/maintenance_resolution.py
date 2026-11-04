@@ -32,6 +32,9 @@ def _code_digest(project: Path) -> str:
     digest = hashlib.sha256()
     paths = [*project.glob("wqb/**/*.py"), *project.glob("tests/**/*.py"), *project.glob("scripts/**/*.py")]
     paths.extend(path for path in (project / "pyproject.toml", project / "requirements.txt") if path.exists())
+    rulebook = project / 'configs' / 'repair_rulebook.json'
+    if rulebook.is_file():
+        paths.append(rulebook)
     for path in sorted(paths):
         digest.update(str(path.relative_to(project)).encode())
         digest.update(path.read_bytes())

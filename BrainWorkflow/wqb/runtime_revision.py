@@ -14,6 +14,11 @@ def source_code_revision(source_root: Path) -> str:
         digest.update(b"\0")
         digest.update(path.read_bytes())
         digest.update(b"\0")
+    rulebook = source_root.parent / 'configs' / 'repair_rulebook.json'
+    if rulebook.is_file():
+        digest.update(b'../configs/repair_rulebook.json\0')
+        digest.update(rulebook.read_bytes())
+        digest.update(b'\0')
     return digest.hexdigest()
 
 

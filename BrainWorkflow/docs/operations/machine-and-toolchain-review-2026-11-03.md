@@ -142,3 +142,18 @@ GROUP 未支持等情况属于编译能力缺口，不是删除 gate 就能获�
 - 优先处理占 99.54% 的七个大文件及重复验证，不优先删除几十 KB 的指针、guard 或配置。
 
 本报告是优化讨论的依据，不是放松 gate、删除历史、抓取资料、增加额度或部署的授权。
+
+## Nov4复核：实际触发与尚未评估
+
+本节重新读取Nov3实际审计的持久化结果，不声称重新编译或重新验证了今日全库；未调用平台或模型。
+
+- `output/desktop-validation/start-resource-probe-20261103.log`：USA D1 TOP3000资源探测0可用/298缺口，其中296是本地来源超过2,000,000字节读取上限，2是Jul30摘录超过90天年龄政策。计数是缺口项，不等于298个独立字段。
+- 全量计划92557c：88,670个身份中88,441 blocked/229 prepared。流式重读inventory：88,441次no_verified_material、88,670次unverified_occurrences；后者与前者重叠，且prepared目标也可能含未验证的额外出现位置，不能相加或据此把所有目标判无效。
+- 计划source diagnostics有六条：Jul30全量data_fields.jsonl超读取上限；Jul29 data_fields.jsonl及Jul29/Jul30 operators.json只作为未索引raw存在；Oct11 incentive_snapshot.md及operators.md的索引摘要不一致。仅凭这些错误不能确定资料被篡改或必须重新联网抓取，应先核实索引与实际内容。
+- 当前合同解释结果0/88,670：229个准备目标尚未执行解释，计划model_call_budget=0/execution_authorized=false。不是229次模型失败；cached_jobs是任务材料复用，不能当成已有可信解释答案。
+- knowledge maintenance的11条health问题都指向同一份Oct13用户研究建议笔记：九项元数据缺失，加未收录source index和无wiki/index引用。它阻止该次维护显示completed，不是11个坏字段，也不能等同于直接阻断所有研究。
+- 单位、频率、VECTOR粒度、算符英文描述、Repair数学性质/暴露等存在代码级限制，但本轮没有其全库实测触发计数。前置来源gate挡住后的not_evaluated不能当作通过或失败。
+
+后续gate设计必须分别记录：发生阶段、错误代码、目标身份、直接原因、是否完成评估、影响范围；不将工程/来源/解释/策略质量混成一种不可用状态。
+
+Nov4 Repair维护期间再次直接调用当前`preplanned_start._local_resources`，限定USA D1 TOP3000、1个资源组、仅本地读取：usable_lanes=0、receipts=0、diagnostic_count=298；首两项仍为Jul30来源超龄，其余抽样项仍为来源超读取上限。没有更新raw、发布时间、规则额度或旧运行。这证明Repair默认规则的离线集成通过并不等于真实Start已可用；来源读取/索引主线仍待实施，SQL存储提议也未被当作已交付。

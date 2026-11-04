@@ -15,6 +15,24 @@ from wqb.repair_identity import verified_platform_alias, matching_simulation_row
 REPAIR_STALL_NOTICE_SECONDS = 1800
 
 
+def _exhaustion_trace(parent: dict, plan: dict, attempts: list) -> dict:
+    """Input: incumbent/empty plan/prior attempts. Output: factual finite-search termination trace dict."""
+    planner_reason = plan.get('stop_reason', 'search_space_exhausted')
+    children = [attempt for attempt in attempts if attempt.get('children')]
+    measured = [attempt for attempt in children
+                if attempt.get('experiment_trace', {}).get('outcome') in {'accepted', 'rejected'}]
+    reason = planner_reason
+    if children and planner_reason in {'search_space_exhausted', 'no_novel_candidates'}:
+        improved = any(attempt.get('experiment_trace', {}).get('outcome') == 'accepted' for attempt in measured)
+        reason = ('search_space_exhausted_after_improvement' if improved else
+                  'tested_without_improvement' if len(measured) == len(children) else 'inconclusive_search_exhaustion')
+    return dict(schema_version=1, baseline=parent, decision=plan.get('decision', {}),
+        outcome='inconclusive', stop_reason=reason, planner_stop_reason=planner_reason,
+        reason='Finite rule search stopped: ' + reason + '; no claim about economic causality.',
+        tested_candidates=sum(len(attempt['children']) for attempt in measured),
+        skipped=plan.get('skipped', []), metric_changes={}, submission_qualified=False)
+
+
 def _root_parent_key(attempt: dict) -> list:
     """Input: attempt dict. Output: logical root identity list; old attempts retain original keys."""
     return attempt.get('root_parent_key', [attempt['parent_alpha_id'], attempt['parent_expression_hash']])
@@ -296,10 +314,7 @@ def execute_repair_round(root: Path, outcome: dict, executor: object, maximum: i
                 receipt['attempts'].append({'parent_alpha_id': key[0], 'parent_expression_hash': key[1],
                     'max_simulations': 0, 'plan': plan, 'actions': [], 'phase': 'checked',
                     'status': 'completed', 'children': [], 'legacy': False,
-                    'experiment_trace': {'schema_version': 1, 'baseline': parent,
-                        'decision': plan.get('decision', {}), 'outcome': 'inconclusive',
-                        'reason': 'Search exhausted before simulation; no measured effect',
-                        'metric_changes': {}, 'submission_qualified': False}})
+                    'experiment_trace': _exhaustion_trace(parent, plan, attempts)})
                 _write(path, receipt)
                 continue
             used_hashes = {r.get('expression_hash') for r in known}

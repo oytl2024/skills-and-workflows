@@ -21,3 +21,23 @@ An unrecoverable planning error is reported immediately as maintenance-blocker,
 not retried until generic no-progress. Current Work reports case ID, notification
 delivery and whether human repair confirmation or verification is pending. A
 delivered notification is not repair authority; runtime renewal cannot waive it.
+
+## Repair Coverage Audit Before Maintenance (2026-11-04)
+
+Deterministic execution is implemented, but this does not establish a complete useful Repair knowledge/rule library or actual deployment. Fresh targeted verification: 59 tests passed in 21.504s (repair_search, deterministic integration and compiled policy suites); fake/source-backed fixtures are not full real-vault acceptance.
+
+- preplanned_start._repair_policy freezes an empty rule list when no explicit policy is supplied. A legal plan can therefore reach Repair and exhaust without a new simulation; this is not evidence of unsuccessful parameter optimization.
+- repair_search.prepare_search filters frozen trait predicates, finite measured target presence, parameter bounds, identity novelty and a fixed declared priority. It does not yet derive action priority from current failed checks or metric-gap severity. In an offline fixture with only LOW_FITNESS, turnover .10 and .70 both selected the same smoothing rule first.
+- Current compiled transform invariants cover ts_mean positive averaging and signed_power sign preservation, plus finite decay/truncation/neutralization settings subject to their prerequisites. This is narrower than a general characteristic-to-operator rule library.
+- Single-change generation, accepted-incumbent lineage, controlled before/after comparisons, rollback, finite exhaustion, Stop/budgets and no late model execution are implemented. Missing rules, unmet prerequisites and tried-but-unhelpful candidates must not be conflated as economic-mechanism failure.
+- Remaining acceptance must demonstrate actual data characteristics plus failed metrics selecting nonempty legal rules/finite parameters, useful rule coverage and auditable distinct stop reasons through the real resource consumer. Do not claim this is delivered solely because deterministic execution tests pass.
+
+## Metric-Directed Repair Update
+
+Modern source-contract-v2 Start now freezes a nonempty schema-v2 project rulebook from `configs/repair_rulebook.json`, with sourced numeric/matrix properties and cadence only when explicitly documented. The named public catalog participates in preparation identity, loaded-code identity and maintenance verification; the desktop bundle includes only that file, never private configs. Explicit v1 policies and legacy source-contract-v1 preparations retain their old behavior and receipt reconstruction. Existing missions are not migrated.
+
+Rules activate from completed baseline failure names or a measured metric predicate. Gap severity precedes declared priority; an otherwise identical low-Fitness parent with high turnover selects turnover smoothing rather than blindly repeating the low-Fitness response search. Pending checks are not failed checks. Candidates must satisfy actual incumbent field/type/source binding, prerequisites, finite domains, parameter direction, known cadence and novelty. One property changes; comparison preserves the economic kernel and accepted-parent lineage. No late model task is dispatched.
+
+Default coverage is deliberately narrow: decay response/averaging for low Sharpe/Fitness or high turnover, and lower truncation for concentration. These are competing project experiment hypotheses, not guaranteed improvements or invented noise/exposure facts. Source-certified ts_mean/signed_power transforms and justified neutralization remain supported through explicit frozen policies; the default catalog does not fabricate their missing prerequisites. This is not a universal operator/action library.
+
+Receipts distinguish missing rules, no observed trigger, missing prerequisites, no novel candidates, tested without improvement and finite-space exhaustion. The scheduler retains the specific reason, skipped actions and measured attempt count; the existing Console comparison projection displays the trace. Exhaustion says nothing about economic causality. Full real-vault readiness and release/desktop activation remain separate acceptance boundaries; current results belong in root todo.md.
