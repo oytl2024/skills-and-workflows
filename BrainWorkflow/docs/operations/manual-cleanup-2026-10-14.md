@@ -235,3 +235,54 @@ skills-and-workflows\BrainWorkflow\NVIDIA Corporation
 - Final stable verification: 2,862 tests passed, five skips, 835.716 seconds; digest before/after `3eee974f07e8ec2c47e95f8ff9fda3ae91c5abaf51ca8469940f5166b1b72add`. Packaged backend revision `a7101e6feecc31fa9a8c27892507a3c7bfd6174f7e6f5825fcf1932735b17f19` matches source. Rerun affected entry/Console regressions after this documentation-only audit and synchronize the audit commit.
 - Real local USA D1 TOP3000 resources remain 0 usable / 298 source diagnostics. Source/index/storage work is pending; this audit grants no gate waiver, platform/model calls, research resume, proof renewal, quota change, final Alpha submission or formal entry activation.
 - Post-audit entry/Console regressions: 66 tests passed (one skip), 5.316 seconds; source/test/catalog digest is unchanged. No deletions were performed.
+
+## Nov 5 source/lifecycle verified-slice audit
+
+- Implementation `1944c80d386602a21a2c9edb96524d7ee40f8618` was pushed to
+  `agent/brainworkflow-phase2` and exact local/remote equality verified before
+  this audit. No force push, branch switch, implicit merge or real deletion.
+- Stable source/test/catalog digest:
+  `e87cd30998d4a734bf39d4f05805f38a1b7696dce9981f755c9660dd2d3d70fd`.
+  Full suite: 2,943 tests, eight skips, 703.688 seconds. Log:
+  `output/desktop-validation/source-lifecycle-verified-full-suite-20261104.log`.
+  Package `output/desktop-application/20261104-234500-7080` and isolated browser
+  loaded revision `858b3beed212af61e7bac802b7860ed58bdeb0bf655d38ba2ac266900772b9cc`
+  match source; the formal entry was not activated.
+- Actual deletion target set is empty. No source adapter was retired in this
+  slice. The actual vault has no obsolete active-layout candidates. SQLite,
+  current shared inventory and detailed coverage objects are current derived
+  dependencies; new code/tests/docs are Git-backed current implementation.
+- The following distinct, nonduplicate old inventories remain protected, not
+  approved for deletion (paths relative to outer `knowledge/`):
+
+| Path | Bytes | SHA256 |
+| --- | ---: | --- |
+| machine/semantic_jobs/0d4647b571b22371f8bacaec701965f916282ef534dfc1d9e2caad34609b9c97/inventory.jsonl | 696661460 | bf510eac0f34edb386ffefb3d6bd6c6e25f88563bf143d582b894a320b6b7aa9 |
+| machine/semantic_jobs/23d66f9281475febb505dc1e36dfae9e40b81bcac5db264421ab305d931aaab3/inventory.jsonl | 696257228 | 889ab8cc6f26a5eb8358cced10b57a8726ca64e2635cdac6b83f4750c823beec |
+| machine/semantic_jobs/92557c1ddb62f0bdee6ae730bda5a34d9c885eb0045fa4b9f91ed7ce97333d4a/inventory.jsonl | 692988905 | a528a299cdb77e1a55b07e66ad9019f59619b08ccb28c4aea57cf46a8922938b |
+
+- Read-only audits validated each 88,670-target inventory and observed its
+  prepared job directories. They do not establish job-content safety,
+  authenticated supersession, external-reference closure or shared-writer
+  serialization/recovery. `apply_semantic_retirement` deliberately refuses.
+  Approximately 2.1 GB remains; P4 machine retirement is incomplete, not hidden
+  behind a successful obsolete-layout cleanup or health check.
+- Preserve intermediate packages `20261104-232445-7010` and
+  `20261104-232849-2823`, interrupted/failed full-suite logs, browser timeout
+  diagnostics and intermediate inventory generations as bound investigation
+  evidence. Do not age-sweep them or upload private output merely for backup.
+- Exclusions: all original raw, current machine resources/releases, wiki
+  experience, research/run/check/POST/Stop/accounting/maintenance evidence,
+  credentials/config secrets, browser state, Git history and outer entry docs.
+  Capture age and the two unexplained source hashes were not renewed or waived.
+- Formatting-only minor deferred to the next source-tested change: one extra
+  final blank line in `tests/test_field_source_catalog.py`. The staged whitespace
+  check reported it; it is not a test failure. Keeping the tested bytes avoids
+  disguising a new digest as the existing full-suite proof.
+- This is a verified implementation checkpoint, not whole-plan closure or
+  authority for platform/model calls, research resume, proof renewal, budget
+  changes, Alpha submission or formal deployment. Post-audit regression and
+  documentation-only synchronization follow; outer todo.md owns their result.
+- Post-audit regression: 146 tests passed, one skip, 6.671 seconds (root entry,
+  source directory, guarded cleanup and Console contracts). No source/test
+  edits or real deletions followed the stable full-suite proof.
