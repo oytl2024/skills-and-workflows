@@ -275,6 +275,12 @@ def runtime_current_work(state: dict[str, Any]) -> dict[str, Any] | None:
 
 def select_current_work(state: dict[str, Any], timeline: list[dict[str, Any]]) -> dict[str, Any]:
     """Input: console state and timeline. Output: current work summary. Explain the active row for the UI."""
+    active = state.get('active_workflow') or {}
+    if active.get('status') == 'retired' and active.get('read_only') is True:
+        return {'title': 'Historical research retired', 'status': 'retired', 'next_action': '',
+                'details': ['Old AI Repair execution is retired; research and check evidence are preserved.',
+                            'Select an Option Card and Start a new mission after local readiness passes.'],
+                'evidence_paths': (active.get('retirement') or {}).get('evidence_paths', [])}
     if ((state.get('start_request') or {}).get('status') == 'cancelled'
             and (state.get('readiness') or {}).get('context') == 'new-mission-preflight'):
         return {'title': 'Research preparation stopped', 'status': 'paused',

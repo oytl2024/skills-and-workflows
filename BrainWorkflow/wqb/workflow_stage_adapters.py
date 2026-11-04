@@ -251,7 +251,7 @@ def advance_post_schedule_stage(
             can_resume = repair.get("recovery_eligible") is True or (
                 repair.get("status") == "running" and getattr(repair_executor, "supports_durable_recovery", False))
             append_only = False
-            if repair.get('scheduler_version') == 1 and getattr(repair_executor, 'supports_ai_planning', False) is True:
+            if repair.get('scheduler_version') == 1 and getattr(repair_executor, 'supports_plan_preparation', False) is True:
                 from wqb.repair_scheduler import _verified_prefix, cached_collision_children
                 append_only = _verified_prefix(root / 'all_alphas.jsonl', repair, root)
                 blocked_attempts = [a for a in repair.get('attempts', []) if a.get('phase') == 'blocked']
@@ -522,7 +522,7 @@ def _execute_repair(root: Path, outcome: dict, executor: RepairExecutor | None, 
         return {"blocker": "repair executor is required for checked repairable signals"}
     if type(maximum) is not int or maximum < 1:
         return {"blocker": "repair simulation budget must be a positive integer"}
-    if getattr(executor, 'supports_ai_planning', False) is True:
+    if getattr(executor, 'supports_plan_preparation', False) is True:
         from wqb.repair_scheduler import execute_repair_round
         return execute_repair_round(root, outcome, executor, maximum)
     all_parents = [row for row in outcome["rows"] if row["benchmark_label"] == "repairable_signal"]

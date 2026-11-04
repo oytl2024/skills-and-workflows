@@ -286,6 +286,82 @@ class ResearchGroupDriverTests(unittest.TestCase):
             initialize_group_runtime(self.paths, group)
         self.assertEqual(before, (self.paths.run_root / 'active_run.json').read_bytes())
 
+    def historical_repair(self, name='historical', selected=True):
+        """Input: name str/selected bool. Output: Path; isolated retired identity and protected evidence."""
+        from wqb.workflow_state import create_initial_state, write_run_state
+        run = self.paths.run_root / name
+        _write(run / 'run_manifest.json', dict(run_id=name, start_snapshot={}))
+        write_run_state(run / 'run_state.json', create_initial_state(
+            name, run, 'Historical authority', '2026-10-11T00:00:00Z'))
+        _write(run / 'stages/repair/repair_execution.json', dict(run_id=name,
+            attempts=[dict(plan=dict(judgment=dict(checkpoint_id='old-model-decision')))]))
+        _write(run / 'runtime_control.json', dict(desired_state='paused', request_revision='old-stop',
+            max_simulations=150, max_recoveries=3))
+        _write(run / 'runtime_status.json', dict(simulation_attempts=143, elapsed_seconds=43200))
+        _write(run / 'runtime/unknown_post.json', dict(status='unknown', identity='original-post'))
+        if selected:
+            _write(self.paths.run_root / 'active_run.json', dict(run_id=name, run_dir=str(run)))
+        return run
+
+    def test_retired_pointer_and_sibling_allow_certified_paused_group_without_history_writes(self):
+        from wqb.research_group_driver import initialize_group_runtime
+        group = self.prepared(2, live=False)
+        old = [self.historical_repair(), self.historical_repair('retired-sibling', selected=False)]
+        files = [p for run in old for p in run.rglob('*') if p.is_file()]
+        files.append(self.paths.run_root / 'active_run.json')
+        before = {p: p.read_bytes() for p in files}
+        result = initialize_group_runtime(self.paths, group)
+        self.assertEqual(result['desired_state'], 'paused')
+        self.assertEqual(json.loads((self.paths.run_root / 'active_research_group.json').read_text()),
+                         {'group_id': group['group_id']})
+        for lane in group['lanes']:
+            control = read_runtime_control(self.paths.run_root / lane['run_id'])
+            self.assertEqual(control['desired_state'], 'paused')
+            self.assertEqual(control['simulation_attempts'], 0)
+            self.assertFalse(control['enable_live_api'])
+        self.assertEqual(before, {p: p.read_bytes() for p in files})
+        self.assertEqual(set(files), {p for run in old for p in run.rglob('*') if p.is_file()}
+                         | {self.paths.run_root / 'active_run.json'})
+
+    def test_retired_history_never_waives_other_exclusivity_or_identity(self):
+        from wqb.research_group_driver import initialize_group_runtime
+        from wqb.workflow_state import create_initial_state, write_run_state
+        for damage in ('live_sibling', 'damaged_retirement', 'pointer_identity', 'state_identity',
+                       'missing_state_identity', 'missing_manifest_identity', 'missing_state',
+                       'missing_manifest', 'selected_group'):
+            with self.subTest(damage=damage):
+                self.setUp()
+                group = self.prepared(live=False)
+                run = self.historical_repair()
+                if damage == 'live_sibling':
+                    live = self.paths.run_root / 'live'
+                    write_run_state(live / 'run_state.json', create_initial_state(
+                        live.name, live, 'Separate live authority', '2026-11-03T00:00:00Z'))
+                elif damage == 'damaged_retirement':
+                    (run / 'stages/repair/repair_execution.json').write_text('{', encoding='utf-8')
+                elif damage == 'pointer_identity':
+                    _write(self.paths.run_root / 'active_run.json', dict(run_id='wrong', run_dir=str(run)))
+                elif damage in {'state_identity', 'missing_state_identity'}:
+                    state = json.loads((run / 'run_state.json').read_text())
+                    if damage == 'state_identity':
+                        state['run_dir'] = str(self.paths.run_root / 'different')
+                    else:
+                        state.pop('run_id')
+                    _write(run / 'run_state.json', state)
+                elif damage == 'missing_manifest_identity':
+                    _write(run / 'run_manifest.json', dict(start_snapshot={}))
+                elif damage == 'selected_group':
+                    _write(self.paths.run_root / 'active_research_group.json', dict(group_id='other-live-group'))
+                else:
+                    (run / ('run_state.json' if damage == 'missing_state' else 'run_manifest.json')).unlink()
+                before = {p: p.read_bytes() for p in self.paths.run_root.rglob('*') if p.is_file()}
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    initialize_group_runtime(self.paths, group)
+                self.assertEqual(before, {p: p.read_bytes() for p in before})
+                self.assertFalse((self.paths.run_root / 'lane-0/runtime_control.json').exists())
+                if damage != 'selected_group':
+                    self.assertFalse((self.paths.run_root / 'active_research_group.json').exists())
+
     def test_frozen_source_tamper_rejected_before_start(self):
         from wqb.research_group_driver import initialize_group_runtime, start_group_workers
         group = self.prepared()

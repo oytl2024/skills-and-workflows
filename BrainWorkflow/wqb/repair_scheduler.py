@@ -41,7 +41,7 @@ def _compare_attempt(parent: dict, child: dict, plan: dict, root: Path | None = 
 
 def _accepted_parent(root: Path, initial: dict, attempts: list) -> dict:
     """Input: run Path, root measured row and attempts list. Output: recomputed accepted incumbent row."""
-    from wqb.repair_planning import verify_consumed_plan
+    from wqb.repair_policy import verify_consumed_plan
     current = initial
     for attempt in attempts:
         plan = attempt.get('plan', {})
@@ -172,7 +172,7 @@ def execute_repair_round(root: Path, outcome: dict, executor: object, maximum: i
         receipt = json.loads(path.read_text(encoding='utf-8'))
         if receipt.get('run_id') != root.name or receipt.get('max_simulations') != maximum:
             return {'blocker': 'Repair reservation identity or budget changed'}
-        from wqb.repair_planning import verify_consumed_plan, RepairPlanningBlocked
+        from wqb.repair_policy import verify_consumed_plan
         try:
             for attempt in receipt.get('attempts', []):
                 if attempt.get('phase') == 'result_unknown' and quarantine_source(root, attempt) is None:
@@ -190,9 +190,9 @@ def execute_repair_round(root: Path, outcome: dict, executor: object, maximum: i
                         raise ValueError('reuse evidence changed')
                 if (attempt.get('max_simulations') == 0 and attempt.get('legacy') is False
                         and attempt.get('plan', {}).get('receipt_path')):
-                    from wqb.repair_planning import verify_consumed_plan
+                    from wqb.repair_policy import verify_consumed_plan
                     verify_consumed_plan(root, attempt['plan'])
-        except (RepairPlanningBlocked, ValueError, OSError, TypeError) as exc:
+        except (ValueError, OSError, TypeError) as exc:
             receipt.update(status='paused', recovery_eligible=False,
                 blocker='Repair persisted stop evidence invalid: ' + str(exc))
             _write(path, receipt)
@@ -268,8 +268,8 @@ def execute_repair_round(root: Path, outcome: dict, executor: object, maximum: i
                     if not budget['remaining'] or os.environ.get(DAILY_RECONCILE_ENV) == '1':
                         raise DailyBudgetExhausted(budget)
                 plan = executor.prepare(root, parent, history, maximum - reserved)
-                if getattr(executor, 'supports_ai_planning', False) is True:
-                    from wqb.repair_planning import verify_consumed_plan
+                if getattr(executor, 'supports_plan_preparation', False) is True:
+                    from wqb.repair_policy import verify_consumed_plan
                     verify_consumed_plan(root, plan)
             except DailyBudgetExhausted as exc:
                 daily_wait = exc
@@ -298,7 +298,7 @@ def execute_repair_round(root: Path, outcome: dict, executor: object, maximum: i
                     'status': 'completed', 'children': [], 'legacy': False,
                     'experiment_trace': {'schema_version': 1, 'baseline': parent,
                         'decision': plan.get('decision', {}), 'outcome': 'inconclusive',
-                        'reason': 'AI stopped before simulation; no measured effect',
+                        'reason': 'Search exhausted before simulation; no measured effect',
                         'metric_changes': {}, 'submission_qualified': False}})
                 _write(path, receipt)
                 continue
@@ -342,7 +342,7 @@ def execute_repair_round(root: Path, outcome: dict, executor: object, maximum: i
                 _write(path, receipt)
                 continue
             attempt = {'parent_alpha_id': parent['alpha_id'], 'parent_expression_hash': parent['expression_hash'], 'max_simulations': 1,
-                       'plan': plan, 'actions': [{'ai_plan': plan}], 'phase': 'ready', 'status': 'started',
+                       'plan': plan, 'actions': [{'repair_plan': plan}], 'phase': 'ready', 'status': 'started',
                        'children': [], 'legacy': False}
             if plan.get('planner_kind') == 'deterministic':
                 attempt['root_parent_key'] = key

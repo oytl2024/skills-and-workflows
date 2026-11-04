@@ -68,7 +68,7 @@ class RepairImportRecoveryTests(unittest.TestCase):
                 receipt['blocker'] = 'Repair planning failed: RepairPlanningBlocked: AI Repair action must be test or stop' + suffix
                 receipt['attempts'][0].update(phase='checked', blocker='', children=[child])
                 (root / 'stages/repair/repair_execution.json').write_text(json.dumps(receipt))
-                executor = Mock(supports_ai_planning=True, supports_durable_recovery=True)
+                executor = Mock(supports_plan_preparation=True, supports_durable_recovery=True)
                 with patch('wqb.workflow_stage_adapters._execute_repair', return_value={'blocker': 'reached planner'}) as execute:
                     advance_post_schedule_stage(root, 'repair', repair_executor=executor)
                 self.assertEqual(execute.call_count, 0 if suffix.endswith('unknown fault') else 1)
@@ -91,7 +91,7 @@ class RepairImportRecoveryTests(unittest.TestCase):
                     with (root / 'all_alphas.jsonl').open('a') as stream:
                         stream.write(json.dumps(checked_alpha('weak', alpha_id='foreign')) + '\n')
                 (root / 'stages/repair/repair_execution.json').write_text(json.dumps(receipt))
-                executor = Mock(supports_ai_planning=True, supports_durable_recovery=True)
+                executor = Mock(supports_plan_preparation=True, supports_durable_recovery=True)
                 with patch('wqb.workflow_stage_adapters._execute_repair', return_value={
                         'blocker': 'reached planner', 'status': 'paused'}) as execute:
                     result = advance_post_schedule_stage(root, 'repair', repair_executor=executor)
@@ -113,7 +113,7 @@ class RepairImportRecoveryTests(unittest.TestCase):
             root = Path(tmp)
             fixture(root)
             original = (root / 'all_alphas.jsonl').read_bytes()
-            executor = Mock(supports_ai_planning=True, supports_durable_recovery=True)
+            executor = Mock(supports_plan_preparation=True, supports_durable_recovery=True)
             for _ in range(2):
                 result = advance_post_schedule_stage(root, 'repair', repair_executor=executor, repair_max_simulations=1)
                 self.assertEqual(result['status'], 'completed', result.get('blocker'))
@@ -143,7 +143,7 @@ class RepairImportRecoveryTests(unittest.TestCase):
                 else:
                     receipt['attempts'][0]['blocker'] = 'unknown fault'
                 (root / 'stages/repair/repair_execution.json').write_text(json.dumps(receipt))
-                executor = Mock(supports_ai_planning=True, supports_durable_recovery=True)
+                executor = Mock(supports_plan_preparation=True, supports_durable_recovery=True)
                 result = advance_post_schedule_stage(root, 'repair', repair_executor=executor, repair_max_simulations=1)
                 self.assertEqual(result['status'], 'paused')
                 executor.assert_not_called()

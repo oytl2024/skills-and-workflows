@@ -91,7 +91,7 @@ class RepairUnknownTests(unittest.TestCase):
             receipt['attempts'].append(unknown)
             receipt['parent_keys'].append(['p', 'parent-hash'])
             (root / 'stages/repair/repair_execution.json').write_text(json.dumps(receipt))
-            executor = Mock(supports_ai_planning=True, supports_durable_recovery=True)
+            executor = Mock(supports_plan_preparation=True, supports_durable_recovery=True)
             result = advance_post_schedule_stage(root, 'repair', repair_executor=executor, repair_max_simulations=2)
             self.assertEqual(result['status'], 'completed', result.get('blocker'))
             executor.assert_not_called()
@@ -212,29 +212,17 @@ class RepairUnknownTests(unittest.TestCase):
 class RepairUnknownRuntimeIntegrationTests(unittest.TestCase):
     setUp = runtime_fixtures.RepairRuntimeTests.setUp
 
-    def test_new_ai_simulation_poll404_is_durable_without_second_post_or_poll(self):
-        import requests
+    def test_retired_model_repair_never_creates_new_simulation(self):
         from wqb.repair_runtime import RepairRuntimeExecutor
         parent = runtime_fixtures.parent_row()
         parent.update(benchmark_label='repairable_signal', metrics={'fitness': .5})
         (self.root / 'all_alphas.jsonl').write_text(json.dumps(parent) + '\n')
-        response = requests.Response()
-        response.status_code = 404
-        self.poll.side_effect = requests.HTTPError('progress unavailable', response=response)
-        decision = {'parent_alpha_id': parent['alpha_id'], 'parent_expression_hash': parent['expression_hash'],
-            'diagnosis': 'Low fitness.', 'economic_rationale': 'Persistence.', 'hypothesis': 'Smooth noise.',
-            'expected_improvement': 'fitness', 'risks': 'Lag.', 'action': 'test', 'edit': 'decay', 'value': 8,
-            'target_metric': 'fitness', 'target_direction': 'increase',
-            'falsification': 'Fitness unchanged.', 'applicability': 'Same signal.'}
         executor = RepairRuntimeExecutor({'ai_executor_argv': ['fake', '{input}', '{output}']}, enable_live_api=True)
-        with patch('wqb.repair_planning.run_ai_checkpoint', return_value={
-                'status': 'completed', 'summary': 'One test.', 'decision': decision}) as model:
+        with patch('wqb.ai_checkpoints.run_ai_checkpoint') as model:
             first = execute_repair_round(self.root, {'rows': [parent]}, executor, 1)
-            second = execute_repair_round(self.root, {'rows': [parent]}, executor, 1)
-        self.assertEqual(first['status'], 'completed', first.get('blocker'))
-        self.assertEqual(second['unknown_result_count'], 1)
-        self.assertEqual(second['budget_reserved'], 1)
-        self.assertEqual(self.submit.call_count, 1)
-        self.assertEqual(self.poll.call_count, 1)
-        self.assertEqual(model.call_count, 1)
-        self.assertFalse(second['attempts'][0]['children'])
+        self.assertEqual(first['status'], 'paused')
+        self.assertIn('retired', first['blocker'])
+        self.assertEqual(first['budget_reserved'], 0)
+        self.submit.assert_not_called()
+        self.poll.assert_not_called()
+        model.assert_not_called()

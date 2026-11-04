@@ -162,6 +162,14 @@ def run_ai_checkpoint(
     checkpoint = next((row for row in load_ai_checkpoints(decisions_dir) if row["checkpoint_id"] == checkpoint_id), None)
     if checkpoint is None:
         raise ValueError(f"Unknown AI checkpoint: {checkpoint_id}")
+    if checkpoint['checkpoint_type'] in {'repair_decision', 'near_miss_interpretation'}:
+        if checkpoint.get('status') == 'completed':
+            return checkpoint
+        retired = {'checkpoint_id': checkpoint_id, 'status': 'failed',
+                   'error': 'legacy AI Repair checkpoint retired'}
+        if checkpoint.get('status') != 'failed' or checkpoint.get('error') != retired['error']:
+            _append_checkpoint_event(decisions_dir, retired)
+        return {**checkpoint, **retired}
     if checkpoint.get('status') in {'unknown', 'running'} or (
             checkpoint['checkpoint_type'] in {'initial_research_plan', 'full_semantic_explanation'}
             and checkpoint.get('status') != 'pending'):
@@ -272,8 +280,6 @@ def schedule_run_checkpoint(
     specs = {
         "scout_seed": ("research_option_reasoning", "Review the selected scope and economic hypothesis before source exploration.",
                        run / "stages" / "schedule" / "research_schedule.json"),
-        "repair": ("near_miss_interpretation", "Explain the checked near miss and propose one bounded repair hypothesis.",
-                   run / "all_alphas.jsonl"),
         "user_approval": ("candidate_risk_review", "Summarize remaining risks in checked candidate evidence for human approval.",
                           run / "candidate_gate.json"),
         "complete": ("research_reflection", "Extract reusable research lessons; do not change benchmark rules automatically.",

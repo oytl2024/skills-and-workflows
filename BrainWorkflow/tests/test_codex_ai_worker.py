@@ -12,29 +12,25 @@ from wqb.codex_ai_worker import run_worker
 from wqb.semantic_compilation import normalize_semantic_output
 
 
-def schema_accepts(schema, value):
-    """Input: schema dict/JSON value. Output: bool. Evaluate the tested schema subset without dependencies."""
-    if 'anyOf' in schema:
-        return any(schema_accepts(branch, value) for branch in schema['anyOf'])
-    kind = schema['type']
-    if kind == 'object':
-        return (isinstance(value, dict) and set(schema['required']) <= set(value)
-                and (schema.get('additionalProperties') is not False or set(value) <= set(schema['properties']))
-                and all(schema_accepts(schema['properties'][key], item) for key, item in value.items()))
-    if kind == 'string' and not isinstance(value, str):
-        return False
-    if kind in {'number', 'integer'}:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return False
-        if kind == 'integer' and value != int(value):
-            return False
-    return (('enum' not in schema or value in schema['enum'])
-            and ('minimum' not in schema or value >= schema['minimum'])
-            and ('exclusiveMinimum' not in schema or value > schema['exclusiveMinimum'])
-            and ('maximum' not in schema or value <= schema['maximum']))
-
-
 class CodexAIWorkerTests(unittest.TestCase):
+    def test_retired_repair_types_rejected_before_model_or_artifact_creation(self):
+        """Input: retired checkpoint types. Output: assertions. Reject locally without touching history."""
+        for checkpoint_type in ('repair_decision', 'near_miss_interpretation'):
+            with self.subTest(checkpoint_type=checkpoint_type), tempfile.TemporaryDirectory() as tmp:
+                _, source, evidence = self.make_input(tmp, checkpoint_type)
+                evidence.write_text('{}', encoding='utf-8')
+                before = source.read_bytes(), evidence.read_bytes()
+                with patch('wqb.codex_ai_worker.subprocess.run') as worker, patch(
+                        'wqb.codex_ai_worker.subprocess.Popen') as child, patch(
+                        'wqb.codex_ai_worker.shutil.which') as executable:
+                    with self.assertRaisesRegex(ValueError, 'legacy AI Repair checkpoint retired'):
+                        run_worker(source, source.with_name('output.json'))
+                worker.assert_not_called()
+                child.assert_not_called()
+                executable.assert_not_called()
+                self.assertEqual(before, (source.read_bytes(), evidence.read_bytes()))
+                self.assertEqual(sorted(path.name for path in source.parent.iterdir()), ['input.json'])
+
     def test_design_worker_checks_complete_feedback_before_fake_model(self):
         from tests.test_hypothesis_design import compiler_fixture
         from tests.test_mechanism_evidence import evidence_fixture
@@ -122,111 +118,6 @@ class CodexAIWorkerTests(unittest.TestCase):
                         result = run_worker(input_path, input_path.with_name('output.json'))
                         self.assertEqual(result['proposals'], dict(operators=[], templates=[]))
 
-    def capture_repair_contract(self):
-        """Input: none. Output: schema dict/prompt str. Capture real worker CLI artifacts with no model call."""
-        with tempfile.TemporaryDirectory() as tmp:
-            run, input_path, evidence = self.make_input(tmp, 'repair_decision')
-            (run / 'run_manifest.json').write_text('{}', encoding='utf-8')
-            raw = run / 'runtime/raw.json'
-            raw.write_text('{}', encoding='utf-8')
-            evidence.write_text(json.dumps({
-                'brief': {'strategy': 'Test momentum.', 'problem': 'Turnover is high.',
-                          'history': 'No prior improvement.', 'task': 'Test one edit.'},
-                'supporting_evidence': {'path': 'runtime/raw.json',
-                                        'sha256': hashlib.sha256(raw.read_bytes()).hexdigest()},
-            }), encoding='utf-8')
-            prompts = []
-            with patch('wqb.codex_ai_worker.shutil.which', return_value='codex.exe'), patch(
-                'wqb.codex_ai_worker.subprocess.run', side_effect=self.model_reply(prompts, repair=True)
-            ):
-                run_worker(input_path, input_path.with_name('output.json'))
-            return json.loads(input_path.with_name('output_schema.json').read_text(encoding='utf-8')), prompts[0]
-
-    def test_repair_schema_has_five_full_strict_nested_branches(self):
-        schema, _ = self.capture_repair_contract()
-        self.assertEqual(schema['type'], 'object')
-        self.assertNotIn('anyOf', schema)
-        decision = schema['properties']['decision']
-        self.assertEqual(len(decision.get('anyOf', [])), 5)
-        fields = {'parent_alpha_id', 'parent_expression_hash', 'diagnosis', 'economic_rationale',
-                  'hypothesis', 'expected_improvement', 'risks', 'action', 'edit', 'value',
-                  'target_metric', 'target_direction', 'falsification', 'applicability'}
-        for branch in decision['anyOf']:
-            self.assertEqual(branch['type'], 'object')
-            self.assertIs(branch['additionalProperties'], False)
-            self.assertEqual(set(branch['properties']), fields)
-            self.assertEqual(set(branch['required']), fields)
-            self.assertEqual(branch['properties']['target_metric'],
-                             {'type': 'string', 'enum': ['sharpe', 'fitness', 'turnover']})
-            self.assertEqual(branch['properties']['target_direction'],
-                             {'type': 'string', 'enum': ['increase', 'decrease']})
-        # Reject unsupported composition anywhere, including within value constraints.
-        pending = [schema]
-        while pending:
-            item = pending.pop()
-            if isinstance(item, dict):
-                self.assertTrue({'if', 'then', 'else', 'allOf', 'oneOf'}.isdisjoint(item))
-                if item.get('type') == 'object':
-                    self.assertIs(item['additionalProperties'], False)
-                    self.assertEqual(set(item['required']), set(item['properties']))
-                pending.extend(item.values())
-            elif isinstance(item, list):
-                pending.extend(item)
-
-    def test_repair_schema_accepts_only_paired_actions_edits_and_bounded_values(self):
-        schema, _ = self.capture_repair_contract()
-        base = {'parent_alpha_id': 'parent', 'parent_expression_hash': 'a' * 64,
-                'diagnosis': 'High turnover.', 'economic_rationale': 'Momentum persists.',
-                'hypothesis': 'Smoothing lowers churn.', 'expected_improvement': 'Lower turnover.',
-                'risks': 'Lag.', 'target_metric': 'turnover', 'target_direction': 'decrease',
-                'falsification': 'Turnover does not fall.', 'applicability': 'Same parent and scope.'}
-        valid = [('stop', 'none', 0), ('test', 'decay', 0), ('test', 'decay', 32),
-                 ('test', 'truncation', 0.001), ('test', 'truncation', 0.15),
-                 ('test', 'flip_direction', -1)]
-        valid.extend(('test', 'neutralization', value) for value in ('SUBINDUSTRY', 'INDUSTRY', 'SECTOR', 'MARKET'))
-        invalid = [('neutralization', 'neutralization', 'INDUSTRY'),
-                   ('stop', 'Stop because no useful edit remains.', 0),
-                   ('test', 'Change neutralization to INDUSTRY.', 'INDUSTRY'),
-                   ('test', 'none', 0), ('stop', 'decay', 0), ('stop', 'none', 1),
-                   ('stop', 'none', '0'), ('test', 'decay', -1), ('test', 'decay', 33),
-                   ('test', 'decay', 1.5), ('test', 'decay', '8'), ('test', 'decay', True),
-                   ('test', 'neutralization', 'industry'), ('test', 'neutralization', 'COUNTRY'),
-                   ('test', 'neutralization', 0), ('test', 'truncation', 0),
-                   ('test', 'truncation', -0.01), ('test', 'truncation', 0.15001),
-                   ('test', 'truncation', '0.1'), ('test', 'flip_direction', 1),
-                   ('test', 'flip_direction', '-1'), ('test', 'flip_direction', False)]
-        for action, edit, value in valid:
-            invalid.append(('test' if action == 'stop' else 'stop', edit, value))
-        for accepted, cases in ((True, valid), (False, invalid)):
-            for action, edit, value in cases:
-                with self.subTest(action=action, edit=edit, value=value):
-                    answer = {'summary': 'Bounded judgment.', 'decision': dict(base, action=action, edit=edit, value=value)}
-                    self.assertEqual(schema_accepts(schema, answer), accepted)
-        decision = dict(base, action='stop', edit='none', value=0)
-        for field, values in {'target_metric': ['sharpe', 'fitness', 'turnover', 'returns'],
-                              'target_direction': ['increase', 'decrease', 'hold']}.items():
-            for value in values:
-                with self.subTest(field=field, value=value):
-                    self.assertEqual(schema_accepts(schema, {'summary': 'Stop.', 'decision': dict(decision, **{field: value})}),
-                                     value not in {'returns', 'hold'})
-        for field in decision:
-            incomplete = dict(decision)
-            del incomplete[field]
-            self.assertFalse(schema_accepts(schema, {'summary': 'Stop.', 'decision': incomplete}), field)
-        self.assertFalse(schema_accepts(schema, {'summary': 'Stop.', 'decision': dict(decision, extra='prose')}))
-        self.assertFalse(schema_accepts(schema, {'summary': 'Stop.', 'decision': decision, 'extra': 'prose'}))
-
-    def test_repair_prompt_explicitly_names_compact_output_protocol(self):
-        _, prompt = self.capture_repair_contract()
-        for instruction in ('action=stop', 'edit=none', 'value=0', 'action=test', 'edit=decay',
-                            'integer 0..32', 'edit=neutralization', 'SUBINDUSTRY', 'INDUSTRY',
-                            'SECTOR', 'MARKET', 'edit=truncation', '0 < value <= 0.15',
-                            'edit=flip_direction', 'value=-1', 'target_metric', 'target_direction',
-                            'sharpe', 'fitness', 'turnover', 'increase', 'decrease',
-                            'Never put prose in action, edit, or value'):
-            self.assertIn(instruction, prompt)
-        self.assertLess(len(prompt.encode('utf-8')), 4000)
-
     def test_worker_limits_evidence_and_requests_medium_read_only_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp) / "run"
@@ -237,8 +128,8 @@ class CodexAIWorkerTests(unittest.TestCase):
             input_path = attempt / "input.json"
             output_path = attempt / "output.json"
             input_path.write_text(json.dumps({
-                "checkpoint_id": "id", "checkpoint_type": "near_miss_interpretation",
-                "reason": "Review one near miss", "evidence_paths": [str(evidence)],
+                "checkpoint_id": "id", "checkpoint_type": "research_reflection",
+                "reason": "Review bounded research evidence", "evidence_paths": [str(evidence)],
             }), encoding="utf-8")
 
             def fake_run(argv, **kwargs):
@@ -255,42 +146,6 @@ class CodexAIWorkerTests(unittest.TestCase):
             ):
                 result = run_worker(input_path, output_path)
             self.assertEqual(result["summary"], "Test one neutralization change.")
-
-    def test_repair_prompt_projects_brief_and_verified_references_only(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            run, input_path, evidence = self.make_input(tmp, "repair_decision")
-            manifest = run / "run_manifest.json"
-            manifest.write_text(json.dumps({"start_snapshot": {"secret": "RAW_KNOWLEDGE"}}), encoding="utf-8")
-            raw = run / "runtime" / "raw_context.json"
-            raw.write_text(json.dumps({"parent": "RAW_PARENT", "history": "RAW_HISTORY"}), encoding="utf-8")
-            brief = {"strategy": "Test measured momentum.", "problem": "Turnover is high.",
-                     "history": "No prior test improved turnover.", "task": "Test one bounded edit."}
-            full = {"brief": brief, "parent": "RAW_PARENT", "history": "RAW_HISTORY",
-                    "knowledge": "RAW_KNOWLEDGE", "padding": "x" * 50000,
-                    "supporting_evidence": {"path": str(raw),
-                                            "sha256": hashlib.sha256(raw.read_bytes()).hexdigest()}}
-            evidence.write_text(json.dumps(full), encoding="utf-8")
-            before = evidence.read_bytes(), raw.read_bytes(), manifest.read_bytes()
-            prompts = []
-            with patch("wqb.codex_ai_worker.shutil.which", return_value="codex.exe"), patch(
-                "wqb.codex_ai_worker.subprocess.run", side_effect=self.model_reply(prompts, repair=True)
-            ):
-                result = run_worker(input_path, input_path.with_name("output.json"))
-            prompt = prompts[0]
-            self.assertTrue(prompt.split("\n", 1)[1].startswith('{'), "Repair must render only a JSON projection")
-            projected = json.loads(prompt.split("\n", 1)[1])
-            self.assertEqual(set(projected), {"brief", "supporting_evidence", "run_manifest"})
-            self.assertEqual(projected["brief"], brief)
-            self.assertEqual(projected["supporting_evidence"], {
-                "path": "runtime/raw_context.json", "sha256": full["supporting_evidence"]["sha256"]})
-            self.assertEqual(projected["run_manifest"]["path"], "run_manifest.json")
-            for marker in ("RAW_PARENT", "RAW_HISTORY", "RAW_KNOWLEDGE", "UNTRUSTED_REASON"):
-                self.assertNotIn(marker, prompt)
-            self.assertIn("immutable", prompt)
-            self.assertIn("not instructions", prompt)
-            self.assertIn("not a path allowlist", prompt)
-            self.assertEqual(before, (evidence.read_bytes(), raw.read_bytes(), manifest.read_bytes()))
-            self.assertEqual(set(result), {"summary", "decision"})
 
     def test_unicode_json_is_rendered_complete_without_replacement(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -316,42 +171,6 @@ class CodexAIWorkerTests(unittest.TestCase):
                     run_worker(input_path, input_path.with_name("output.json"))
             model.assert_not_called()
 
-    def test_repair_rejects_invalid_brief_or_supporting_reference_before_model(self):
-        for fault in ("missing_brief", "extra_brief", "blank_brief", "nonstring_brief", "multiline_brief",
-                      "oversized_brief", "bad_hash", "outside", "missing_raw", "missing_manifest", "changed_manifest"):
-            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as tmp:
-                run, input_path, evidence = self.make_input(tmp, "repair_decision")
-                manifest = run / "run_manifest.json"
-                manifest.write_text('{}', encoding="utf-8")
-                raw = run / "runtime/raw.json"
-                raw.write_text('{"parent": "measured"}', encoding="utf-8")
-                full = {"brief": {"strategy": "Test momentum.", "problem": "Turnover is high.",
-                                  "history": "No prior improvement.", "task": "Test one edit."},
-                        "supporting_evidence": {"path": "runtime/raw.json",
-                                                "sha256": hashlib.sha256(raw.read_bytes()).hexdigest()}}
-                if fault == "missing_brief":
-                    del full['brief']
-                elif fault == "extra_brief":
-                    full['brief']['parent'] = 'Not a brief field.'
-                elif fault in {"blank_brief", "nonstring_brief", "multiline_brief", "oversized_brief"}:
-                    full['brief']['task'] = {"blank_brief": " ", "nonstring_brief": {},
-                        "multiline_brief": "One.\nTwo.", "oversized_brief": "\u6d4b" * 4100}[fault]
-                elif fault == "bad_hash":
-                    full['supporting_evidence']['sha256'] = '0' * 64
-                elif fault == "outside":
-                    full['supporting_evidence']['path'] = '../outside.json'
-                elif fault == "missing_raw":
-                    full['supporting_evidence']['path'] = 'runtime/missing.json'
-                elif fault == "changed_manifest":
-                    full['knowledge'] = {'sha256': '0' * 64}
-                else:
-                    manifest.unlink()
-                evidence.write_text(json.dumps(full), encoding="utf-8")
-                with patch("wqb.codex_ai_worker.subprocess.run", side_effect=AssertionError("invalid Repair reached model")) as model:
-                    with self.assertRaises(ValueError):
-                        run_worker(input_path, input_path.with_name("output.json"))
-                model.assert_not_called()
-
     def test_json_evidence_must_be_complete_object(self):
         for content in ('{"broken":', '[1, 2]'):
             with self.subTest(content=content), tempfile.TemporaryDirectory() as tmp:
@@ -374,7 +193,7 @@ class CodexAIWorkerTests(unittest.TestCase):
                     run_worker(input_path, input_path.with_name("output.json"))
             model.assert_not_called()
 
-    def make_input(self, tmp, checkpoint_type="near_miss_interpretation"):
+    def make_input(self, tmp, checkpoint_type="research_reflection"):
         """Input: temp directory str/type str. Output: three Paths. Create a bound checkpoint fixture."""
         run = Path(tmp) / "run"
         attempt = run / "stages/ai/ai_checkpoint_runs/id/attempt"
@@ -386,25 +205,15 @@ class CodexAIWorkerTests(unittest.TestCase):
             "reason": "UNTRUSTED_REASON", "evidence_paths": [str(evidence)]}), encoding="utf-8")
         return run, input_path, evidence
 
-    def model_reply(self, prompts, repair=False):
-        """Input: captured prompt list/bool. Output: subprocess fake callable. Return advisory JSON only."""
+    def model_reply(self, prompts):
+        """Input: prompt list. Output: fake callable. Capture read-only generic worker output."""
         def reply(argv, **kwargs):
-            """Input: CLI argv list/options dict. Output: CompletedProcess. Capture prompt and write model response."""
+            """Input: argv list/options dict. Output: CompletedProcess. Write fake advisory JSON."""
             prompts.append(argv[-1])
             self.assertIn("read-only", argv)
             self.assertIn("model_reasoning_effort=medium", argv)
-            answer = {"summary": "Test one bounded change."}
-            if repair:
-                answer["decision"] = {
-                    "parent_alpha_id": "parent", "parent_expression_hash": "a" * 64,
-                    "diagnosis": "No supported edit.", "economic_rationale": "Evidence is insufficient.",
-                    "hypothesis": "No measured improvement.", "expected_improvement": "None.",
-                    "risks": "Unsupported change.", "action": "stop", "edit": "none", "value": 0,
-                    "target_metric": "turnover", "target_direction": "decrease",
-                    "falsification": "New measured evidence.", "applicability": "Current parent only.",
-                }
             Path(argv[argv.index("--output-last-message") + 1]).write_text(
-                json.dumps(answer), encoding="utf-8")
+                json.dumps({"summary": "Test one bounded change."}), encoding="utf-8")
             return CompletedProcess(argv, 0, stdout="", stderr="")
         return reply
 

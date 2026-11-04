@@ -22,6 +22,7 @@ from wqb.research_group import _digest, _guard, _read, read_group, discover_grou
 from wqb.runtime_control import (_write, read_runtime_control, request_runtime_state,
     update_runtime_status, has_runtime_authority, utc_now)
 from wqb.source_run_lock import read_source_run_lock
+from wqb.research_retirement import retirement_boundary
 from wqb.owned_network_deadline import (OwnedExecutionTree, OwnedSubmissionFence, JOB_ENV, NONCE_ENV,
     DEFAULT_REQUEST_TIMEOUT_SECONDS, SUPERVISION_POLL_SECONDS, TERMINATION_WAIT_SECONDS,
     hex_identity, positive_number)
@@ -95,6 +96,21 @@ def _prepared(paths, group: Path) -> tuple[dict, list]:
     return row, results
 
 
+def _read_only_retired(run: Path) -> bool:
+    """Input: safe run Path. Output: bool; exempt only positively retired, identity-bound history."""
+    boundary = retirement_boundary(run)
+    if boundary is None:
+        return False
+    if boundary.get('status') != 'retired' or boundary.get('read_only') is not True:
+        raise ValueError('damaged retirement evidence cannot permit a new group')
+    manifest = _read(_safe(run / 'run_manifest.json'))
+    state = _read(_safe(run / 'run_state.json'))
+    if (manifest.get('run_id') != run.name or state.get('run_id') != run.name
+            or _safe(state.get('run_dir', '')) != run):
+        raise ValueError('retired mission identity evidence is incomplete or inconsistent')
+    return True
+
+
 def _exclusive(paths, row):
     """Input: paths/verified group dict. Output: None; refuse unrelated legacy/group activity."""
     root = _safe(paths.run_root)
@@ -108,11 +124,14 @@ def _exclusive(paths, row):
         if run.parent != root or saved.get('run_id') != run.name:
             raise ValueError('invalid legacy active pointer')
         state = _read(_safe(run / 'run_state.json')) if (run / 'run_state.json').exists() else {}
-        if state.get('status') not in TERMINAL:
+        if not _read_only_retired(run) and state.get('status') not in TERMINAL:
             raise ValueError('unrelated active legacy mission; group cannot adopt or replace it')
     ids = {l['run_id'] for l in row['lanes']}
     for run in root.iterdir():
         if run.name in ids or not run.is_dir():
+            continue
+        run = _safe(run)
+        if _read_only_retired(run):
             continue
         state_path = run / 'run_state.json'
         if state_path.exists() and _read(_safe(state_path)).get('status') not in TERMINAL:

@@ -82,7 +82,7 @@ class DeterministicRepairIntegrationTests(unittest.TestCase):
         test = self
 
         class Executor:
-            supports_ai_planning = True
+            supports_plan_preparation = True
             supports_durable_recovery = True
 
             def prepare(self, root, current, history, maximum):
@@ -93,11 +93,11 @@ class DeterministicRepairIntegrationTests(unittest.TestCase):
                 """Input: genuine frozen plan. Output: real checked CLI row; cache reuse must skip this path."""
                 executions.append(current['alpha_id'])
                 test.assertEqual(maximum, 1)
-                plan = actions[0]['ai_plan']
+                plan = actions[0]['repair_plan']
                 return [measure(plan['variants'][0], root / 'stages/repair/offline-executed')]
 
         with patch.dict(os.environ, {CONTROL_ENV: str(run)}), patch(
-                'wqb.repair_planning.run_ai_checkpoint', side_effect=AssertionError('No late model')):
+                'wqb.ai_checkpoints.run_ai_checkpoint', side_effect=AssertionError('No late model')):
             first = execute_repair_round(run, dict(rows=[parent]), Executor(), 3)
             self.assertEqual(first['attempts'][0]['experiment_trace']['outcome'], 'accepted', first.get('blocker'))
             incumbent = first['attempts'][0]['children'][0]
@@ -188,7 +188,7 @@ class DeterministicRepairIntegrationTests(unittest.TestCase):
             (root / 'all_alphas.jsonl').write_text(json.dumps(parent) + '\n')
             seen = []
             class Executor:
-                supports_ai_planning = True
+                supports_plan_preparation = True
                 supports_durable_recovery = True
 
                 def prepare(self, run, current, history, maximum):
@@ -199,7 +199,7 @@ class DeterministicRepairIntegrationTests(unittest.TestCase):
                     """Input: fixture execution. Output: checked rows; second test regresses fitness."""
                     seen.append(current['alpha_id'])
                     index = len(seen)
-                    variant = actions[0]['ai_plan']['variants'][0]
+                    variant = actions[0]['repair_plan']['variants'][0]
                     return [{**variant, 'alpha_id': f'child-{index}', 'status': 'CHECKED',
                              'failed': ['LOW_FITNESS'], 'pending': [], 'hard_pass': False,
                              'metrics': dict(sharpe=1.4, fitness=.9 if index != 2 else .7,
@@ -227,7 +227,7 @@ class DeterministicRepairIntegrationTests(unittest.TestCase):
             root = Path(tmp)
             parent, _, context = self.fixture(root)
             with patch('wqb.hypothesis_selection.validate_operational_resource_context', return_value=context), patch(
-                    'wqb.repair_planning.run_ai_checkpoint', side_effect=AssertionError('unexpected AI')):
+                    'wqb.ai_checkpoints.run_ai_checkpoint', side_effect=AssertionError('unexpected AI')):
                 plan = prepare_persisted_search(root, parent, [], 8)
                 self.assertEqual(len(plan['variants']), 1)
                 self.assertEqual(plan['planner_kind'], 'deterministic')

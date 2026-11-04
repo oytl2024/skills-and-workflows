@@ -126,8 +126,31 @@ def _selection(form: dict) -> dict:
 def _source_intent(runs_root: Path) -> dict:
     """Input: runs Path. Output: source identity dict. Bind preparation to the existing run and user intent."""
     active = discover_active_workflow(runs_root)
+    if active.run_dir is not None:
+        from wqb.research_retirement import retirement_boundary
+        boundary = retirement_boundary(active.run_dir)
+        if boundary is not None and boundary['status'] == 'retired':
+            return {'run_dir': '', 'request_revision': '', 'retired_run_dir': str(active.run_dir),
+                    'retired_request_revision': read_runtime_control(active.run_dir).get('request_revision', '')}
     return {"run_dir": str(active.run_dir) if active.run_dir else "",
             "request_revision": read_runtime_control(active.run_dir).get("request_revision", "") if active.run_dir else ""}
+
+
+def _require_retired_intent(runs_root: Path, intent: dict) -> None:
+    """Input: runs Path and captured intent dict. Output: None or ValueError. Retain historical identity/Stop CAS."""
+    selected = intent.get('retired_run_dir')
+    if not selected:
+        return
+    from wqb.workflow_state import load_active_run
+    from wqb.research_retirement import retirement_boundary
+    run = Path(selected)
+    pointer = load_active_run(runs_root)
+    boundary = retirement_boundary(run)
+    if (run.resolve().parent != Path(runs_root).resolve() or pointer is None
+            or Path(pointer.get('run_dir', '')).resolve() != run.resolve()
+            or pointer.get('run_id') != run.name or boundary is None or boundary['status'] != 'retired'
+            or read_runtime_control(run).get('request_revision', '') != intent.get('retired_request_revision')):
+        raise ValueError('retired source runtime intent changed during preparation')
 
 
 def register_start(paths, form: dict, job_id: str) -> dict:
@@ -322,6 +345,7 @@ def _execute_preplanned_start(paths, original: dict) -> dict:
             row = read_start_request(paths.runs_root)
             if row.get('request_id') != original['request_id'] or row.get('status') not in PREPARING_STATUSES:
                 raise ValueError('Console Start cancelled or superseded before model')
+            _require_retired_intent(paths.runs_root, original.get('source_intent', {}))
             if row.get('group_dir') and (row['group_dir'] != group['group_dir']
                     or row['group_request_revision'] != group['request_revision']):
                 raise ValueError('original group Start revision changed')
@@ -333,6 +357,7 @@ def _execute_preplanned_start(paths, original: dict) -> dict:
         return runners[run](brief)
 
     try:
+        _require_retired_intent(paths.runs_root, original.get('source_intent', {}))
         if original.get('source_intent', {}).get('run_dir') or original['source_intent'] != _source_intent(paths.runs_root):
             raise ValueError('preplanned Start requires idle unchanged runtime intent')
         scope = config.get('selected_scope', {})
@@ -355,6 +380,7 @@ def _execute_preplanned_start(paths, original: dict) -> dict:
                     or read_group(Path(group['group_dir']))['request_revision'] != row['group_request_revision']):
                 raise ValueError('preplanned Start group revision changed before commit')
             current_intent = _source_intent(paths.runs_root)
+            _require_retired_intent(paths.runs_root, original.get('source_intent', {}))
             own_runs = {str((paths.runs_root / lane['run_id']).resolve()) for lane in group['lanes']}
             if current_intent['run_dir'] and str(Path(current_intent['run_dir']).resolve()) not in own_runs:
                 raise ValueError('source runtime intent changed before group commit')

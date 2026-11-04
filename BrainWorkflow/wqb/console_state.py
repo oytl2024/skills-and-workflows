@@ -27,7 +27,8 @@ from wqb.template_library import load_template_library, template_matrix_summary
 from wqb.workflow_proposals import load_workflow_proposals
 from wqb.workflow_events import read_workflow_events
 from wqb.workflow_paths import resolve_project_root, resolve_run_root
-from wqb.workflow_state import diagnose_state_consistency, discover_active_workflow
+from wqb.workflow_state import diagnose_state_consistency
+from wqb.research_retirement import discover_retirement_aware_workflow
 from wqb.console_timeline import build_timeline_rows, select_current_work
 from wqb.strategy_progress import load_strategy_progress
 
@@ -404,7 +405,12 @@ def _milestone_summary(path: Path) -> dict[str, str]:
 
 def _active_workflow_summary(runs_root: Path) -> tuple[dict[str, Any], Path | None]:
     """Input: runs root. Output: workflow summary and run dir. Read active Orchestrator state once."""
-    discovery = discover_active_workflow(runs_root)
+    discovery = discover_retirement_aware_workflow(runs_root)
+    if discovery.run_dir is not None:
+        from wqb.research_retirement import retirement_boundary
+        boundary = retirement_boundary(discovery.run_dir)
+        if boundary is not None:
+            return {**boundary, 'exists': True, 'state_exists': discovery.state is not None}, discovery.run_dir
     if discovery.state is None and discovery.run_dir is None:
         return {"exists": False}, None
     if discovery.state is None:
@@ -607,7 +613,7 @@ def load_runtime_state(paths: ConsolePaths) -> dict[str, Any]:
     decision = None
     runtime_control = {}
     source_dir = None
-    if active_run_dir is not None:
+    if active_run_dir is not None and not active_workflow.get('read_only'):
         binding = _read_json(active_run_dir / 'stages/scout_seed/source_bridge_binding.json')
         if binding.get('source_run_dir'):
             source_dir = Path(binding['source_run_dir'])
@@ -665,8 +671,8 @@ def load_runtime_state(paths: ConsolePaths) -> dict[str, Any]:
         repair = _read_json(active_run_dir / 'stages/repair/repair_execution.json')
         base_state['repair_progress'] = [{'parent_alpha_id': a.get('parent_alpha_id'),
             'phase': a.get('phase', a.get('status')), 'next_poll_at': a.get('next_poll_at'),
-            'hypothesis': a.get('plan', {}).get('decision', {}).get('hypothesis', 'Frozen legacy plan'),
-            'ai_status': a.get('plan', {}).get('status', 'not_ai_generated')}
+            'hypothesis': a.get('plan', {}).get('decision', {}).get('hypothesis', 'Frozen search plan'),
+            'plan_status': a.get('plan', {}).get('status', 'historical')}
             for a in repair.get('attempts', [])]
         decisions = []
         for receipt_path in sorted((active_run_dir / 'runtime/repair_decisions').glob('*.json')):
@@ -675,14 +681,14 @@ def load_runtime_state(paths: ConsolePaths) -> dict[str, Any]:
             decision = _read_json(receipt_path)
             decisions.append({'checkpoint_type': 'Repair execution decision', 'status': decision.get('status'),
                               'reason': decision.get('decision', {}).get('hypothesis', decision.get('reason', ''))})
-        base_state['run_ai_checkpoints'].extend(decisions[-8:])
+        base_state['repair_decisions'] = decisions[-8:]
     project_start_readiness(paths, base_state)
     timeline = build_timeline_rows(base_state)
     base_state["timeline"] = timeline
     base_state["current_work"] = select_current_work(base_state, timeline)
     if active_workflow.get('current_stage') == 'repair':
         base_state['current_work'].setdefault('details', []).extend(
-            f"{row['parent_alpha_id']}: {row['phase']}; AI={row['ai_status']}; next={row['next_poll_at'] or 'ready'}; {row['hypothesis']}"
+            f"{row['parent_alpha_id']}: {row['phase']}; search={row['plan_status']}; next={row['next_poll_at'] or 'ready'}; {row['hypothesis']}"
             for row in base_state.get('repair_progress', []))
     return base_state
 
@@ -695,6 +701,6 @@ def load_console_state(paths: ConsolePaths) -> dict[str, Any]:
     state['current_work'] = select_current_work(state, state['timeline'])
     if (state.get('active_workflow') or {}).get('current_stage') == 'repair':
         state['current_work'].setdefault('details', []).extend(
-            f"{row['parent_alpha_id']}: {row['phase']}; AI={row['ai_status']}; next={row['next_poll_at'] or 'ready'}; {row['hypothesis']}"
+            f"{row['parent_alpha_id']}: {row['phase']}; search={row['plan_status']}; next={row['next_poll_at'] or 'ready'}; {row['hypothesis']}"
             for row in state.get('repair_progress', []))
     return state

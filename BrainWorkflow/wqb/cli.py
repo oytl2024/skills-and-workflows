@@ -4090,6 +4090,9 @@ def main() -> None:
             from wqb.workflow_auto_continue import auto_continue_workflow
 
             source_status = orchestrator.status()
+            if source_status.get('read_only') is True:
+                print(json.dumps(source_status, ensure_ascii=False, indent=2))
+                return
             if source_status.get('active') and source_status.get('run_dir'):
                 config = {**config, 'active_workflow_run_dir': source_status['run_dir']}
 

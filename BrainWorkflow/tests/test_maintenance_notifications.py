@@ -12,6 +12,25 @@ from wqb.runtime_control import request_runtime_state
 
 
 class MaintenanceNotificationTests(unittest.TestCase):
+    def test_retired_mission_has_no_startup_proof_notice_or_case_mutation(self):
+        """Input: retired frozen policy. Output: assertions. Do not renew maintenance work for read-only history."""
+        from types import SimpleNamespace
+        from wqb.maintenance_notifications import dispatch_startup_notifications
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = root / 'retired'
+            run.mkdir()
+            manifest = run / 'run_manifest.json'
+            manifest.write_text(json.dumps({'start_snapshot': {
+                'research_policy': {'deterministic_repair': False}}}), encoding='utf-8')
+            before = {p: p.read_bytes() for p in run.rglob('*') if p.is_file()}
+            with patch('wqb.workflow_state.discover_active_workflow', return_value=SimpleNamespace(run_dir=run)), patch(
+                    'wqb.maintenance_notifications.read_current_recovery_case', side_effect=AssertionError('read-only history')), patch(
+                    'wqb.maintenance_notifications.subprocess.run') as send:
+                self.assertEqual(dispatch_startup_notifications(root)['status'], 'not_needed')
+            send.assert_not_called()
+            self.assertEqual(before, {p: p.read_bytes() for p in run.rglob('*') if p.is_file()})
+
     def test_startup_routes_stale_proof_once_without_resuming_paused_run(self):
         """Input: paused run with stale verification. Output: assertions. Startup queues one evidence-only notice."""
         from types import SimpleNamespace

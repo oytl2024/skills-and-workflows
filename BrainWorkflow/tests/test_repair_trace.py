@@ -60,15 +60,6 @@ class RepairTraceTests(unittest.TestCase):
         self.child['metrics'] = ['not measured']
         self.assertEqual(compare_repair_experiment(self.parent, self.child, self.decision)['outcome'], 'inconclusive')
 
-    def test_legacy_validation_keeps_original_supported_edit(self):
-        from wqb.repair_planning import validate_repair_decision
-        decision = {key: value for key, value in self.decision.items()
-                    if key not in ('target_metric', 'target_direction', 'falsification', 'applicability')}
-        decision.update(parent_alpha_id='p', parent_expression_hash='ph', diagnosis='weak fitness',
-                        economic_rationale='persistent signal', expected_improvement='fitness', risks='lag')
-        evidence = {'parent': self.parent | {'parent_alpha_id': 'p', 'parent_expression_hash': 'ph'}, 'history': []}
-        self.assertEqual(validate_repair_decision(decision, evidence)['settings']['decay'], 8)
-
     def test_target_gain_with_other_metric_regression_not_accepted(self):
         self.child['metrics']['sharpe'] = .1
         self.assertEqual(compare_repair_experiment(self.parent, self.child, self.decision)['outcome'], 'reject')

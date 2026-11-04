@@ -36,10 +36,10 @@ def main() -> None:
         assert page.get_by_text('Enable live source recovery').count() == 0
         state['strategy_progress'] = {'rows': [{'key': 'example', 'alpha_id': 'local-fixture',
             'status': 'running', 'failures': [], 'next_action': 'waiting for checks'}]}
-        state['ai_checkpoints'] = [{'checkpoint_id': 'ai-browser', 'checkpoint_type': 'near_miss_interpretation',
-                                    'reason': 'Review the near miss', 'status': 'pending'}]
+        state['ai_checkpoints'] = [{'checkpoint_id': 'ai-browser', 'checkpoint_type': 'research_reflection',
+                                    'reason': 'Summarize research evidence', 'status': 'pending'}]
         page.locator('#strategy-progress-body').get_by_text('local-fixture').wait_for(timeout=10000)
-        page.get_by_text('near_miss_interpretation').wait_for(timeout=10000)
+        page.get_by_text('research_reflection').wait_for(timeout=10000)
         assert resume.is_visible(), 'SSE removed the resume control'
         assert 'Live' in page.locator('#runtime-connection').inner_text()
         page.screenshot(path=str(output / 'desktop.png'), full_page=True)

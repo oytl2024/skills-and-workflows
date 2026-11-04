@@ -242,7 +242,7 @@ class CompiledRepairTests(unittest.TestCase):
         test = self
 
         class Executor:
-            supports_ai_planning = True
+            supports_plan_preparation = True
             supports_durable_recovery = True
 
             def prepare(self, root, current, history, maximum):
@@ -251,7 +251,7 @@ class CompiledRepairTests(unittest.TestCase):
 
             def __call__(self, root, current, actions, maximum):
                 """Input: scheduler immutable action. Output: genuine checked CLI row through fake HTTP only."""
-                plan = verify_persisted_search(root, actions[0]['ai_plan'])
+                plan = verify_persisted_search(root, actions[0]['repair_plan'])
                 variant = plan['variants'][0]
                 node = ast.parse(variant['expression'], mode='eval').body
                 test.assertEqual(ast.dump(node.args[0]), ast.dump(ast.parse(current['expression'], mode='eval').body))
@@ -268,7 +268,7 @@ class CompiledRepairTests(unittest.TestCase):
 
         before = read_daily_budget(run)['used']
         with patch.dict(os.environ, {CONTROL_ENV: str(run)}), patch(
-                'wqb.repair_planning.run_ai_checkpoint', side_effect=AssertionError('No late model')):
+                'wqb.ai_checkpoints.run_ai_checkpoint', side_effect=AssertionError('No late model')):
             first = execute_repair_round(run, dict(rows=[parent]), Executor(), 2)
             self.assertEqual(first['attempts'][0]['experiment_trace']['outcome'], 'accepted', first.get('blocker'))
             incumbent = first['attempts'][0]['children'][0]

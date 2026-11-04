@@ -19,9 +19,16 @@ QUEUE_TIMEOUT_SECONDS = 15
 def dispatch_startup_notifications(runs_root: Path) -> dict:
     """Input: runs root Path. Output: delivery dict. Route one stale-proof startup event without changing Pause or approvals."""
     from wqb.workflow_state import discover_active_workflow
-    run = discover_active_workflow(runs_root).run_dir
+    from wqb.research_retirement import retirement_boundary, discover_retirement_aware_workflow
+    discovery = discover_active_workflow(runs_root)
+    if getattr(discovery, 'diagnostics', []) == ['multiple_active_runs']:
+        discovery = discover_retirement_aware_workflow(runs_root)
+    run = discovery.run_dir
     if run is None:
         return {"status": "not_needed"}
+    boundary = retirement_boundary(run)
+    if boundary is not None and boundary['status'] == 'retired':
+        return {'status': 'not_needed', 'reason': 'retired_history'}
     case = read_current_recovery_case(run)
     if case.get("verification_error") != "maintenance_verification_stale":
         return {"status": "not_needed"}

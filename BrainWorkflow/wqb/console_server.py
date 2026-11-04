@@ -325,10 +325,11 @@ def _workflow_action_state(state: dict[str, Any]) -> dict[str, bool]:
                          and scope['planned'] > 0 and scope.get('remaining') == 0
                          and scope.get('checked', 0) >= scope['planned'] and not worker_running)
     preparing = (state.get("start_preparation") or {}).get("status") in {"preparing", "validating", "committing"}
+    retired = active.get('status') == 'retired' and active.get('read_only') is True
     return {
-        "continue_workflow": active_exists and not preparing and not maintenance_blocked and not worker_running and not confirmation_required,
+        "continue_workflow": active_exists and not active.get('read_only') and not preparing and not maintenance_blocked and not worker_running and not confirmation_required,
         "stop_workflow": active_exists or preparing,
-        "start_workflow": (not active_exists or original_finished) and not preparing,
+        "start_workflow": (not active_exists or original_finished or retired and not worker_running) and not preparing,
     }
 
 

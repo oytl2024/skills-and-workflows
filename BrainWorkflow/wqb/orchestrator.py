@@ -20,6 +20,7 @@ from wqb.candidate_queue import (
     validate_candidate_approval,
 )
 from wqb.lockfile import exclusive_json_lock
+from wqb.research_retirement import retirement_boundary, discover_retirement_aware_workflow
 from wqb.research_record import (
     empty_research_record,
     load_research_record,
@@ -56,7 +57,6 @@ from wqb.workflow_state import (
     clear_active_run,
     create_initial_state,
     diagnose_state_consistency,
-    discover_active_workflow,
     load_run_state,
     transition_run_state,
     write_active_run,
@@ -192,7 +192,7 @@ class WorkflowOrchestrator:
         state = replace(state, next_action="workflow-continue")
         write_run_state(run_dir / STATE_FILENAME, state)
         append_workflow_event(run_dir, "workflow_created", manifest, created_at)
-        if discovery.state is not None:
+        if discovery.state is not None and retirement_boundary(Path(discovery.state.run_dir)) is None:
             old = transition_run_state(discovery.state, 'aborted', 'finished original-only scope superseded by explicit new Start')
             write_run_state(Path(old.run_dir) / STATE_FILENAME, replace(old, updated_at=created_at))
             append_workflow_event(old.run_dir, 'workflow_aborted',
@@ -208,6 +208,10 @@ class WorkflowOrchestrator:
     def _status_unlocked(self) -> dict[str, object]:
         """Input: none. Output: status summary. Read and repair status under mutation lock."""
         discovery = self._active_discovery()
+        if discovery.run_dir is not None:
+            boundary = retirement_boundary(discovery.run_dir)
+            if boundary is not None:
+                return boundary
         state = discovery.state
         if state is None:
             damaged = self._discovery_is_damaged(discovery)
@@ -236,6 +240,10 @@ class WorkflowOrchestrator:
     def _resume_unlocked(self, resumed_at: str) -> dict[str, object]:
         """Input: timestamp. Output: status summary. Resume while caller holds mutation lock."""
         discovery = self._active_discovery()
+        if discovery.run_dir is not None:
+            boundary = retirement_boundary(discovery.run_dir)
+            if boundary is not None:
+                return boundary
         state = discovery.state
         if state is None:
             return self._missing_state_summary(discovery)
@@ -415,6 +423,19 @@ class WorkflowOrchestrator:
     def _continue_once_unlocked(self, now: str) -> dict[str, object]:
         """Input: timestamp. Output: status summary. Advance one stage while mutation lock is held."""
         discovery = self._active_discovery()
+        if discovery.run_dir is not None:
+            boundary = retirement_boundary(discovery.run_dir)
+            if boundary is not None:
+                state = discovery.state
+                if boundary['status'] == 'damaged' and state is not None and state.current_stage == 'schedule':
+                    blocker = str(boundary['pause_reason'])
+                    state = transition_run_state(state, 'failed', blocker)
+                    state = self._set_stage(state, 'schedule', 'failed', now, blocker=blocker)
+                    write_run_state(Path(state.run_dir) / STATE_FILENAME, state)
+                    append_workflow_event(state.run_dir, 'stage_failed',
+                                          {'stage': 'schedule', 'message': blocker}, now)
+                    return {**self._summary(state, [blocker]), 'next_action': ''}
+                return boundary
         state = discovery.state
         if state is None:
             return self._missing_state_summary(discovery)
@@ -1202,7 +1223,9 @@ class WorkflowOrchestrator:
         if self.bound_run_dir is not None:
             from wqb.research_group import discover_group_lane
             return discover_group_lane(self.paths.run_root, self.bound_run_dir)
-        discovery = discover_active_workflow(self.paths.run_root)
+        discovery = discover_retirement_aware_workflow(self.paths.run_root)
+        if discovery.run_dir is not None and retirement_boundary(discovery.run_dir) is not None:
+            return discovery
         if (
             discovery.state is None
             and discovery.run_dir is not None
@@ -1230,7 +1253,11 @@ class WorkflowOrchestrator:
         return discovery
 
     def _start_is_allowed(self, discovery: WorkflowStateDiscovery) -> bool:
-        """Input: active discovery. Output: whether start is safe. Allow only a clean no-active-run result."""
+        """Input: discovery. Output: bool. Allow a new Start beside retired evidence, never resume its authority."""
+        if discovery.run_dir is not None:
+            boundary = retirement_boundary(discovery.run_dir)
+            if boundary is not None:
+                return boundary['status'] == 'retired'
         if discovery.state is not None and not discovery.diagnostics:
             from wqb.research_rounds import completed_original_batch
             return completed_original_batch(Path(discovery.state.run_dir))

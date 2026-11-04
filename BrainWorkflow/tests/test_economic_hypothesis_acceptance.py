@@ -782,129 +782,21 @@ class EconomicHypothesisAcceptanceTests(unittest.TestCase):
         self.assertEqual(result['execution'], 'executed', result)
         self.assertEqual(read_json(run / 'stages/batch_generation/discovery_execution.json')['status'], 'completed')
 
-    def test_raw_compile_to_scout_seed_discovery_repair_record_and_incremental_compile(self):
-        """Input: FAKE raw/model/platform only. Output: assertions. No manual import, copied result files or advanced stage fixtures."""
-        engine, run, release = self.compile_and_start()
-        manifest_bytes = (run / 'run_manifest.json').read_bytes()
-        calls = []
-
-        def source_runner(config, metadata):
-            """Input: real auto-continue config/metadata. Output: source receipt. Consume actual model plan through actual CLI."""
-            calls.append('scout')
-            self.assertEqual(metadata['hypothesis_binding_version'], 2)
-            config.update(research_planning.prepare_source_plan(run, config, metadata, NOW))
-            recorder, client, summaries = self.source_batch(run, plan_config=config)
-            self.assertEqual(len(summaries), 2)
-            return dict(status='completed', run_dir=str(recorder.run_dir))
-
-        def discovery(active, parent):
-            """Input: actual workflow seed. Output: real Discovery adapter children. Fake platform transport only."""
-            calls.append('discovery')
-            return self.execute_discovery(active, parent)
-
-        config = dict(self.config, ai_executor_argv=FAKE_ARGV)
-
-        def model_answer(payload, active):
-            """Input: actual checkpoint/run. Output: fake model JSON. Exercise both planner and Repair schemas."""
-            if payload['checkpoint_type'] != 'repair_decision':
-                return self.choose_bindings(payload, active)
-            evidence = read_json(Path(payload['evidence_paths'][0]))
-            parent = evidence['parent']
-            return dict(summary=FAKE_LABEL, decision=dict(
-                parent_alpha_id=parent['parent_alpha_id'], parent_expression_hash=parent['parent_expression_hash'],
-                diagnosis='Measured fitness is below its threshold.', economic_rationale='The frozen resilience mechanism may persist.',
-                hypothesis='Slower holding may reduce transient noise.', expected_improvement='Higher measured fitness.',
-                risks='Smoothing may lag new information.', action='test', edit='decay', value=32,
-                target_metric='fitness', target_direction='increase', falsification='Fitness does not improve.',
-                applicability='Only the measured seed and its frozen binding.'))
-
-        def repair_client(transport_config):
-            """Input: actual client configuration. Output: fake transport bound to an executor-created plan, never a manual child."""
-            plans = list((run / 'stages/repair/parents').rglob('repair_plan.json'))
-            pending = [path for path in plans if not RunRecorder(path.parent).read_jsonl('all_alphas.jsonl')]
-            self.assertEqual(len(pending), 1)
-            plan_path = pending[0]
-            plan = read_json(plan_path)
-            self.assertLessEqual(len(plan['variants']), plan['maximum'])
-            self.assertLessEqual(plan['maximum'], 8)
-            parent = next(row for row in RunRecorder(run).read_jsonl('all_alphas.jsonl')
-                          if row['alpha_id'] == plan['parent_alpha_id'] and row['expression_hash'] == plan['parent_expression_hash'])
-            client = FakePlatform(self, RunRecorder(plan_path.parent), 'qualified')
-            client.repair_parent = parent
-            calls.append('repair')
-            return client
-
-        repair = RepairRuntimeExecutor(config, enable_live_api=True)
-        with FakeCodexBoundary(model_answer) as boundary, patch('wqb.cli.build_client', side_effect=repair_client):
-            result = {}
-            for _ in range(25):
-                result = auto_continue_workflow(self.paths, config, NOW, enable_live_api=True,
-                    source_batch_runner=source_runner, discovery_executor=discovery, repair_executor=repair)
-                if result.get('status') in {'waiting_for_user', 'failed'}:
-                    break
-        repair_receipt = run / 'stages/repair/repair_execution.json'
-        diagnostic = read_json(repair_receipt) if repair_receipt.exists() else {}
-        self.assertEqual(result.get('status'), 'waiting_for_user',
-                         (result, calls, boundary.errors, diagnostic.get('status'), diagnostic.get('blocker'),
-                          [(row.get('phase'), row.get('blocker')) for row in diagnostic.get('attempts', [])]))
-        self.assertEqual(calls.count('scout'), 1)
-        self.assertEqual(calls.count('discovery'), 1)
-        self.assertIn('repair', calls)
-        decisions = [path for path in (run / 'runtime/repair_decisions').glob('*.json')
-                     if not path.name.endswith(('.input.json', '.support.json'))]
-        self.assertTrue(decisions, 'Whole-flow acceptance must consume the real Repair model decision')
-        self.assertTrue(all(read_json(path)['status'] == 'consumed' for path in decisions))
-        self.assertEqual([row['checkpoint_type'] for row in boundary.calls],
-                         ['hypothesis_batch_plan', *['repair_decision'] * len(decisions)])
-        self.assertEqual(read_json(run / 'stages/scout_seed/scout_seed_import.json')['mode'], 'artifact_import')
-        checked = RunRecorder(run).read_jsonl('all_alphas.jsonl')
-        self.assertTrue(checked)
-        for row in checked:
-            context = row if row.get('hypothesis_id') else next(parent for parent in checked
-                if parent['alpha_id'] == row['parent_alpha_id'] and parent['expression_hash'] == row['parent_expression_hash'])
-            self.assertTrue(context['hypothesis_id'])
-            self.assertEqual(set(context['bindings']), {'flow', 'liability'})
-            self.assertIn('FAKE', row['alpha_id'])
-            self.assertEqual(row['metrics']['provenance'], FAKE_LABEL)
-        before = list(calls)
-        with patch('wqb.cli.build_client', side_effect=AssertionError('Completed Repair must not rebuild a client')):
-            auto_continue_workflow(self.paths, config, NOW, enable_live_api=True,
-                source_batch_runner=source_runner, discovery_executor=discovery, repair_executor=repair)
-        self.assertEqual(calls, before, 'Restart must reuse durable Scout/Discovery/Repair results')
-        candidates = read_json(run / 'candidate_gate.json')
-        engine.approve_candidates([candidates[0]['candidate_id']], NOW, 'FAKE offline human approval')
-        for _ in range(4):
-            engine.continue_once(NOW)
-            if read_json(run / 'run_state.json')['status'] == 'completed':
-                break
-        terminal = read_json(run / 'run_state.json')
-        self.assertEqual(terminal['status'], 'completed')
-        self.assertEqual(terminal['current_stage'], 'complete')
-        self.assertTrue(terminal['research_record_synced'])
-        self.assertFalse(engine.status()['active'], 'Terminal completion must release the active mission pointer')
-        record = read_json(run / 'research_record.json')
-        self.assertTrue(record['backtest'])
-        self.assertTrue(record['repair'])
-        self.assertTrue(record['candidate_gate'])
-        for row in record['backtest']:
-            context = row if row.get('hypothesis_id') else next(parent for parent in checked
-                if parent['alpha_id'] == row['parent_alpha_id'] and parent['expression_hash'] == row['parent_expression_hash'])
-            self.assertTrue(context['hypothesis_id'].startswith('FAKE-'))
-            self.assertEqual(set(context['bindings']), {'flow', 'liability'})
+    def test_retired_model_repair_refuses_after_scout_and_discovery(self):
+        """Input: FAKE source/model/platform. Output: local retirement boundary, no Repair dispatch."""
+        from wqb.workflow_stage_adapters import schedule_research_stage, advance_post_schedule_stage
+        _, run, _ = self.compile_and_start()
+        frozen = (run / 'run_manifest.json').read_bytes()
+        schedule_research_stage(self.knowledge, run, 'option-1')
+        self.planned_submission(run, 'repairable', source_dir=run)
+        discovery = advance_post_schedule_stage(
+            run, 'batch_generation', discovery_executor=self.execute_discovery)
+        self.assertEqual(discovery['status'], 'completed', discovery)
+        with patch('wqb.ai_checkpoints.run_ai_checkpoint') as model, patch('wqb.cli.build_client') as client:
+            result = advance_post_schedule_stage(
+                run, 'repair', repair_executor=RepairRuntimeExecutor(self.config, enable_live_api=True))
+        self.assertIn('retired', str(result))
+        model.assert_not_called()
+        client.assert_not_called()
+        self.assertEqual((run / 'run_manifest.json').read_bytes(), frozen)
         self.assertFalse((run / 'submission_receipt.json').exists())
-        summary = knowledge_compile.compile_research_records(self.knowledge, generated_at=NOW)
-        self.assertEqual(summary['record_count'], 1)
-        source_rows = RunRecorder(self.knowledge / 'machine').read_jsonl('source_index.jsonl')
-        source = next(row for row in source_rows if row['path'].endswith('/research_record.md'))
-        with FakeCodexBoundary(lambda payload, unit: self.proposals(source, version=2)) as boundary:
-            updated = self.compile(boundary, [self.source, source])
-            replay = self.compile(boundary, [self.source, source])
-        self.assertEqual(updated['status'], 'completed', (updated, boundary.errors))
-        self.assertEqual(len(boundary.calls), 1, 'Research records must incrementally compile through the real worker')
-        self.assertEqual(updated['release']['release_id'], replay['release']['release_id'])
-        self.assertNotEqual(updated['release']['release_id'], release['release_id'])
-        self.assertEqual((run / 'run_manifest.json').read_bytes(), manifest_bytes)
-        _, _, templates = knowledge_compile.read_semantic_rows(self.knowledge)
-        lessons = [row for row in templates if row.get('hypothesis_version') == 2]
-        self.assertEqual(len(lessons), 2)
-        self.assertTrue(all(ref['kind'] == 'hypothesis' for row in lessons for ref in row['evidence_refs']))

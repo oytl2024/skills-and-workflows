@@ -7,6 +7,57 @@ from wqb.ai_checkpoints import append_ai_checkpoint, load_ai_checkpoints, run_ai
 
 
 class AICheckpointTests(unittest.TestCase):
+    def test_retired_repair_checkpoints_fail_locally_and_preserve_history(self):
+        """Input: legacy types/statuses/argv. Output: assertions. Persist retirement without executing workers."""
+        for kind in ('repair_decision', 'near_miss_interpretation'):
+            for status in ('pending', 'failed', 'cancelled', 'unknown', 'running'):
+                for argv in ([], ['fake', '{input}', '{output}']):
+                    with self.subTest(kind=kind, status=status, argv=argv), tempfile.TemporaryDirectory() as tmp:
+                        checkpoint = append_ai_checkpoint(tmp, kind, 'Historical repair', ['evidence.json'],
+                                                          '2026-10-09', status=status)
+                        history = Path(tmp) / 'ai_checkpoints.jsonl'
+                        before = history.read_bytes()
+                        with patch('wqb.ai_checkpoints.subprocess.run') as worker, patch(
+                                'wqb.ai_checkpoints.subprocess.Popen') as child:
+                            result = run_ai_checkpoint(tmp, checkpoint.checkpoint_id, argv, cancel_on_pause=True)
+                        worker.assert_not_called()
+                        child.assert_not_called()
+                        self.assertEqual(result['status'], 'failed')
+                        self.assertEqual(result['error'], 'legacy AI Repair checkpoint retired')
+                        self.assertEqual(load_ai_checkpoints(tmp)[0]['error'], result['error'])
+                        self.assertEqual(history.read_bytes(), before)
+                        self.assertFalse((Path(tmp) / 'ai_checkpoint_runs').exists())
+
+    def test_completed_retired_repair_checkpoint_remains_readable(self):
+        """Input: completed legacy checkpoints. Output: assertions. Preserve completed history without execution."""
+        for kind in ('repair_decision', 'near_miss_interpretation'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                checkpoint = append_ai_checkpoint(tmp, kind, 'Historical repair', [], '2026-10-09', status='completed')
+                with patch('wqb.ai_checkpoints.subprocess.run') as worker, patch(
+                        'wqb.ai_checkpoints.subprocess.Popen') as child:
+                    result = run_ai_checkpoint(tmp, checkpoint.checkpoint_id, ['fake', '{input}', '{output}'])
+                self.assertEqual(result['status'], 'completed')
+                self.assertEqual(result, load_ai_checkpoints(tmp)[0])
+                worker.assert_not_called()
+                child.assert_not_called()
+                self.assertFalse((Path(tmp) / 'ai_checkpoint_events.jsonl').exists())
+
+    def test_repair_stage_never_schedules_or_executes_near_miss(self):
+        """Input: repair stage and legacy pending row. Output: assertions. Do not schedule retired model work."""
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / 'run-1'
+            run.mkdir()
+            (run / 'all_alphas.jsonl').write_text('{}\n', encoding='utf-8')
+            decisions = run / 'stages/ai'
+            append_ai_checkpoint(decisions, 'near_miss_interpretation', 'Historical repair', [], '2026-10-09')
+            before = (decisions / 'ai_checkpoints.jsonl').read_bytes()
+            with patch('wqb.ai_checkpoints.run_ai_checkpoint') as worker:
+                result = schedule_run_checkpoint(run, {'current_stage': 'repair', 'status': 'running'},
+                                                 '2026-11-03', ['fake', '{input}', '{output}'])
+            self.assertIsNone(result)
+            worker.assert_not_called()
+            self.assertEqual((decisions / 'ai_checkpoints.jsonl').read_bytes(), before)
+
     def test_default_ai_executor_also_filters_credential_environment(self):
         """Input: synthetic credentials and mocked legacy executor. Output: assertions. Apply the same boundary without cancellation."""
         import json
@@ -111,15 +162,15 @@ class AICheckpointTests(unittest.TestCase):
             schedule = run / "stages" / "schedule" / "research_schedule.json"
             schedule.parent.mkdir(parents=True)
             schedule.write_text("{}", encoding="utf-8")
-            first = schedule_run_checkpoint(run, {"current_stage": "repair", "status": "running"},
+            first = schedule_run_checkpoint(run, {"current_stage": "scout_seed", "status": "running"},
                                             "2026-10-09T00:00:00Z", [])
-            second = schedule_run_checkpoint(run, {"current_stage": "repair", "status": "running"},
+            second = schedule_run_checkpoint(run, {"current_stage": "scout_seed", "status": "running"},
                                              "2026-10-09T00:01:00Z", [])
             rows = load_ai_checkpoints(run / "stages" / "ai")
             self.assertEqual(first["checkpoint_id"], second["checkpoint_id"])
             self.assertEqual(first["status"], "pending")
             self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["checkpoint_type"], "near_miss_interpretation")
+            self.assertEqual(rows[0]["checkpoint_type"], "research_option_reasoning")
             self.assertEqual(schedule_run_checkpoint(run, {"current_stage": "scout_seed", "status": "running"},
                                                      "2026-10-09T00:02:00Z", [])["checkpoint_type"], "research_option_reasoning")
 
@@ -127,9 +178,9 @@ class AICheckpointTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp) / "run-1"
             run.mkdir()
-            (run / "all_alphas.jsonl").write_text("{}\n", encoding="utf-8")
+            (run / "candidate_gate.json").write_text("{}\n", encoding="utf-8")
             with patch("wqb.ai_checkpoints.run_ai_checkpoint", return_value={"checkpoint_id": "ai-1", "status": "completed", "summary": "Consider timing risk."}) as worker:
-                result = schedule_run_checkpoint(run, {"current_stage": "repair", "status": "running"},
+                result = schedule_run_checkpoint(run, {"current_stage": "user_approval", "status": "running"},
                                                  "2026-10-09T00:00:00Z", ["worker", "{input}", "{output}"])
             self.assertEqual(result["status"], "completed")
             worker.assert_called_once()
@@ -138,8 +189,8 @@ class AICheckpointTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp) / "run-1"
             run.mkdir()
-            (run / "all_alphas.jsonl").write_text("{}\n", encoding="utf-8")
-            step = {"current_stage": "repair", "status": "running"}
+            (run / "research_record.json").write_text("{}\n", encoding="utf-8")
+            step = {"current_stage": "complete", "status": "completed"}
             pending = schedule_run_checkpoint(run, step, "2026-10-09T00:00:00Z", [])
             with patch("wqb.ai_checkpoints.run_ai_checkpoint", return_value={
                 "checkpoint_id": pending["checkpoint_id"], "status": "completed", "summary": "One bounded test."

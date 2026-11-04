@@ -100,6 +100,61 @@ class OfficialPairedStartTests(unittest.TestCase):
 
 
 class PreplannedConsoleStartTests(unittest.TestCase):
+    def test_real_composer_publishes_paused_group_beside_retired_history(self):
+        """Input: retired mission plus real local composer. Output: new paused group with unchanged history."""
+        from wqb import console_start as worker
+        from wqb.workflow_state import create_initial_state, write_run_state, write_active_run
+        from wqb.research_group import read_group
+        run = self.paths.runs_root / 'retired-history'
+        run.mkdir(parents=True)
+        (run / 'run_manifest.json').write_text(json.dumps({'run_id': run.name, 'start_snapshot': {
+            'research_policy': {'deterministic_repair': False}}}), encoding='utf-8')
+        write_run_state(run / 'run_state.json', create_initial_state(run.name, run, 'old', '2026-10-11'))
+        write_active_run(self.paths.runs_root, run.name, run)
+        before = {str(path): path.read_bytes() for path in run.rglob('*') if path.is_file()}
+        request = worker.register_start(self.paths, self.form, 'preplanned-retired-job')
+        with patch('wqb.initial_model_worker.create_initial_model_runner', return_value=self.case.runner):
+            result = worker.execute_start(self.paths, self.form, request['request_id'])
+        self.assertTrue(result['passed'], result)
+        group = read_group(Path(result['group_dir']))
+        self.assertEqual(group['desired_state'], 'paused')
+        self.assertFalse(group['authority']['enable_live_api'])
+        pointer = json.loads((self.paths.runs_root / 'active_research_group.json').read_text(encoding='utf-8'))
+        self.assertEqual(pointer['group_id'], group['group_id'])
+        self.assertEqual(before, {str(path): path.read_bytes() for path in run.rglob('*') if path.is_file()})
+
+    def test_retired_intent_change_during_model_blocks_group_publication(self):
+        """Input: retired pointer and fake initial model. Output: assertions. Preserve newer Stop and refuse commit."""
+        from wqb import console_start as worker
+        from wqb.workflow_state import create_initial_state, write_run_state, write_active_run
+        from wqb.runtime_control import request_runtime_state, read_runtime_control
+        run = self.paths.runs_root / 'retired-history'
+        run.mkdir(parents=True)
+        (run / 'run_manifest.json').write_text(json.dumps({'start_snapshot': {
+            'research_policy': {'deterministic_repair': False}}}), encoding='utf-8')
+        write_run_state(run / 'run_state.json', create_initial_state(run.name, run, 'old', '2026-10-11'))
+        write_active_run(self.paths.runs_root, run.name, run)
+        old = request_runtime_state(run, 'paused')
+        request = worker.register_start(self.paths, self.form, 'preplanned-retired-job')
+
+        def factory(active, config):
+            """Input: new lane/config. Output: fake runner that races a newer historical Stop."""
+            def model(brief):
+                """Input: frozen brief dict. Output: fake answer after intentional concurrent Stop."""
+                answer = self.case.runner(brief)
+                request_runtime_state(run, 'paused')
+                return answer
+            return model
+
+        with patch('wqb.initial_model_worker.create_initial_model_runner', side_effect=factory), patch(
+                'wqb.research_group_driver.initialize_group_runtime') as initialize:
+            result = worker.execute_start(self.paths, self.form, request['request_id'])
+        self.assertFalse(result['passed'], result)
+        self.assertIn('retired', result['error'])
+        initialize.assert_not_called()
+        self.assertNotEqual(read_runtime_control(run)['request_revision'], old['request_revision'])
+        self.assertEqual(read_runtime_control(run)['desired_state'], 'paused')
+
     def setUp(self):
         """Input: none. Output: isolated real composer fixture and explicit nonlive Console configuration."""
         from tests.test_preplanned_start import PreplannedStartTests

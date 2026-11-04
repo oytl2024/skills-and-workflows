@@ -15,6 +15,7 @@ from wqb.recovery_cases import classify_blocker, ensure_recovery_case, advance_s
 from wqb.maintenance_notifications import dispatch_notification
 from wqb.rate_limit_state import RateLimitRecoveryRequired
 from wqb.runtime_boundaries import RESOURCE_ACTIONS
+from wqb.research_retirement import retirement_boundary
 
 
 DEFAULT_NO_PROGRESS_LIMIT = 5
@@ -142,6 +143,9 @@ def run_workflow_driver(
     if not initial.get("active") or not initial.get("run_dir"):
         return {**initial, "runtime_status": "idle"}
     run = Path(initial["run_dir"])
+    boundary = retirement_boundary(run)
+    if boundary is not None:
+        return boundary
     from wqb.research_group import require_group_running, group_for_run
     grouped = group_for_run(run) is not None
     lane = config.get('bound_group_lane')

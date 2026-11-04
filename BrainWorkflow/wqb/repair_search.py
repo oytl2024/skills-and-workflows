@@ -28,7 +28,7 @@ from pathlib import Path
 
 from wqb.cli import simulation_identity_hash
 from wqb.repair_identity import identity_hash_scheme
-from wqb.repair_planning import DECAY_LIMIT, TRUNCATION_LIMIT, NEUTRALIZATIONS
+from wqb.repair_policy import DECAY_LIMIT, TRUNCATION_LIMIT, NEUTRALIZATIONS
 from wqb.repair_trace import TARGET_DIRECTIONS
 from wqb.semantic_contracts import evidence_ref_from_dict
 from wqb.template_binding import IDENTIFIER, UNKNOWN_METADATA, TemplateBindingError, bind_template

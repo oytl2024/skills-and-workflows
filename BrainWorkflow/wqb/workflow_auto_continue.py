@@ -210,6 +210,8 @@ def auto_continue_workflow(
                             if config.get('managed_research_execution') else None)) if enable_live_api else None,
         **({'bound_run_dir': Path(config['bound_group_lane'])} if config.get('bound_group_lane') else {}))
     status = orchestrator.status()
+    if status.get('read_only') is True:
+        return status
     if status.get('active') and status.get('run_dir'):
         from wqb.research_rounds import reconcile_research_budget_wait
         reconciled = reconcile_research_budget_wait(Path(status['run_dir']), now)

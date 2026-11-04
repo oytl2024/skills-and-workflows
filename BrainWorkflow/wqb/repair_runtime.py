@@ -172,7 +172,7 @@ def _planned_variants(parent: dict[str, Any], actions: list[dict[str, Any]], max
 
 class RepairRuntimeExecutor:
     supports_durable_recovery = True
-    supports_ai_planning = True
+    supports_plan_preparation = True
 
     def __init__(self, config: dict[str, Any], *, enable_live_api: bool = False) -> None:
         """Input: config and live authorization. Output: executor. Hold scoped repair settings."""
@@ -180,8 +180,7 @@ class RepairRuntimeExecutor:
         self.enable_live_api = enable_live_api
 
     def prepare(self, root: Path, parent: dict, history: list[dict], allowance: int) -> dict:
-        """Input: run/parent/history/allowance. Output: AI plan. Recover exact local settings before judgment."""
-        from wqb.repair_planning import prepare_repair_decision
+        """Input: run Path, measured parent/history and allowance int. Output: frozen deterministic search plan."""
         manifest_path = Path(root) / 'run_manifest.json'
         manifest = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.exists() else {}
         if manifest.get('start_snapshot', {}).get('research_policy', {}).get('deterministic_repair') is True:
@@ -189,48 +188,34 @@ class RepairRuntimeExecutor:
             from wqb.repair_search import prepare_persisted_search
             check_submission_allowed()
             return prepare_persisted_search(root, parent, history, allowance)
-        if not parent.get('settings'):
-            try:
-                parent = recover_parent_settings(root, parent, None)
-            except FileNotFoundError:
-                if not self.enable_live_api or not self.config.get('allow_parent_settings_recovery'):
-                    raise
-                from wqb import cli
-                from wqb.runtime_control import check_submission_allowed
-                check_submission_allowed()
-                subrun = root / 'stages/repair/parents' / (parent['alpha_id'] + '-' + parent['expression_hash'][:12])
-                try:
-                    check_source_retry_authorization(subrun)
-                except RateLimitRecoveryRequired as exc:
-                    raise RepairRateLimited(exc.retry_at, exc.source_run_dir) from exc
-                cli.require_readiness_gate(**cli._live_gate_kwargs(
-                    dict(self.config, max_alphas_per_round=30), subrun))
-                try:
-                    client = cli.build_client({**self.config, 'max_retries': 0, 'request_timeout_seconds': 20})
-                    client.authenticate()
-                    parent = recover_parent_settings(root, parent, client)
-                except requests.exceptions.RequestException as exc:
-                    raise _classify_get_failure(subrun, {'expression_hash': parent['expression_hash']}, exc, 'parent_settings') from exc
-        return prepare_repair_decision(root, parent, history, allowance, self.config,
-                                       datetime.now(timezone.utc).isoformat())
+        raise ValueError('model-driven Repair is retired; historical runs cannot resume')
 
     def __call__(self, root: Path, parent: dict[str, Any], actions: list[dict[str, Any]], maximum: int) -> list[dict[str, Any]]:
         """Input: run, checked parent, actions, cap. Output: checked child rows. Recover by durable submit identity."""
+        from wqb.research_retirement import retirement_boundary
+        boundary = retirement_boundary(Path(root))
+        if boundary is not None:
+            raise ValueError(boundary['pause_reason'])
+        if any(isinstance(action, dict) and 'ai_plan' in action for action in actions):
+            raise ValueError('model-driven Repair payload is retired')
+        original_plan = actions[0].get('repair_plan') if len(actions) == 1 else None
+        if original_plan is not None:
+            from wqb.repair_policy import verify_consumed_plan
+            verify_consumed_plan(Path(root), original_plan)
         if not self.enable_live_api:
             raise ValueError("live repair API permission is required")
         subrun = Path(root) / "stages" / "repair" / "parents" / (str(parent["alpha_id"]) + "-" + str(parent["expression_hash"])[:12])
-        original_ai_plan = actions[0].get('ai_plan') if len(actions) == 1 else None
-        unknown_source = subrun if original_ai_plan is None else subrun / 'iterations' / str(original_ai_plan.get('evidence_digest', ''))
+        unknown_source = subrun if original_plan is None else subrun / 'iterations' / str(original_plan.get('evidence_digest', ''))
         if (unknown_source / 'result_unknown.json').exists():
             from wqb.runtime_control import check_submission_allowed
             from wqb.repair_unknown import quarantine_source
             check_submission_allowed()
-            if original_ai_plan is not None:
-                from wqb.repair_planning import verify_consumed_plan
-                verify_consumed_plan(Path(root), original_ai_plan)
+            if original_plan is not None:
+                from wqb.repair_policy import verify_consumed_plan
+                verify_consumed_plan(Path(root), original_plan)
             bound = {'parent_alpha_id': parent['alpha_id'], 'parent_expression_hash': parent['expression_hash'],
                 'phase': 'result_unknown', 'source_run_dir': str(unknown_source), 'max_simulations': maximum,
-                'legacy': original_ai_plan is None, 'plan': original_ai_plan}
+                'legacy': original_plan is None, 'plan': original_plan}
             if quarantine_source(Path(root), bound) is None:
                 raise ValueError('Repair result-unknown source changed')
             raise RepairResultUnknown(str(unknown_source))
@@ -261,17 +246,17 @@ class RepairRuntimeExecutor:
                         state = record_rate_limit(subrun, "repair_parent_settings", exc, {}, now)
                         raise RepairRateLimited(str(state["retry_at"]), str(subrun)) from exc
                     raise RepairRecoveryPending("parent settings recovery can safely retry; no simulation submitted") from exc
-        ai_plan = actions[0].get('ai_plan') if len(actions) == 1 else None
-        if ai_plan is not None:
-            from wqb.repair_planning import verify_consumed_plan
-            verify_consumed_plan(Path(root), ai_plan)
-            if ai_plan.get('status') not in {'validated', 'consumed'} or len(ai_plan.get('variants', [])) != 1:
-                raise ValueError('Repair AI plan is not validated')
-            variants = ai_plan['variants']
+        search_plan = actions[0].get('repair_plan') if len(actions) == 1 else None
+        if search_plan is not None:
+            from wqb.repair_policy import verify_consumed_plan
+            verify_consumed_plan(Path(root), search_plan)
+            if search_plan.get('status') not in {'validated', 'consumed'} or len(search_plan.get('variants', [])) != 1:
+                raise ValueError('Repair search plan is not validated')
+            variants = search_plan['variants']
             if any(row.get('parent_alpha_id') != parent['alpha_id'] or
                    row.get('parent_expression_hash') != parent['expression_hash'] for row in variants):
-                raise ValueError('Repair AI plan parent mismatch')
-            subrun = subrun / 'iterations' / str(ai_plan['evidence_digest'])
+                raise ValueError('Repair search plan parent mismatch')
+            subrun = subrun / 'iterations' / str(search_plan['evidence_digest'])
         else:
             variants = _planned_variants(parent, actions, maximum)
         from wqb import cli
@@ -287,18 +272,18 @@ class RepairRuntimeExecutor:
             plan_file.write_text(json.dumps(plan, sort_keys=True), encoding="utf-8")
             for variant in variants:
                 recorder.append_jsonl("planned_candidates.jsonl", variant)
-        if ai_plan is not None:
+        if search_plan is not None:
             from wqb.runtime_control import _write
-            receipt_path = Path(ai_plan['receipt_path'])
+            receipt_path = Path(search_plan['receipt_path'])
             if not receipt_path.resolve().is_relative_to((Path(root) / 'runtime/repair_decisions').resolve()):
-                raise ValueError('Repair AI receipt outside bound run')
+                raise ValueError('Repair search receipt outside bound run')
             saved = json.loads(receipt_path.read_text(encoding='utf-8'))
-            if {k: v for k, v in saved.items() if k != 'status'} != {k: v for k, v in ai_plan.items() if k != 'status'}:
-                raise ValueError('Repair AI receipt changed before consumption')
+            if {k: v for k, v in saved.items() if k != 'status'} != {k: v for k, v in search_plan.items() if k != 'status'}:
+                raise ValueError('Repair search receipt changed before consumption')
             if saved['status'] != 'consumed':
                 saved['status'] = 'consumed'
                 _write(receipt_path, saved)
-                ai_plan['status'] = 'consumed'
+                search_plan['status'] = 'consumed'
         now = datetime.now(timezone.utc).isoformat()
         rate_state = read_rate_limit_state(subrun / "rate_limit_state.json")
         if cooldown_is_active(rate_state, now):

@@ -57,7 +57,7 @@ class RepairStableIdentityTests(unittest.TestCase):
             receipt['last_sha256'] = hashlib.sha256(original).hexdigest()
             (root / 'stages/repair/repair_execution.json').write_text(json.dumps(receipt))
             next((root / 'stages/repair/parents').glob('**/all_alphas.jsonl')).write_text(json.dumps(child) + '\n')
-            executor = Mock(supports_ai_planning=True, supports_durable_recovery=True)
+            executor = Mock(supports_plan_preparation=True, supports_durable_recovery=True)
             result = advance_post_schedule_stage(root, 'repair', repair_executor=executor, repair_max_simulations=1)
             self.assertEqual(result['status'], 'completed', result.get('blocker'))
             executor.assert_not_called()
