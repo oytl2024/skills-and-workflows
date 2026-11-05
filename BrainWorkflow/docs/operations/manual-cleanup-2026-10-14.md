@@ -286,6 +286,26 @@ skills-and-workflows\BrainWorkflow\NVIDIA Corporation
 
 ## Nov5 approved Signboard retirement audit
 
+- Subsequent user-authorized retry under explicit sandbox escalation succeeded.
+  Git local/remote equality at `2da3830e4ccb9756e86ab4d81ba7866ca923446d`
+  was rechecked; all exact targets below passed containment, ancestor/descendant
+  reparse and directory file-count checks. Native Remove-Item removed management,
+  tools/signboard and the six listed exclusive Python/script/test files, including
+  the four named sensitive paths. No knowledge/research file was deleted. The
+  first retry's parent-path parameter error occurred before any deletion; the
+  corrected same-tool command succeeded. Earlier refusal is historical only.
+- Post-delete verification: 30 Signboard-retirement/root-architecture/entry
+  tests passed in 0.735 seconds. Runtime/frontend/scripts/test references are
+  confined to the deliberate surviving retirement regression. Research Console,
+  desktop and shared architecture parser remain. This does not certify pending
+  P4 code or the entire application, and does not activate research/deployment.
+
+- Execution outcome: deactivation/audit commit
+  `2da3830e4ccb9756e86ab4d81ba7866ca923446d` was pushed and remote equality
+  verified; 31 board/root regressions passed. The subsequent native literal-path
+  deletion command was rejected by execution policy before process creation.
+  No target was deleted. Do not bypass this rejection with another tool/language.
+
 - User retired all Signboard functionality. Named additional approval covers
   `BrainWorkflow/management/.signboard-state`, `.signboard-smoke-fresh`,
   `.signboard-smoke-verified` and `signboard-window.png` exclusively. General
