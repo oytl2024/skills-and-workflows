@@ -1,4 +1,3 @@
 @echo off
-cd /d "%~dp0.."
-python -m wqb.signboard_launcher
-if errorlevel 1 pause
+echo The project board is retired. Use BrainWorkflow.vbs for research.
+exit /b 1

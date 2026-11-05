@@ -283,6 +283,35 @@ skills-and-workflows\BrainWorkflow\NVIDIA Corporation
   authority for platform/model calls, research resume, proof renewal, budget
   changes, Alpha submission or formal deployment. Post-audit regression and
   documentation-only synchronization follow; outer todo.md owns their result.
+
+## Nov5 approved Signboard retirement audit
+
+- User retired all Signboard functionality. Named additional approval covers
+  `BrainWorkflow/management/.signboard-state`, `.signboard-smoke-fresh`,
+  `.signboard-smoke-verified` and `signboard-window.png` exclusively. General
+  browser state and research evidence are excluded.
+- After verified Git synchronization, delete the workspace-contained product
+  `management/` tree (144 files, 9207621 bytes at audit),
+  `wqb/signboard_launcher.py`, `wqb/architecture_viewer.py`,
+  `scripts/verify_architecture_browser.py`, `scripts/verify_architecture_live.py`,
+  `tests/test_architecture_viewer.py`, `tests/test_signboard_launcher.py`, and
+  outer `tools/signboard/` (79 files, 550820662 bytes). Recheck literal resolved
+  paths, reparse points and unexpected contents immediately before deletion.
+- Product sources and seven historical cards are recoverable from Git
+  `23b70093a2a01c171aca9b81e3bfa7d3f7f55dcb`; cards contain no unique open task
+  absent root todo/milestone. The tools tree is the reproducible 1.7.4 installer,
+  SHA256SUMS and application. Approved profiles/screenshot are not Git-backed.
+- Keep `project_architecture.py`, canonical root documents, Console/desktop,
+  `test_signboard_retirement.py`, mixed architectural specifications and bound
+  historical verification packages. Never sweep files merely mentioning board.
+- No links found in either tree. Process-path audit found zero verified owned
+  processes, but inaccessible process paths prevent a global absence claim.
+  Do not terminate processes by name; locked files remain a visible blocker.
+- Knowledge inventory retirement is separate and NOT complete: the read-only
+  real-vault probe verified 88670 replacement identities in 11.515 seconds,
+  but reference scanning failed closed at its 30-second limit. No real inventory
+  has been archived, marked retired or deleted. Preserve all three old copies
+  until reference closure and the approved transaction are verified.
 - Post-audit regression: 146 tests passed, one skip, 6.671 seconds (root entry,
   source directory, guarded cleanup and Console contracts). No source/test
   edits or real deletions followed the stable full-suite proof.

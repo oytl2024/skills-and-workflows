@@ -1,6 +1,6 @@
 # BrainWorkflow architecture map
 
-The current, validated module and dependency map is in workspace-root `milestone.md`; the interactive projection is reached through Signboard's Project architecture card. This page explains runtime boundaries and should not become a second module status ledger. Current tasks and handoffs are in workspace-root `todo.md`.
+The current, validated module and dependency map is in workspace-root `milestone.md`. Its Markdown workflow/module tables and `wqb/project_architecture.py` validation remain the architecture routing contract for AI maintenance; no graphical board is required. This page explains runtime boundaries and should not become a second module status ledger. Current tasks and handoffs are in workspace-root `todo.md`.
 
 ## Workspace Directories
 
@@ -17,18 +17,15 @@ brain/
     machine/                  Machine ledgers and version-bound resources
     wiki/                     Reusable human-readable experience and cases
   runs/                       Durable research, jobs, recovery and proof evidence
-  tools/signboard/            Installed project-board dependency
   archive/                    Related Stage1 history; not active product code
   skills-and-workflows/
     .git/                     Repository history; never workspace scratch
-    AGENTS.md                 Repository product and file-placement rules
     BrainWorkflow/
       wqb/                    Runtime, Console, knowledge and research modules
       tests/                  Offline unit and workflow acceptance tests
       scripts/                Capture, verification and developer entry scripts
       configs/                Defaults/examples; no hardcoded credentials
       docs/                   Operations, approved designs/plans and history
-      management/             Interactive project-board integration
       output/                 Generated verification artifacts and diagnostics
 ```
 
@@ -39,7 +36,6 @@ This is the relevant project map, not the full physical tree. On 2026-10-14 the 
 | Need | Entry | Durable state |
 | --- | --- | --- |
 | Run research | `launch-desktop.cmd` or workspace `BrainWorkflow.vbs` | active run `run_state.json`, `runtime/runtime_control.json`, workflow events and Console jobs |
-| View project work | `management/Open Board.cmd` | Markdown cards in `management/board/` |
 | Maintain scope and recovery | root `todo.md` and `milestone.md` | task plan and exact resume command |
 | Read learned knowledge | workspace `knowledge/wiki/` | compiled experience; `knowledge/raw/` stores source evidence |
 
@@ -64,4 +60,4 @@ AI judgment is currently **not automatically executed** by the research runtime.
 
 ## Maintenance rule
 
-An operations task follows the current Console state and reports blockers. A maintenance task reproduces a blocker in a test, fixes the contract, updates docs/board/recovery state, and hands back a verified build. Do not copy private strategy expressions, credentials, or platform run artifacts into a remote project board.
+An operations task follows the current Console state and reports blockers. A maintenance task reproduces a blocker in a test, fixes the contract, updates docs/recovery state, and hands back a verified build. Read root `AGENTS.md`, `milestone.md` and the latest `todo.md` handoff before task-relevant source exploration. Do not copy private strategy expressions, credentials, or platform run artifacts into remote task trackers.

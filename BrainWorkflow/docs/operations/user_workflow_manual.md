@@ -26,7 +26,7 @@ Scout 详情区展示基准/处理两组的表达式、假设、设置、实际 
 
 双击工作区根目录的 `BrainWorkflow.vbs`，或项目里的 `launch-desktop.vbs`。这会打开独立的 Edge/Chrome app-mode 窗口，并复用已启动的本地后台；它还不是打包后的原生 Windows 安装程序。打开窗口本身不会调用 WQB 或开始回测。启动失败时查看 `runs/desktop/startup.log` 和 `backend.log`；终端诊断入口是 `launch-desktop.cmd`。
 
-项目架构看板是另一入口：双击 `management/Open Board.cmd`，在 Signboard 的 **Project architecture** 卡片打开工作流图。它只解释项目，不控制正在运行的 Alpha。
+项目维护直接阅读工作区根目录的 `AGENTS.md`、`milestone.md` 和 `todo.md`；架构表及其代码/测试引用继续供 AI 定位模块。维护记录不控制正在运行的 Alpha，也不会改变研究 Console 或桌面启动入口。
 
 ## 每天怎么用
 
