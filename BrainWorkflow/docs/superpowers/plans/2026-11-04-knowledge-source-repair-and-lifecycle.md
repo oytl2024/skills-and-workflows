@@ -56,6 +56,49 @@ Files: wqb/knowledge_clean_compile.py, knowledge_maintenance.py and existing cle
 
 ## P5: Actual Closure And Deployment Handoff
 
+### P4 Execution Detail Confirmed Nov 5
+
+Latest authorization: implement safe retirement, remove migrated legacy copies,
+and remove Signboard. Keep one canonical lossless historical object in the new
+shared inventory store; do not retain expanded and transitional old copies after
+successful migration. No platform/model/research/proof/budget authority follows.
+
+1. Archive primitive (`semantic_inventory_archive.py`, isolated matching tests):
+   `prepare_inventory_archive(root, inventory_path, expected_sha256, *, timeout_seconds)`
+   returns `{path, sha256, uncompressed_sha256, uncompressed_bytes}` in the existing
+   shared store. `verify_inventory_archive(root, ref)` verifies bounded compressed
+   and exact decompressed bytes. Deterministic gzip, checked paths, immutable
+   publication and no source removal. RED: corruption, changed source, restart,
+   bounded decompression, concurrent writer, link/escape and replay.
+2. Lifecycle (`knowledge_derivative_lifecycle.py`, existing tests): factor original
+   manifest authentication from inventory loading. Implement `plan_guard` and
+   `assert_semantic_plan_active`, plus `prepare_semantic_retirement` (archive and
+   durable intent, no unlink), `read_retired_semantic_plan` (historical-only), and
+   approval/path-bound `apply_semantic_retirement` (idempotent collection/recovery).
+   Validate original job references, absent execution, explicit replacement
+   identity/scope coverage and reference-owner snapshots. Shared inventories,
+   funded/executed/unknown plans and unique evidence remain protected.
+3. Admission/readers (`full_semantic_compile/execution/coverage.py`): prepare
+   publication and execution loading take the same plan guard; retirement is
+   checked before authority or payload recreation. Never reacquire runner locks
+   in worker authentication. Top-level reports pin their plan; retired reports
+   return verified read-only historical summaries, not current coverage. Reuse
+   source/publication locks in fixed order and protect original `owner_plan`.
+4. Reference contracts (`knowledge_clean_compile.py`): extend the existing bounded
+   scanner with exact authenticated self-owner exclusions and inventory-history
+   report classification; retain all frozen/recovery/job references and unsafe
+   ancestors. Snapshot validation and streaming JSONL must not lose unknown refs.
+5. Signboard: inventory exact exclusive files/dependencies and unique state,
+   remove surviving product controls/routes, add absence regressions. Preserve
+   Console/desktop and shared AI architecture parsing. Commit/push audit and
+   verify equality before literal-path deletion; no secret/config/profile sweep.
+6. Integrate and review once stable. Test interruptions before/after archive,
+   intent, unlink and completion; active/replayed workers and concurrent refs;
+   old inventory lossless readability; unchanged authority/accounting/Stop.
+   Full offline suite and loaded package verification, Git sync, then audited
+   real cleanup and regression/cleanup sync. Record all retained/blocked targets,
+   bytes actually recovered and remaining capture/semantic/deployment gaps.
+
 - [ ] Run fast architecture/root-entry checks after the last handoff edit, then affected suites and one stable full suite with before/after source digests.
 - [ ] Validate actual local source consumption, counts, current projection, references, protected raw/release/run identity and idempotent maintenance replay. Measure size/read time; avoid inventing target savings or all-field trust.
 - [ ] List remaining semantic gates by actual reason and scope. Bring semantic policy changes, truly missing capture and finite model allowance back for review rather than bypassing them.
@@ -63,6 +106,13 @@ Files: wqb/knowledge_clean_compile.py, knowledge_maintenance.py and existing cle
 - [ ] Commit/push verified implementation without force; audit/execute approved derivative cleanup, run affected regression and synchronize cleanup receipts. Formal EXE activation remains gated on resource acceptance and explicit deployment review, not implicit in this plan.
 
 ## Verified Slice And Remaining Closure
+
+Nov5 execution ruling: reference comparisons use per-owner lexical context and
+a bounded 10,000-value memo, preserving hashes, dictionary keys and ancestor
+references. Real 200 MB ledger scanning exceeds the obsolete-layout 30-second
+budget. Explicit retirement maintenance receives a separate finite 180-second
+read budget (2 GiB bound unchanged); ordinary cleanup retains 30 seconds. No
+source-age, reference protection, authority or research limit is waived.
 
 P1/P3 and protected obsolete-path cleanup are implemented. Shared inventory
 format 3 excludes job IDs; rules/helper fingerprints still bind execution plans,
@@ -103,9 +153,11 @@ warnings; this is not semantic or research readiness.
 The plan is NOT fully closed. P2's two actual Markdown hash drifts lack original
 corroboration; the operators repair preflight reports missing `operators.json`.
 Jul29/30 field captures remain over 90 days. New capture/model explanation,
-publication, proof renewal and deployment need their own authority. P4 machine
-retirement is audit-only: all three legacy inventories validate structurally,
-but shared-writer serialization, authenticated supersession and external
-reference/recovery proofs remain unimplemented. Apply refuses; no inventories
-were deleted. This conservative limitation retains about 2.1 GB and must not
-be reported as completed automatic GC or whole-project readiness.
+publication and proof renewal need their own authority. Nov5 P4 now implements
+guarded preparation/collection, lossless archives and historical-only readers;
+interruptions, admission and archive-consumption races have local regressions.
+Actual-vault reference scans still reach their finite safety limit, so all three
+expanded inventories remain protected. No real inventory was archived/retired/
+deleted. This retains about 2.1 GB and must not be reported as completed GC or
+whole-project research readiness. Current Console acceptance/deployment evidence
+belongs in root todo.md; earlier package evidence above is historical only.

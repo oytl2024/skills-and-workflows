@@ -19,7 +19,7 @@ from typing import Callable
 from urllib.error import URLError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, build_opener
 
-from wqb.runtime_revision import LOADED_CODE_REVISION
+from wqb.runtime_revision import LOADED_CODE_REVISION, source_code_revision
 
 
 DEFAULT_PORTS = tuple(range(8765, 8785))
@@ -28,6 +28,8 @@ HEALTH_TIMEOUT = 0.35
 POLL_INTERVAL = 0.15
 WINDOW_TIMEOUT = 8.0
 HEALTH_MAX_BYTES = 8192
+INSTALL_RECEIPT_MAX_BYTES = 8192
+INSTALL_EXE_MAX_BYTES = 256 * 1024 * 1024
 WINDOWS_BROWSER_FOLDER_IDS = (42, 38, 28)
 
 
@@ -45,6 +47,48 @@ class DesktopConfig:
     def runtime_dir(self) -> Path:
         """Input: DesktopConfig self. Output: Path. Locate desktop process/profile state."""
         return self.runs_root / "desktop"
+
+
+def installed_application(config: DesktopConfig) -> Path | None:
+    """Input: DesktopConfig. Output: verified installed EXE Path or None; damaged/stale installs fail visibly."""
+    base = config.workflow_root / 'output/desktop-application/installed'
+    if not os.path.lexists(base):
+        return None
+    exe = base / 'BrainWorkflow/BrainWorkflow.exe'
+    receipt = base / 'installation.json'
+    try:
+        for path in (config.workflow_root / 'output', base.parent):
+            info = path.lstat()
+            if path.is_symlink() or getattr(info, 'st_file_attributes', 0) & 0x400:
+                raise ValueError('linked installation ancestor')
+        for path in (base, *base.rglob('*')):
+            info = path.lstat()
+            if path.is_symlink() or getattr(info, 'st_file_attributes', 0) & 0x400:
+                raise ValueError('linked installation')
+        if receipt.stat().st_size > INSTALL_RECEIPT_MAX_BYTES:
+            raise ValueError('oversized installation receipt')
+        row = json.loads(receipt.read_text(encoding='utf-8'))
+        if (not isinstance(row, dict) or set(row) != {'schema_version', 'code_revision', 'exe_sha256'}
+                or type(row['schema_version']) is not int or row['schema_version'] != 1
+                or row['code_revision'] != LOADED_CODE_REVISION):
+            raise ValueError('stale installation receipt')
+        before = exe.stat()
+        if before.st_size > INSTALL_EXE_MAX_BYTES or not exe.is_file():
+            raise ValueError('invalid executable')
+        with exe.open('rb') as stream:
+            actual = hashlib.file_digest(stream, 'sha256').hexdigest()
+        after = exe.stat()
+        if (any(getattr(after, key) != getattr(before, key)
+                for key in ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+                or actual != row['exe_sha256']):
+            raise ValueError('changed executable')
+        bundled_source = exe.parent / '_internal/wqb'
+        if not bundled_source.is_dir() or source_code_revision(bundled_source) != LOADED_CODE_REVISION:
+            raise ValueError('stale bundled source')
+        return exe
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        raise DesktopError('Installed application is missing, stale or damaged. '
+                           'Maintenance must verify/reinstall it; no research was started.') from error
 
 
 def child_environment(source: dict[str, str] | None = None) -> dict[str, str]:
@@ -389,6 +433,15 @@ def main(argv: list[str] | None = None) -> int:
             raise DesktopError("Port must be between 1 and 65535.")
         if args.backend:
             return run_backend(config, args.port or DEFAULT_PORTS[0])
+        installed = installed_application(config)
+        if installed is not None:
+            options = ['--knowledge-root', str(config.knowledge_root), '--runs-root', str(config.runs_root)]
+            if args.port is not None:
+                options.extend(['--port', str(args.port)])
+            subprocess.Popen([str(installed), *options],
+                             cwd=workflow, env=child_environment(), stdin=subprocess.DEVNULL,
+                             **hidden_process_options())
+            return 0
         launch_desktop(config, [args.port] if args.port else DEFAULT_PORTS)
         return 0
     except Exception as error:

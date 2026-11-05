@@ -16,6 +16,77 @@ from unittest.mock import Mock, patch
 
 
 class DesktopTests(unittest.TestCase):
+    def test_native_dispatch_resolves_relative_roots_before_changing_directory(self):
+        """Input: relative caller paths. Output: native argv absolute paths, retaining the caller's meaning."""
+        with patch.object(self.desktop, 'installed_application', return_value=Path('native.exe')), \
+             patch.object(self.desktop.subprocess, 'Popen') as launch:
+            self.assertEqual(self.desktop.main(['--knowledge-root', 'relative-knowledge', '--runs-root', 'relative-runs']), 0)
+        self.assertEqual(launch.call_args.args[0], ['native.exe', '--knowledge-root',
+            str(Path('relative-knowledge').resolve()), '--runs-root', str(Path('relative-runs').resolve())])
+
+    def test_native_dispatch_forwards_options_without_starting_legacy_backend(self):
+        """Input: installed EXE and startup options. Output: one native process; preserve exact data roots."""
+        arguments = ['--knowledge-root', str(self.root / 'knowledge space'), '--runs-root', str(self.root / 'runs')]
+        with patch.object(self.desktop, 'installed_application', return_value=Path('native.exe')), \
+             patch.object(self.desktop.subprocess, 'Popen') as launch, \
+             patch.object(self.desktop, 'launch_desktop', side_effect=AssertionError('legacy must not start')):
+            self.assertEqual(self.desktop.main(arguments), 0)
+        self.assertEqual(launch.call_args.args[0], ['native.exe', *arguments])
+        self.assertEqual(launch.call_args.kwargs['stdin'], subprocess.DEVNULL)
+
+    def test_backend_worker_does_not_dispatch_installed_gui(self):
+        """Input: explicit backend mode. Output: backend only; prevent recursive EXE dispatch."""
+        with patch.object(self.desktop, 'installed_application', side_effect=AssertionError('no GUI')), \
+             patch.object(self.desktop, 'run_backend', return_value=0) as backend:
+            self.assertEqual(self.desktop.main(['--backend', '--port', '8784']), 0)
+        self.assertEqual(backend.call_args.args[1], 8784)
+
+    def test_installed_application_is_optional_but_never_silently_stale(self):
+        """Input: isolated installation/receipt. Output: verified EXE or actionable error; no execution."""
+        import hashlib
+        self.assertIsNone(self.desktop.installed_application(self.config))
+        base = self.config.workflow_root / 'output/desktop-application/installed/BrainWorkflow'
+        base.mkdir(parents=True)
+        exe = base / 'BrainWorkflow.exe'
+        exe.write_bytes(b'fixture binary')
+        receipt = base.parent / 'installation.json'
+        with self.assertRaises(self.desktop.DesktopError):
+            self.desktop.installed_application(self.config)
+        receipt.write_text(json.dumps(dict(schema_version=1, code_revision='fixture-code',
+            exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest())), encoding='utf-8')
+        (base / '_internal/wqb').mkdir(parents=True)
+        with patch.object(self.desktop, 'source_code_revision', return_value='fixture-code'):
+            self.assertEqual(self.desktop.installed_application(self.config), exe)
+            original_stat = Path.stat
+            reads = [0]
+            def changed_access_time(path, *args, **kwargs):
+                """Input: Path/stat options. Output: same identity with changed atime; simulate read-induced access updates."""
+                info = original_stat(path, *args, **kwargs)
+                if path == exe and kwargs.get('follow_symlinks', True):
+                    reads[0] += 1
+                    values = list(info)
+                    values[7] += reads[0]
+                    return os.stat_result(values)
+                return info
+            # Access time never belongs to the immutable executable identity.
+            with patch.object(Path, 'stat', changed_access_time):
+                self.assertEqual(self.desktop.installed_application(self.config), exe)
+        with patch.object(self.desktop, 'source_code_revision', return_value='older-code'):
+            with self.assertRaises(self.desktop.DesktopError):
+                self.desktop.installed_application(self.config)
+        exe.write_bytes(b'changed')
+        with self.assertRaises(self.desktop.DesktopError):
+            self.desktop.installed_application(self.config)
+
+    def test_installed_application_rejects_stale_receipt_or_link(self):
+        """Input: corrupt/stale installation. Output: DesktopError, never browser fallback."""
+        base = self.config.workflow_root / 'output/desktop-application/installed'
+        base.mkdir(parents=True)
+        for value in ('{}', '{"schema_version":true}', 'not json'):
+            (base / 'installation.json').write_text(value, encoding='utf-8')
+            with self.assertRaises(self.desktop.DesktopError):
+                self.desktop.installed_application(self.config)
+
     def setUp(self) -> None:
         """Input: test instance. Output: None. Create isolated Path fixtures."""
         self.assertIsNotNone(importlib.util.find_spec("wqb.desktop"), "desktop launcher is missing")

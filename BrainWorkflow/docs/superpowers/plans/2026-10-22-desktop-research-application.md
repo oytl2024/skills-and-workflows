@@ -4,6 +4,15 @@
 
 **Goal:** Deliver a readable real-time EXE application for two-lane research, with in-place commands and inspectable experiments.
 
+Nov5 deployment closure: the existing click launcher delegates to a verified
+native installation under `output/desktop-application/installed/BrainWorkflow`.
+An installation.json receipt binds executable SHA256 and source revision;
+bundled source must match the currently maintained source. Missing installation
+keeps the old launcher compatible; a present but invalid installation fails
+visibly rather than silently reverting. Backend workers never redispatch GUI.
+Package acceptance precedes installation. Opening the application is not Start,
+resource readiness, proof renewal or permission for platform/model calls.
+
 **Architecture:** One existing Python backend, React+TypeScript view and thin system-WebView host. Reuse SSE with versioned snapshots; UI state is not workflow state. Validate desktop packaging before committing to a host dependency.
 
 **Tech Stack:** React, TypeScript, existing Python312 backend; system WebView subject to offline spike. No Vercel, Electron or Rust introduced by this approval.
@@ -11,6 +20,18 @@
 **Spec:** ../specs/2026-10-22-preplanned-parallel-research-console-design.md
 
 ## Global Constraints
+
+Nov5 implementation acceptance: 2,993 offline tests, nine skips, 805.931 seconds;
+before/after source/test digest
+`2d746fdbaaa29d3c94d0bbec3bb07c728359fc026c27294ad00b850be077cf75`.
+Frontend typecheck, 15 tests and build passed. Package `20261105-193909-3140`
+passed self-test, CLI-worker smoke and isolated native-window/backend/assets/
+snapshot checks. Browser checks at 1440px and 390px passed navigation, tabs,
+page counts, no document overflow and no JavaScript errors or external/POST
+requests. Source-matching packaged revision:
+`43624be7bba598b6e1da4bec40853e3bfa98ab0d2b06c1a0cdb56f8e7fe6c860`.
+Private logs/screenshots remain under output/desktop-validation. Actual install,
+resource readiness and loaded application evidence are separate in root todo.md.
 
 - No WQB/model calls, live resume, budget renewal or Alpha submission in development.
 - Chinese-readable Notion-inspired neutral layout, arrow navigation/page count, routine Start/Stop.

@@ -23,10 +23,13 @@ class DerivativeLifecycleTests(unittest.TestCase):
 
     def plan(self, generation, budget=0, shared=False, rows=(), jobs=(), config_budget=None):
         """Input: generation str/budget int/shared bool. Output: saved minimal plan path str."""
-        raw = b''.join(_bytes(row) + b'\n' for row in rows)
+        raw = b''.join(_bytes({key: value for key, value in row.items() if not shared or key != 'job_id'}) + b'\n'
+                       for row in rows)
         jobs = list(jobs)
         identity = dict(root=str(self.root), jobs=jobs, sources=[], generation=generation,
                         inventory_sha256=_hash(raw), config=dict(model_call_budget=budget if config_budget is None else config_budget, max_runtime_seconds=1))
+        if shared:
+            identity['inventory_format_version'] = 3
         key = _digest(identity)
         base = 'machine/semantic_jobs/' + key
         inventory = ('machine/semantic_inventories/' + _hash(raw) if shared else base) + '/inventory.jsonl'
@@ -86,7 +89,7 @@ class DerivativeLifecycleTests(unittest.TestCase):
 
     def test_apply_always_refuses_without_mutation(self):
         before = self.snapshot()
-        with self.assertRaisesRegex(ValueError, 'audit-only'):
+        with self.assertRaisesRegex(ValueError, 'approval'):
             apply_semantic_retirement(self.root, self.old, replacement_plan_path=self.new)
         self.assertEqual(before, self.snapshot())
 
@@ -176,7 +179,7 @@ class DerivativeLifecycleTests(unittest.TestCase):
         self.assertTrue(result['validated'], result)
         self.assertEqual(result['job_evidence']['checked_jobs'], len(plan['jobs']))
         self.assertEqual(result['job_evidence']['status'], 'protected')
-        self.assertIn('job_content_validation_unsupported', result['reasons'])
+        self.assertIn('job_content_validation_not_requested', result['reasons'])
         self.assertNotIn('referred_job_evidence_not_verified', result['reasons'])
         self.assertEqual(before, {str(p): p.read_bytes() for p in root.rglob('*') if p.is_file()})
 
@@ -199,7 +202,7 @@ class DerivativeLifecycleTests(unittest.TestCase):
         (root / plan['jobs'][0]['path']).write_bytes(b'{}')
         result = audit_semantic_derivative(root, plan['plan_path'])
         self.assertTrue(result['validated'], result)
-        self.assertIn('job_content_validation_unsupported', result['reasons'])
+        self.assertIn('job_content_validation_not_requested', result['reasons'])
         self.assertEqual(result['job_evidence']['status'], 'protected')
 
     def test_inventory_mutation_during_stream_protects(self):
@@ -224,3 +227,166 @@ class DerivativeLifecycleTests(unittest.TestCase):
         self.assertFalse(audit_semantic_derivative(self.root, path)['validated'])
         inventory.write_bytes(b'{"target_id":"a","target_id":"b"}\n')
         self.assertFalse(audit_semantic_derivative(self.root, path)['validated'])
+
+
+class RetirementTransactionTests(unittest.TestCase):
+    def setUp(self):
+        """Input: TestCase. Output: isolated legacy/current inventories; no real vault operations."""
+        self.fixture = DerivativeLifecycleTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.root = self.fixture.root
+        rows = [self.fixture.row('alpha'), self.fixture.row('beta')]
+        self.old = self.fixture.plan('old transaction', rows=rows)
+        self.new = self.fixture.plan('replacement', rows=rows, shared=True)
+        self.inventory = (self.root / self.old).parent / 'inventory.jsonl'
+        self.original = self.inventory.read_bytes()
+
+    def prepare(self):
+        """Input: fixture state. Output: prepared, nonexecuting retirement transaction."""
+        from wqb.knowledge_derivative_lifecycle import prepare_semantic_retirement
+        return prepare_semantic_retirement(self.root, self.old, replacement_plan_path=self.new)
+
+    def collect(self):
+        """Input: explicit fixture-only approval. Output: idempotent collection result."""
+        return apply_semantic_retirement(self.root, self.old,
+            approved_inventory_paths=[self.inventory.relative_to(self.root).as_posix()],
+            approval_reference='isolated fixture approval')
+
+    def test_prepare_retains_original_and_preserves_exact_historical_bytes(self):
+        import gzip
+        from wqb.knowledge_derivative_lifecycle import read_retired_semantic_plan
+        result = self.prepare()
+        self.assertEqual(result['status'], 'prepared')
+        self.assertEqual(self.inventory.read_bytes(), self.original)
+        self.assertEqual(gzip.decompress((self.root / result['archive_ref']['path']).read_bytes()), self.original)
+        history = read_retired_semantic_plan(self.root, self.old)
+        self.assertTrue(history['read_only'])
+        self.assertFalse(history['research_ready'])
+        self.assertEqual(history['inventory_counts']['target_count'], 2)
+
+    def test_collection_is_approved_exact_lossless_and_idempotent(self):
+        self.prepare()
+        first = self.collect()
+        self.assertEqual(first['removed_count'], 1)
+        self.assertFalse(self.inventory.exists())
+        second = self.collect()
+        self.assertEqual(second['removed_count'], 0)
+        self.assertEqual(second['status'], 'collected')
+        self.assertTrue((self.root / self.old).exists())
+
+    def test_foreign_approval_cannot_delete_even_after_preparation(self):
+        self.prepare()
+        with self.assertRaisesRegex(ValueError, 'approval'):
+            apply_semantic_retirement(self.root, self.old, approved_inventory_paths=[self.new], approval_reference='fixture')
+        self.assertEqual(self.inventory.read_bytes(), self.original)
+
+    def test_missing_identity_or_scope_protects_original(self):
+        from wqb.knowledge_derivative_lifecycle import prepare_semantic_retirement
+        incomplete = self.fixture.plan('incomplete', rows=[self.fixture.row('alpha')], shared=True)
+        with self.assertRaisesRegex(ValueError, 'replacement'):
+            prepare_semantic_retirement(self.root, self.old, replacement_plan_path=incomplete)
+        self.assertFalse(self.inventory.with_name('retirement.json').exists())
+
+    def test_execution_and_run_references_prevent_retirement(self):
+        owner = self.root / 'runs/mission/run_manifest.json'
+        owner.parent.mkdir(parents=True)
+        owner.write_text(json.dumps({'evidence_path': str(self.inventory)}), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'reference'):
+            self.prepare()
+        self.assertTrue(self.inventory.exists())
+        owner.unlink()
+        self.inventory.with_name('execution_authority.json').write_text('{}', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'execution|artifact'):
+            self.prepare()
+
+    def test_interruption_after_intent_keeps_history_and_recovers(self):
+        from wqb import knowledge_derivative_lifecycle as lifecycle
+        self.prepare()
+        with patch.object(lifecycle, '_remove_expanded_inventory', side_effect=OSError('fixture crash')):
+            with self.assertRaises(OSError):
+                self.collect()
+        self.assertTrue(self.inventory.exists())
+        self.assertTrue(lifecycle.check_semantic_retirement(self.root, self.old)['blocked'])
+        self.assertEqual(self.collect()['status'], 'collected')
+
+    def test_interruption_after_unlink_recovers_without_resurrection(self):
+        from wqb import knowledge_derivative_lifecycle as lifecycle
+        self.prepare()
+        with patch.object(lifecycle, '_complete_retirement', side_effect=OSError('fixture crash')):
+            with self.assertRaises(OSError):
+                self.collect()
+        self.assertFalse(self.inventory.exists())
+        self.assertEqual(lifecycle.read_retired_semantic_plan(self.root, self.old)['status'], 'retired')
+        self.assertEqual(self.collect()['status'], 'collected')
+
+    def test_changed_payload_or_corrupt_archive_never_collected(self):
+        result = self.prepare()
+        archive = self.root / result['archive_ref']['path']
+        archive.write_bytes(b'corrupt')
+        with self.assertRaises(ValueError):
+            self.collect()
+        self.assertEqual(self.inventory.read_bytes(), self.original)
+
+    def test_completed_payload_reappearance_is_a_visible_fault(self):
+        self.prepare()
+        self.collect()
+        self.inventory.write_bytes(self.original)
+        with self.assertRaisesRegex(ValueError, 'reappeared'):
+            self.collect()
+
+    def test_retired_plan_rejected_before_any_execution_authority(self):
+        from wqb.full_semantic_execution import run_full_semantic_compile
+        plan = json.loads((self.root / self.old).read_bytes())
+        self.prepare()
+        result = run_full_semantic_compile(self.root, plan, executor=lambda **_: self.fail('model not allowed'))
+        self.assertEqual(result['status'], 'blocked')
+        self.assertFalse(self.inventory.with_name('execution_authority.json').exists())
+
+    def test_history_report_stays_read_only_after_collection(self):
+        from wqb.full_semantic_coverage import build_full_semantic_report
+        plan = json.loads((self.root / self.old).read_bytes())
+        self.prepare()
+        self.collect()
+        report = build_full_semantic_report(self.root, plan)
+        self.assertEqual(report['status'], 'retired')
+        self.assertTrue(report['read_only'])
+        self.assertFalse(report['research_ready'])
+        self.assertFalse((self.root / 'machine/reports').exists())
+
+    def test_reference_created_after_intent_prevents_collection(self):
+        self.prepare()
+        owner = self.root / 'runs/new/job.json'
+        owner.parent.mkdir(parents=True)
+        owner.write_text(json.dumps({'path': str(self.inventory)}), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'reference'):
+            self.collect()
+        self.assertEqual(self.inventory.read_bytes(), self.original)
+
+    def test_same_vault_but_different_exact_scope_is_not_covered(self):
+        from wqb.knowledge_derivative_lifecycle import prepare_semantic_retirement
+        row = self.fixture.row('scoped')
+        usa = dict(region='USA', delay=1, universe='TOP3000', instrument_type='EQUITY')
+        old = self.fixture.plan('old scope', rows=[dict(row, scopes=[usa])])
+        new = self.fixture.plan('new scope', rows=[dict(row, scopes=[dict(usa, universe='TOP1000')])], shared=True)
+        with self.assertRaisesRegex(ValueError, 'scope'):
+            prepare_semantic_retirement(self.root, old, replacement_plan_path=new)
+
+    def test_model_runner_cannot_enter_while_retirement_holds_plan_guard(self):
+        from wqb import full_semantic_execution as execution
+        from wqb.knowledge_derivative_lifecycle import plan_guard
+        plan = json.loads((self.root / self.old).read_bytes())
+        with plan_guard(self.root, self.old), patch.object(execution, 'LOCK_TIMEOUT_SECONDS', .03):
+            result = execution.run_full_semantic_compile(self.root, plan, executor=lambda **_: self.fail('model not allowed'))
+        self.assertEqual(result['status'], 'blocked')
+        self.assertFalse(self.inventory.with_name('execution_authority.json').exists())
+
+    def test_preparer_cannot_recreate_payload_for_a_marked_plan(self):
+        fixture_root, plan = self.fixture.job_plan()
+        from wqb.full_semantic_compile import prepare_full_semantic_compile
+        inventory = fixture_root / plan['inventory_ref']['path']
+        inventory.unlink()
+        (fixture_root / plan['plan_path']).with_name('retirement.json').write_bytes(b'unknown marker')
+        with self.assertRaisesRegex(ValueError, 'retired'):
+            prepare_full_semantic_compile(fixture_root, plan['identity']['config'])
+        self.assertFalse(inventory.exists())

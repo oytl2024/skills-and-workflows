@@ -1,3 +1,5 @@
+import hashlib
+import io
 import json
 import os
 import tempfile
@@ -13,6 +15,181 @@ from wqb.knowledge_clean_compile import (
     migrate_legacy_decision_artifacts,
     plan_obsolete_active_cleanup,
 )
+
+
+class ReferenceScannerTests(unittest.TestCase):
+    def test_explicit_maintenance_scan_deadline_is_finite_and_validated(self):
+        """Input: maintenance time allowance. Output: bounded scan or refusal; reject invalid limits."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(clean_compile._reference_refusal(root, root / 'old', '', max_seconds=120), '')
+            for value in (True, 0, -1, float('inf'), float('nan'), '120'):
+                self.assertEqual(clean_compile._reference_refusal(
+                    root, root / 'old', '', max_seconds=value), 'evidence reference scan limit')
+
+    def test_plain_semantic_values_do_not_require_path_resolution(self):
+        """Input: semantic-only strings. Output: no refusal; avoid filesystem-path work for plain labels."""
+        root = Path(os.path.abspath('vault'))
+        target = root / 'machine/semantic_jobs/old/inventory.jsonl'
+        owner = root / 'machine/data_ledger.jsonl'
+        with patch.object(clean_compile.os.path, 'abspath', side_effect=AssertionError('unneeded path resolution')):
+            self.assertEqual(clean_compile._reference_value_refusal(
+                {'description': 'negative relative sentiment', 'type': 'VECTOR'}, root, target, owner, '', float('inf')), '')
+
+    def test_relative_and_normalized_ancestor_references_still_pin(self):
+        """Input: relative/dotted references. Output: refusal; lexical fast path preserves ancestor protection."""
+        root = Path(os.path.abspath('vault'))
+        target = root / 'machine/semantic_jobs/old/inventory.jsonl'
+        owner = root / 'machine/semantic_jobs/old/plan.json'
+        for value in ('inventory.jsonl', '.', '../old', 'machine', 'machine/semantic_jobs/new/../old'):
+            with self.subTest(value=value):
+                self.assertEqual(clean_compile._reference_value_refusal(
+                    {'path': value}, root, target, owner, '', float('inf')), 'referenced evidence path')
+
+    def _owner(self, root, name, payload):
+        """Input: root (Path), name (str), payload (bytes). Output: Path; write isolated owner fixture."""
+        owner = root / name
+        owner.parent.mkdir(parents=True, exist_ok=True)
+        owner.write_bytes(payload)
+        return owner
+
+    def test_routing_roots_do_not_pin_but_evidence_and_dictionary_keys_do(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'knowledge'
+            target = root / 'machine/semantic_inventories/old/inventory.jsonl'
+            owner = self._owner(root, 'machine/semantic_jobs/job/plan.json', b'{}')
+            for payload, pinned in (
+                ({'root': str(root), 'knowledge_root': str(root.parent)}, False),
+                ({'root': '.'}, False),
+                ({'evidence_path': str(root)}, True),
+                ({'root': str(root / 'machine')}, True),
+                ({str(root): 'dictionary key'}, True),
+                ({'source_path': str(target)}, True),
+            ):
+                with self.subTest(payload=payload):
+                    owner.write_text(json.dumps(payload), encoding='utf-8')
+                    self.assertEqual(bool(clean_compile._reference_refusal(root, target, '')), pinned)
+
+    def test_exclusions_are_exact_and_other_reports_still_pin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'knowledge'
+            target = root / 'old.md'
+            payload = json.dumps({'path': str(target)}).encode()
+            own = self._owner(root, 'machine/semantic_jobs/own/report.json', payload)
+            self.assertEqual(clean_compile._reference_refusal(root, target, '', ignored_owners=[own]), '')
+            for name in ('machine/semantic_jobs/own/report.jsonl', 'runs/recovery/report.json',
+                         '../runs/recovery/report.json'):
+                other = self._owner(root, name, payload)
+                self.assertTrue(clean_compile._reference_refusal(root, target, '', ignored_owners=[own]))
+                other.unlink()
+            for invalid in (own.parent, root.parent / 'outside.json', root / 'machine/*/report.json'):
+                with self.subTest(invalid=invalid):
+                    self.assertTrue(clean_compile._reference_refusal(root, target, '', ignored_owners=[invalid]))
+
+    def test_historical_reports_are_opt_in_and_exactly_excludable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'old.md'
+            owner = self._owner(root, 'machine/reports/report.json',
+                                json.dumps({'path': str(target)}).encode())
+            self.assertEqual(clean_compile._reference_refusal(root, target, ''), '')
+            self.assertTrue(clean_compile._reference_refusal(root, target, '', historical_reports=True))
+            self.assertEqual(clean_compile._reference_refusal(
+                root, target, '', historical_reports=True, ignored_owners=[owner]), '')
+
+    def test_jsonl_streams_with_larger_file_bound_and_hashes_exact_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            payload = b'{"note":"unrelated"}\r\n\n' * 100
+            owner = self._owner(root, 'runs/job/events.jsonl', payload)
+            snapshots = {}
+            original_open = Path.open
+
+            def bounded_open(path, *args, **kwargs):
+                """Input: Path/open arguments. Output: stream; forbid bulk reads of the JSONL owner."""
+                if path == owner:
+                    class LinesOnly(io.BytesIO):
+                        def read(self, *args):
+                            """Input: read arguments. Output: none; reject JSONL bulk read."""
+                            raise AssertionError('JSONL must use bounded readline')
+                    return LinesOnly(payload)
+                return original_open(path, *args, **kwargs)
+
+            with patch.object(clean_compile, 'REFERENCE_FILE_LIMIT', 64):
+                self.assertTrue(clean_compile._reference_refusal(root, root / 'old.md', ''))
+                with patch.object(Path, 'open', bounded_open):
+                    self.assertEqual(clean_compile._reference_refusal(
+                        root, root / 'old.md', '', snapshots=snapshots,
+                        max_file_bytes=len(payload), max_total_bytes=len(payload)), '')
+            self.assertEqual(snapshots, {str(owner): hashlib.sha256(payload).hexdigest()})
+
+    def test_bad_truncated_changed_or_overlong_rows_fail_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            owner = self._owner(root, 'runs/job/events.jsonl', b'{}\n')
+            for payload in (b'{}\n{"path":', b'{"a":1,"a":2}\n', b'{"a":NaN}\n', b'\xff\n'):
+                with self.subTest(payload=payload):
+                    owner.write_bytes(payload)
+                    self.assertTrue(clean_compile._reference_refusal(root, root / 'old.md', ''))
+            owner.write_bytes(b'{"note":"too long"}\n')
+            with patch.object(clean_compile, 'REFERENCE_LINE_LIMIT', 8):
+                self.assertTrue(clean_compile._reference_refusal(root, root / 'old.md', ''))
+            owner.write_bytes(b'{"note":"first"}\n')
+            from wqb import semantic_publication
+            load = semantic_publication._load
+
+            def change_after_read(data):
+                """Input: bytes. Output: parsed object; simulate a same-size owner mutation during parsing."""
+                owner.write_bytes(b'{"note":"other"}\n')
+                os.utime(owner, ns=(owner.stat().st_atime_ns, owner.stat().st_mtime_ns + 1000000000))
+                return load(data)
+
+            snapshots = {}
+            with patch.object(semantic_publication, '_load', side_effect=change_after_read):
+                self.assertTrue(clean_compile._reference_refusal(root, root / 'old.md', '', snapshots=snapshots))
+            self.assertEqual(snapshots, {})
+
+    def test_snapshots_hash_consumed_stream_not_a_second_file_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            owner = self._owner(root, 'runs/events.jsonl', b'{"value":1}\n')
+            consumed = b'{"value":2}\n'
+            snapshots = {}
+            with patch.object(Path, 'open', return_value=io.BytesIO(consumed)) as opened:
+                self.assertEqual(clean_compile._reference_refusal(
+                    root, root / 'old.md', '', snapshots=snapshots), '')
+            opened.assert_called_once_with('rb')
+            self.assertEqual(snapshots, {str(owner): hashlib.sha256(consumed).hexdigest()})
+            snapshots.clear()
+            with patch.object(Path, 'open', return_value=io.BytesIO(b'{}\n')):
+                self.assertEqual(clean_compile._reference_refusal(
+                    root, root / 'old.md', '', snapshots=snapshots), 'evidence changed during scan')
+            self.assertEqual(snapshots, {})
+
+    def test_total_file_and_time_budgets_fail_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._owner(root, 'runs/first.json', b'{}')
+            self._owner(root, 'runs/second.jsonl', b'{}\n')
+            for limits in ({'max_total_bytes': 4}, {'max_file_bytes': 1},
+                           {'max_file_bytes': float('inf')}, {'max_total_bytes': 0},
+                           {'max_file_bytes': True}):
+                with self.subTest(limits=limits):
+                    self.assertEqual(clean_compile._reference_refusal(
+                        root, root / 'old.md', '', **limits), 'evidence reference scan limit')
+            with patch.object(clean_compile, 'REFERENCE_TIME_LIMIT', -1):
+                self.assertEqual(clean_compile._reference_refusal(
+                    root, root / 'old.md', ''), 'evidence reference scan limit')
+
+    def test_json_snapshot_and_digest_reference_are_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            payload = b'{"source_sha256":"protected-digest"}\n'
+            owner = self._owner(root, 'runs/recovery/report.json', payload)
+            snapshots = {}
+            self.assertEqual(clean_compile._reference_refusal(
+                root, root / 'old.md', 'protected-digest', snapshots=snapshots), 'referenced evidence digest')
+            self.assertEqual(snapshots, {str(owner): hashlib.sha256(payload).hexdigest()})
 
 
 class KnowledgeCleanCompileTests(unittest.TestCase):

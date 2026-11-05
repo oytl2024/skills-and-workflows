@@ -416,6 +416,8 @@ def _load_plan(root: Path, plan: dict) -> tuple:
     base = 'machine/semantic_jobs/' + plan['content_key']
     if plan.get('plan_path') != base + '/plan.json':
         raise ValueError('plan path mismatch')
+    from wqb.knowledge_derivative_lifecycle import assert_semantic_plan_active
+    assert_semantic_plan_active(root, plan['plan_path'])
     # Plans/inventories can be much larger than a bounded model result; they are
     # local machine manifests, not model material. Raw source limits are unchanged.
     path = _safe(root, plan['plan_path'])
@@ -666,11 +668,13 @@ def run_full_semantic_compile(root: Path, plan: dict, *, executor) -> dict:
                   research_ready=False)
     try:
         root = _root(root)
-        saved, inventory = _load_plan(root, plan)
-        base = 'machine/semantic_jobs/' + saved['content_key']
+        if not isinstance(plan, dict) or not HASH.fullmatch(str(plan.get('content_key', ''))):
+            raise ValueError('plan key mismatch')
+        base = 'machine/semantic_jobs/' + plan['content_key']
         guard = _safe(root, base + '/execution_guard')
         _safe(root, base + '/execution_guard.guard')
         with json_lock_transition_guard(guard, LOCK_TIMEOUT_SECONDS, LOCK_SLEEP_SECONDS, 'plan execution busy'):
+            saved, inventory = _load_plan(root, plan)
             authority_path = _safe(root, base + '/execution_authority.json')
             if authority_path.exists():
                 authority = _read(authority_path, canonical=True)

@@ -311,6 +311,28 @@ def _markdown(report: dict) -> str:
 
 def build_full_semantic_report(root: Path, plan: dict, *, binding_requests=None, consumer_run_dirs=None,
                                detailed: bool = False) -> dict:
+    """Input: source-bound plan/report options. Output: pinned live report or verified read-only retired summary."""
+    from wqb.knowledge_derivative_lifecycle import plan_guard, check_semantic_retirement, _retired_context, _retired_summary
+    root = _root(root)
+    if (not isinstance(plan, dict) or not HASH.fullmatch(str(plan.get('content_key', '')))
+            or plan.get('plan_path') != 'machine/semantic_jobs/' + plan['content_key'] + '/plan.json'):
+        raise ValueError('plan root/key/path mismatch')
+    with plan_guard(root, plan['plan_path']):
+        if check_semantic_retirement(root, plan['plan_path'])['blocked']:
+            saved, intent, counts = _retired_context(root, plan['plan_path'])
+            expected, observed = dict(saved), dict(plan)
+            for value in (expected, observed):
+                value['estimates'] = {key: item for key, item in value['estimates'].items()
+                                      if key not in ('cached_jobs', 'changed_jobs')}
+            if expected != observed:
+                raise ValueError('retired supplied plan differs from original')
+            return _retired_summary(saved, intent, counts)
+        return _build_full_semantic_report(root, plan, binding_requests=binding_requests,
+            consumer_run_dirs=consumer_run_dirs, detailed=detailed)
+
+
+def _build_full_semantic_report(root: Path, plan: dict, *, binding_requests=None, consumer_run_dirs=None,
+                                detailed: bool = False) -> dict:
     """Input: knowledge-root Path/authenticated K4 plan dict. Output: four-level report dict and JSON/Markdown files.
 
     Only machine/reports is written. Invalid plans raise before report creation;

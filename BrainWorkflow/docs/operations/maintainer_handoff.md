@@ -386,9 +386,19 @@ Obsolete-path cleanup uses the publication lock, explicit reference-owner
 contracts, per-candidate validation and an intent journal. Recovery/job reports
 and run JSONL remain protection roots; generic filenames are not exemptions.
 Unsafe reference ancestors mean uncertainty, not an empty reference set.
-`knowledge_derivative_lifecycle.py` is read-only auditing only: machine-plan
-retirement/deletion still requires shared writer serialization, authenticated
-replacement and interruption recovery. Do not interpret its audit as GC approval.
+`knowledge_derivative_lifecycle.py` now provides explicit guarded retirement:
+prepare verifies a zero-budget unexecuted legacy owner, replacement identity/scope
+coverage and references, then saves a lossless shared archive and read-only intent.
+Collection requires exact approved paths and an audit reference. Readers retain
+historical evidence; normal Start never invokes collection. Actual-vault reference
+uncertainty still protects every original. Audit alone is never GC approval.
+
+The existing desktop entry uses a verified native installation when present at
+`output/desktop-application/installed/BrainWorkflow/BrainWorkflow.exe`.
+`installed/installation.json` binds binary hash and source revision; bundled source
+must match. Invalid installations fail visibly. Missing installations retain old
+compatibility. Backend mode never recursively launches the GUI. Installation and
+opening the app do not authorize research, platform capture or proof renewal.
 
 For browser verification, wait for DOM and the required state, not network idle:
 the Console's persistent SSE connection intentionally remains open. Use isolated

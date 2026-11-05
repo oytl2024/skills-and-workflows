@@ -67,6 +67,128 @@ Use exact allowlisted paths under owned machine-derived boundaries. Reject links
 
 Real deletion follows verified Git sync and a precise path/reference audit. Migrate readers before removing referenced old storage; retain compatibility or protect the artifact when preservation cannot be proved. No broad age-based recursive removal.
 
+### P4 Detailed Retirement Contract (Nov 5 Confirmed)
+
+The user confirmed read-only retirement and lossless preservation, then approved
+deleting migrated old knowledge copies and all Signboard functionality. The
+following contract refines section 4; the Orchestrator remains unchanged.
+
+**Preservation choice.** Retire an unexecuted knowledge-compilation plan, never
+a research mission. Preserve its immutable plan, job inputs, source identities,
+dates, usage and evidence. Before collecting its expanded legacy inventory,
+create a lossless, streaming gzip object of its exact original bytes in the new
+shared `machine/semantic_inventories/<original-sha>/` store. Verify compressed and uncompressed
+hashes and the exact uncompressed byte count. This capsule is historical
+evidence, not a current machine projection or new raw authority. A summary-only
+receipt is insufficient when original row details cannot be reconstructed.
+Keep one canonical historical object, not permanent old-directory backups.
+After verified migration collect expanded legacy copies and owned transitional
+copies; unique historical bytes remain available from the new store. Reusable
+raw/research/recovery evidence is protected, not erased as a legacy copy.
+
+**Eligibility.** Limit version 1 to explicitly selected plan-local inventories:
+`machine/semantic_jobs/<plan-key>/inventory.jsonl`. Require authenticated plan,
+inventory and job references; integer-zero original/declared model allowances;
+zero recorded calls; no execution authority, reservations, worker claims,
+results, cancellation/recovery state or unknown files in the owning plan.
+Job evidence is verified against its original bound input hashes, not promoted
+to current semantic/execution validity. Any uncertain or executed job evidence
+protects the candidate. Current shared inventories and all research runs remain
+outside the collection allowlist.
+
+The history-preserving capsule does not make an original model owner disposable.
+Protect every historical `owner_plan` dependency, including when another plan
+reuses a shared job. Worker authentication must not acquire the runner-held
+plan/job guard or a publication lock retained across the waiting model call.
+
+**Replacement proof.** The caller names an authenticated replacement plan from
+the same vault. Verify that its current inventory contains every old target
+identity and exact scope; record both plan/inventory digests and the coverage
+comparison. Never infer supersession from mtime, a newest directory, a filename,
+equal counts or zero allowance. Coverage is not equivalent economic meaning,
+freshness, successful explanation or research eligibility. A missing target or
+scope protects the old candidate. Original source-generation references remain
+in the historical plan and capsule even when the replacement uses newer facts.
+
+**Coordination.** Preparation, execution admission, retirement and top-level
+report publication use this order: owning plan execution guard -> sorted
+referenced-job guards during retirement commit -> semantic publication lock ->
+source-index guard when needed. No inverse acquisition. Retirement acquires job
+guards only after compression, with bounded waits, so shared evidence cannot
+change during final assessment; it never deletes or retires the shared jobs.
+The plan guard pins a reader/executor; publication locks cover only short
+admission/reference/commit sections, not compression or model/network work.
+Nested worker and historical-owner authentication never reacquires its parent's
+plan/job guards. Executed/original-owner plans remain ineligible and protected;
+no new pin registry or global research lock is introduced. Execution must recheck retirement while
+holding the plan guard, before loading inventory or creating authority. A retired
+key cannot be prepared again to resurrect its original execution. Shared jobs
+belonging to other plans are never deleted or silently retired.
+
+**Reference assessment.** Under the participating guards, inspect declared
+current publication, frozen-run, model-job, source-index and recovery reference
+contracts. Exclude only the candidate's own authenticated plan/transaction
+records, not generic report filenames or run JSONL. Recheck owner snapshots
+before commit. Unsafe paths, unsupported writers, incomplete scans, changed
+references and unresolved outcomes protect that candidate. Diagnostic paths do
+not automatically become permanent roots. Audit results alone grant no deletion
+authority, and uncertainty must not create a global research-readiness failure.
+
+Coverage reports explicitly store `inventory_ref`; do not inherit the general
+cleanup helper's blanket exclusion of `machine/reports`. Classify exact known
+coverage reports as historical read-only consumers only after the historical
+resolver supports their bound reference. Unsupported report/reference contracts
+remain protected. Frozen Start/publication references are never rewritten into
+summary-only replacements.
+
+**Durable transaction.** The identity binds the old plan/inventory, capsule,
+explicit replacement and policy version, never merely the current date. Stages:
+prepare and verify capsule -> atomically publish a retirement intent -> recheck
+references, identities and approved target -> collect expanded inventory ->
+publish completion evidence. Intent publication makes the knowledge plan
+read-only even if interruption occurs before collection. Missing/corrupt intent
+or capsule fails closed; it never restores execution authority. Recovery uses
+the saved transaction and replacement, not a newly selected global plan.
+Repeated recovery is idempotent; a failure keeps all available original bytes.
+Unlink checks reject changed candidates, links/junctions/hardlinks and escapes.
+
+**Readers.** A valid retired plan has an explicit historical view. Audit/report
+readers can validate and stream its capsule without recreating an active
+inventory. Active execution rejects retired or malformed retirement markers
+before authority creation. Historical reports are labelled retired/read-only,
+not current source coverage or completed model work. Existing nonretired plans,
+receipts and all research-run readers retain their behavior.
+
+**Interface and authority.** Keep audit as the default. Separate preparation of
+a transaction from collection, which requires the exact approved inventory
+paths and a bound maintenance approval reference. Routine research gets no new
+buttons or gates. Existing knowledge maintenance may expose transaction stages
+through its current job records; no automatic retirement is enabled by default
+in this development round. The latest user approval permits actual removal of
+verified migrated copies only after an exact path/reference audit, offline
+verification and Git synchronization; it never permits deleting unique evidence.
+That audit must verify the loaded writer revision and absence of old/unresolved
+knowledge workers; an older running binary may not honor the new protocol.
+
+**Bounds and acceptance.** Stream compression and validation with finite byte,
+row, time and candidate limits. Unknown/oversized evidence is retained, never
+truncated. Test scope and identity mismatches, prepared/active/shared jobs,
+cross-process lock order, revival attempts, archive tampering, reference and
+path replacement races, every interruption boundary, repeated recovery and
+unchanged original accounting/Stop. Use isolated fixtures and fake executors;
+no WQB, model calls, research resume, proof renewal or real deletion.
+
+### Signboard Removal (Nov 5 Confirmed)
+
+Remove Signboard as a product capability, including its dedicated launchers,
+integration routes, local dependency distribution and board-only assets/tests.
+Preserve the research Console, desktop launchers and canonical root architecture
+and task ledgers. Shared architecture parsers remain only where used by surviving
+Console/AI routing. Inventory exact dependency closure and Git recoverability
+before removal; do not publish private runtime state for backup. Migrate unique
+project facts into canonical project records before collecting any board state.
+Secrets or unrelated browser/configuration files, if found, require named review.
+
 ## 5. Gate Policy Not Changed Yet
 
 Do not silently change the 90-day policy, timing/units/grain requirements, Repair frequency/exposure/invariants, Seed thresholds, publication review, Stop, budgets, unknown POST handling, correlation checks or final-submit authorization. Report every evaluated rejection with target, stage, code, evidence, scope and disposition. Distinguish not_evaluated, missing explanation, local implementation limit and actual incompatibility.

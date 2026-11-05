@@ -614,7 +614,8 @@ def prepare_full_semantic_compile(root: Path, config: dict) -> dict:
         identity['local_field_extracts'] = dict(config=local_extracts, result=preparation)
     key = _digest(identity)
     base = 'machine/semantic_jobs/' + key
-    inventory_ref = _freeze(root, 'machine/semantic_inventories/' + identity['inventory_sha256'] + '/inventory.jsonl', raw_inventory)
+    inventory_ref = dict(path='machine/semantic_inventories/' + identity['inventory_sha256'] + '/inventory.jsonl',
+                         sha256=identity['inventory_sha256'])
     unresolved = [dict(d) for d in diagnostics if d['code'] in INVENTORY_GAP_CODES or d.get('inventory_unresolved')]
     coverage = dict(target_count=len(inventory), source_validated_targets=sum(t['source_validated'] for t in inventory),
                     prepared_targets=sum(t['status'] == 'prepared' for t in inventory),
@@ -633,6 +634,15 @@ def prepare_full_semantic_compile(root: Path, config: dict) -> dict:
                 model_calls=0, publication_authorized=False, research_authorized=False)
     if preparation is not None:
         plan['local_field_extracts'] = preparation
-    _freeze(root, plan['plan_path'], _bytes(plan))
+    from wqb.knowledge_derivative_lifecycle import plan_guard, assert_semantic_plan_active
+    from wqb.semantic_publication import _acquire_lock, _release_lock
+    with plan_guard(root, plan['plan_path']):
+        assert_semantic_plan_active(root, plan['plan_path'])
+        handle = _acquire_lock(root)
+        try:
+            _freeze(root, inventory_ref['path'], raw_inventory)
+            _freeze(root, plan['plan_path'], _bytes(plan))
+        finally:
+            _release_lock(handle)
     # Cache counters are observations of preparation, never part of immutable identity.
     return dict(plan, estimates=dict(estimates, cached_jobs=cached, changed_jobs=len(jobs) - cached))
