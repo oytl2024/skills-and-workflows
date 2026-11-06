@@ -21,6 +21,24 @@ inside the replacement tree. The three distinct old semantic inventories remain
 protected; no real inventory retirement/deletion is implied. Outcome and loaded
 revision must be recorded after execution, never inferred from this audit.
 
+Executed after verified Git equality at
+`29240b6c6f5a9a0fcdeec6a86743d6d5aec0c95b`: 356 application files overwritten
+at the audited identical relative paths, each copied hash checked; no recursive
+deletion, private configuration, profile or research evidence touched. Receipt
+published last with source revision
+`9944984c350f1485579f8862c9bdde867739b4da9aed2882b634f228d3aeee98`
+and EXE SHA256
+`ffa435a58671e296c2b4d2d051498892f67fda5f2196ad8a1f3bd24a2d36ea34`.
+The outer `BrainWorkflow.vbs` opened the installed native window. Real-loopback
+health and application snapshot verified source/assets, outer workspace, external
+configuration and canonical knowledge/runs roots. Top-level mission-state hashes
+were unchanged; no Start command, capture, simulation or Alpha submission was
+issued. The actual window and realtime overview were inspected. Private receipt:
+`output/desktop-validation/installed-console-loaded-20261106.json`.
+Post-install verification: 74 desktop/application/root-entry/normalization tests
+passed in 11.805 seconds. Production/test sources remain the full-suite snapshot;
+only this deployment audit is changed for the cleanup-outcome commit.
+
 ## 2026-10-21 单一根入口
 
 用户明确批准仅在 brain 最外层保留 AGENTS.md、todo.md、milestone.md。仓库 AGENTS 的独有规则已合入根 AGENTS；下列四个普通文件允许删除，原版本可从已同步的 `7bff56b` Git 历史恢复：`skills-and-workflows/AGENTS.md`、`skills-and-workflows/todo.md`、`skills-and-workflows/milestone.md`、`skills-and-workflows/BrainWorkflow/todo.md`。后三者只是根文件跳转页，无独有任务正文；历史归档不删除。入口回归改为检查根规则完整、嵌套入口不存在、归档哈希不变。本文旧段落中的“仓库 AGENTS.md”指当时位置，当前规则唯一入口为 brain/AGENTS.md。
