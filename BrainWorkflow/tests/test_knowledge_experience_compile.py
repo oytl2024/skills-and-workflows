@@ -1,0 +1,211 @@
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+from wqb.knowledge_contracts import canonical_source_family, parse_markdown_front_matter
+from wqb.knowledge_experience_compile import (
+    compile_human_experience_wiki,
+    compile_research_case_reports,
+    select_research_case_records,
+)
+
+
+MAX_EXPECTED_COMPILED_FROM = 24
+
+
+class KnowledgeExperienceCompileTests(unittest.TestCase):
+    def test_select_research_cases_uses_latest_snapshot_then_priority_and_recency(self):
+        rows = [
+            {"run_id": "run-a", "case_reason": "submitted_or_approved", "synced_at": "2026-07-30T01:00:00+00:00"},
+            {"run_id": "run-b", "case_reason": "near_miss", "synced_at": "2026-07-30T03:00:00+00:00"},
+            {"run_id": "run-c", "case_reason": "submitted_or_approved", "synced_at": "2026-07-30T02:00:00+00:00"},
+            {"run_id": "run-d", "case_reason": "repair_loop", "synced_at": "2026-07-30T04:00:00+00:00"},
+            {"run_id": "run-e", "case_reason": "submitted_or_approved", "synced_at": "2026-07-30T06:00:00+00:00"},
+            {"run_id": "run-f", "case_reason": "submitted_or_approved", "synced_at": "2026-07-30T02:00:00+00:00"},
+            {"run_id": "run-a", "case_reason": "representative_failure", "synced_at": "2026-07-30T05:00:00+00:00"},
+            {"run_id": "run-z", "case_reason": "near_miss", "synced_at": "2026-07-30T01:00:00+00:00"},
+            {"run_id": "run-z", "case_reason": "", "synced_at": "2026-07-30T07:00:00+00:00"},
+        ]
+
+        selected = select_research_case_records(rows, limit=6)
+
+        self.assertEqual(
+            [row["run_id"] for row in selected],
+            ["run-e", "run-c", "run-f", "run-b", "run-d", "run-a"],
+        )
+
+    def test_selected_near_miss_research_record_gets_case_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "machine").mkdir()
+            row = {
+                "run_id": "run-near-miss",
+                "objective": "Explore new analyst data",
+                "final_state": "paused",
+                "case_reason": "near_miss",
+                "backtest": [{"alpha_id": "a1", "metrics": {"sharpe": 1.2}}],
+                "triage": [{"failed": ["prod_correlation"], "benchmark_label": "near_miss"}],
+                "repair": {},
+                "candidate_gate": [],
+                "synced_at": "2026-07-30T00:00:00+00:00",
+            }
+            (root / "machine" / "research_records.jsonl").write_text(
+                json.dumps(row) + "\n", encoding="utf-8"
+            )
+
+            reports = compile_research_case_reports(root, "2026-07-30T00:00:00+00:00", limit=5)
+
+            self.assertEqual(len(reports), 1)
+            text = reports[0].read_text(encoding="utf-8")
+
+        self.assertIn("run-near-miss", text)
+        self.assertIn("Reusable Lesson", text)
+
+    def test_compile_research_case_reports_removes_stale_markdown_reports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            machine = root / "machine"
+            reports_dir = root / "wiki" / "60_research_cases"
+            machine.mkdir()
+            reports_dir.mkdir(parents=True)
+            stale_report = reports_dir / "run-stale.md"
+            retained_note = reports_dir / "keep.txt"
+            stale_report.write_text("stale", encoding="utf-8")
+            retained_note.write_text("keep", encoding="utf-8")
+            (machine / "research_records.jsonl").write_text(
+                json.dumps(
+                    {
+                        "run_id": "run-current",
+                        "case_reason": "near_miss",
+                        "synced_at": "2026-07-30T00:00:00+00:00",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            reports = compile_research_case_reports(root, "2026-07-30T00:00:00+00:00", limit=5)
+
+            self.assertEqual(reports, [reports_dir / "run-current.md"])
+            self.assertFalse(stale_report.exists())
+            self.assertTrue(retained_note.exists())
+
+    def test_compile_writes_only_target_human_pages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            machine = root / "machine"
+            machine.mkdir(parents=True)
+            (machine / "data_ledger.jsonl").write_text(
+                json.dumps(
+                    {
+                        "dataset_id": "analyst_ds",
+                        "field_id": "analyst_revision",
+                        "field_type": "MATRIX",
+                        "semantic_tags": ["analyst", "revision"],
+                        "correlation_risk": "low",
+                        "coverage": 0.91,
+                        "source_paths": ["raw/platform/data_fields/2026-07-30/data_fields.jsonl"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (machine / "template_library.jsonl").write_text(
+                json.dumps(
+                    {
+                        "template_id": "analyst_revision_delay_rank",
+                        "template_family": "event_revision",
+                        "hypothesis": "Analyst revisions can proxy improving expectations.",
+                        "required_field_types": ["MATRIX"],
+                        "compatible_semantic_tags": ["analyst", "revision"],
+                        "operator_tags": ["rank", "ts_delta"],
+                        "status": "seed",
+                        "correlation_risk": "low",
+                        "repair_levers": ["neutralization", "decay"],
+                        "source_paths": ["raw/community/forum/example.md"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (machine / "benchmark_rules.jsonl").write_text(
+                json.dumps(
+                    {
+                        "rule_id": "near_miss_stable_pnl_promotion",
+                        "issue_types": ["near_miss"],
+                        "description": "Stable PnL deserves repair review.",
+                        "promotion_condition": "PNL shape is straight enough.",
+                        "action": "Create a repair candidate.",
+                        "evidence_paths": ["raw/community/user_messages/example.md"],
+                        "consumed_by": ["triage"],
+                        "risk": "repair budget can be wasted",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            summary = compile_human_experience_wiki(root, "2026-07-30T00:00:00+00:00")
+
+            self.assertEqual(summary["page_count"], 6)
+            self.assertTrue((root / "wiki" / "00_start_here.md").exists())
+            self.assertTrue((root / "wiki" / "20_data_semantics.md").exists())
+            self.assertFalse((root / "wiki" / "20_semantics" / "data_ledger.jsonl").exists())
+
+    def test_human_pages_are_compact_and_do_not_dump_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "machine").mkdir()
+            (root / "machine" / "data_ledger.jsonl").write_text("", encoding="utf-8")
+            summary = compile_human_experience_wiki(root, "2026-07-30T00:00:00+00:00")
+
+            for path_text in summary["page_paths"]:
+                text = Path(path_text).read_text(encoding="utf-8")
+                self.assertLess(len(text), 12000)
+                self.assertNotIn('{"', text)
+                self.assertTrue(text.startswith("---\n"))
+
+    def test_compiled_from_uses_bounded_canonical_source_authority(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            machine = root / "machine"
+            machine.mkdir()
+            source_paths = [
+                "raw/platform/data_fields/2026-07-30/field_0.jsonl",
+                "raw/maintenance",
+                "raw/community/user_messages",
+                "wiki/20_semantics/old_summary.md",
+                "raw/learn/legacy.md",
+                "external/evidence.md",
+            ]
+            source_paths.extend(
+                "raw/platform/data_fields/2026-07-30/field_{:03d}_{}.jsonl".format(index, "x" * 80)
+                for index in range(MAX_EXPECTED_COMPILED_FROM * 10)
+            )
+            (machine / "data_ledger.jsonl").write_text(
+                json.dumps({"source_paths": source_paths}) + "\n",
+                encoding="utf-8",
+            )
+
+            summary = compile_human_experience_wiki(root, "2026-07-30T00:00:00+00:00")
+
+            for path_text in summary["page_paths"]:
+                text = Path(path_text).read_text(encoding="utf-8")
+                metadata, _ = parse_markdown_front_matter(text)
+                compiled_from = metadata["compiled_from"]
+                self.assertLess(len(text), 12000)
+                self.assertLessEqual(len(compiled_from), MAX_EXPECTED_COMPILED_FROM)
+                self.assertEqual(compiled_from, sorted(set(compiled_from)))
+                self.assertNotIn("raw/maintenance", compiled_from)
+                self.assertNotIn("raw/community/user_messages", compiled_from)
+                for source_path in compiled_from:
+                    family = canonical_source_family(root / source_path, root)
+                    self.assertTrue(
+                        family.startswith("raw/") or family.startswith("machine/"),
+                        msg=source_path,
+                    )
+
+
+if __name__ == "__main__":
+    unittest.main()

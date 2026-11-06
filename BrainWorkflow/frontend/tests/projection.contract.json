@@ -1,0 +1,13 @@
+{
+  "tree": {
+    "schema_version": 1, "run_id": "legacy-run", "status": "frozen", "tree_digest": "fixture-tree",
+    "tree": {"nodes": [{"node_id": "pair-root", "parent_id": null, "expected": {
+      "baseline": {"simulation_identity": "base-hash", "expression": "rank(fixture_x)", "settings": {"decay": 5}},
+      "treatment": {"simulation_identity": "child-hash", "expression": "rank(ts_mean(fixture_x, 22))", "settings": {"decay": 5}}
+    }}]}
+  },
+  "execution": {"schema_version": 1, "run_id": "legacy-run", "tree_digest": "fixture-tree", "selected_node_ids": ["pair-root"], "routes": {"pair-root": {"status": "waiting", "arm_states": {"baseline": "positive", "treatment": "pending"}, "reasons": ["waiting_for_treatment"]}}, "comparisons": {}},
+  "rows": [{"expression_hash": "base-hash", "expression": "rank(fixture_x)", "settings": {"decay": 5}, "alpha_id": "fixture-baseline", "status": "CHECKED", "metrics": {"sharpe": 1.5, "fitness": 0.7}}],
+  "selection": {"selected": [{"identity": {"lane_id": "legacy-run", "expression_hash": "base-hash", "alpha_id": "fixture-baseline"}, "score": 0.75, "reasons": ["hard_gates_passed"]}], "seed_rows": [{"expression_hash": "base-hash", "expression": "rank(fixture_x)", "settings": {"decay": 5}, "alpha_id": "fixture-baseline", "status": "CHECKED", "metrics": {"sharpe": 1.5}}]},
+  "repair": {"attempts": [{"parent_alpha_id": "fixture-baseline", "phase": "checked", "status": "completed", "plan": {"decision": {"hypothesis": "One controlled change"}, "variants": [{"expression_hash": "repair-hash", "expression": "rank(ts_delta(fixture_x, 5))", "settings": {"decay": 8}}]}, "children": [{"expression_hash": "repair-hash", "expression": "rank(ts_delta(fixture_x, 5))", "settings": {"decay": 8}, "alpha_id": "fixture-repair", "metrics": {"sharpe": 1.6}, "score": 0.81}], "experiment_trace": {"outcome": "accepted", "reason": "Measured improvement", "baseline": {"alpha_id": "fixture-baseline"}}}, {"parent_alpha_id": "fixture-baseline", "phase": "waiting", "plan": {"variants": [{"expression_hash": "pending-hash", "expression": "rank(ts_delta(fixture_x, 10))", "settings": {"decay": 8}}]}}]}
+}

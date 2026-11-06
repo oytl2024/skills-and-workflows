@@ -1,6 +1,16 @@
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any
+
+from wqb.benchmark_rules import (
+    BenchmarkRule,
+    default_benchmark_rules,
+    load_active_benchmark_rules,
+    load_run_benchmark_rules,
+    rules_for_consumer,
+    rules_for_issue_type,
+)
 
 
 BENCHMARK_REVIEW_DAYS = 3
@@ -90,8 +100,15 @@ def pnl_signal_observed(alpha_record: dict[str, Any]) -> bool:
     return any(keyword in text for keyword in PNL_SIGNAL_KEYWORDS)
 
 
-def benchmark_alpha_record(alpha_record: dict[str, Any]) -> AlphaBenchmarkResult:
-    """Input: alpha record. Output: benchmark result. Classify hard pass, repairable signal, or discard."""
+def benchmark_alpha_record(
+    alpha_record: dict[str, Any],
+    benchmark_rules: list[BenchmarkRule] | None = None,
+    knowledge_root: str | Path | None = None,
+    run_dir: str | Path | None = None,
+    consumer: str = "candidate_gate",
+) -> AlphaBenchmarkResult:
+    """Input: alpha, rules, vault/run roots, consumer. Output: result. Apply bound consumer authority."""
+    bound_rules = load_run_benchmark_rules(run_dir) if run_dir is not None else None
     metrics = alpha_record.get("metrics") if isinstance(alpha_record.get("metrics"), dict) else {}
     failed = check_name_set(alpha_record, "failed")
     pending = check_name_set(alpha_record, "pending")
@@ -156,9 +173,21 @@ def benchmark_alpha_record(alpha_record: dict[str, Any]) -> AlphaBenchmarkResult
         score += 0.1
         reasons.append("repairable_turnover")
 
-    if pnl_signal_observed(alpha_record):
+    if bound_rules is not None:
+        active_rules = bound_rules
+    elif benchmark_rules is not None:
+        active_rules = benchmark_rules
+    else:
+        if knowledge_root is not None:
+            active_rules = load_active_benchmark_rules(knowledge_root, fallback_to_defaults=False)
+        else:
+            active_rules = default_benchmark_rules()
+    consumer_rules = rules_for_consumer(active_rules, consumer)
+    pnl_rules = rules_for_issue_type(consumer_rules, "pnl_signal")
+    if pnl_signal_observed(alpha_record) and pnl_rules:
         score += 0.25
         reasons.append("pnl_shape_signal")
+        reasons.extend(f"benchmark_rule:{rule.rule_id}" for rule in pnl_rules)
 
     if checks_to_repair:
         score += 0.1

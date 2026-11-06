@@ -1,9 +1,16 @@
 import unittest
+import json
+import os
+import tempfile
+import threading
+import time
+from pathlib import Path
 from unittest.mock import patch
 
 import requests
 
 from wqb.client import BASE_URL, WQBClient
+from wqb.runtime_control import CONTROL_ENV, RuntimePaused, read_runtime_control, request_runtime_state, update_runtime_status
 
 
 class FakeResponse:
@@ -46,6 +53,73 @@ class AuthenticatingClient(WQBClient):
 
 
 class WQBClientRequestTest(unittest.TestCase):
+    def test_expired_rate_retry_is_rechecked_after_authentication_before_post(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory) / "run"
+            source = Path(directory) / "source"
+            source.mkdir()
+            (source / "rate_limit_state.json").write_text(json.dumps({"status": "cooldown",
+                "consecutive_429_count": 3, "retry_at": "2000-01-01T00:00:00+00:00"}))
+            request_runtime_state(run, "running", enable_live_api=True)
+            update_runtime_status(run, recovery_rate_limit_source=str(source))
+            client = AuthenticatingClient()
+            with patch.dict(os.environ, {CONTROL_ENV: str(run)}):
+                with self.assertRaises(RuntimePaused):
+                    client.post_json("/simulations", [{}])
+            self.assertEqual(client.authenticate_calls, 1)
+            self.assertEqual(client.session.requests, [])
+
+    def test_standalone_simulation_post_never_retries_unknown_outcome(self):
+        session = FakeSession([requests.exceptions.Timeout("response lost"), FakeResponse(status_code=201)])
+        client = WQBClient(session=session, max_retries=1, base_backoff_seconds=0)
+        client.authenticated = True
+        with patch.dict(os.environ):
+            os.environ.pop(CONTROL_ENV, None)
+            with self.assertRaisesRegex(RuntimeError, "outcome unknown"):
+                client.request("POST", "/simulations", json={})
+
+        self.assertEqual(len(session.requests), 1)
+
+    def test_managed_pause_ack_waits_for_actual_simulation_post(self):
+        entered = threading.Event()
+        release = threading.Event()
+        pause_done = threading.Event()
+
+        class BlockingSession(FakeSession):
+            def request(self, method, url, **kwargs):
+                self.requests.append((method, url, kwargs))
+                entered.set()
+                if not release.wait(3):
+                    raise AssertionError("test POST was not released")
+                return FakeResponse(status_code=201, headers={"Location": "/simulations/one"})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            request_runtime_state(run, "running", enable_live_api=True)
+            session = BlockingSession()
+            client = WQBClient(session=session)
+            client.authenticated = True
+            with patch.dict(os.environ, {CONTROL_ENV: str(run)}):
+                worker = threading.Thread(target=lambda: client.request("POST", "/simulations", json={}))
+                worker.start()
+                try:
+                    self.assertTrue(entered.wait(2))
+                    pause = threading.Thread(target=lambda: (request_runtime_state(run, "paused"), pause_done.set()))
+                    pause.start()
+                    deadline = time.monotonic() + 2
+                    while read_runtime_control(run).get("desired_state") != "paused" and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertEqual(read_runtime_control(run)["desired_state"], "paused")
+                    self.assertFalse(pause_done.is_set())
+                finally:
+                    release.set()
+                    worker.join(timeout=3)
+                    pause.join(timeout=3)
+                self.assertTrue(pause_done.is_set())
+                with self.assertRaises(RuntimePaused):
+                    client.request("POST", "/simulations", json={})
+                self.assertEqual(len(session.requests), 1)
+
     def test_constructor_rejects_negative_max_retries(self):
         with self.assertRaises(ValueError):
             WQBClient(max_retries=-1)

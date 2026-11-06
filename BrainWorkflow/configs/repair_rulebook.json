@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "rulebook_id": "metric-directed-defaults-v1",
+  "basis": "project_hypothesis",
+  "decay_grid": [0, 1, 2, 4, 5, 8, 10, 16, 22, 32],
+  "truncation_grid": [0.02, 0.04, 0.06, 0.08, 0.1, 0.12, 0.15],
+  "rules": [
+    {
+      "rule_id": "high-turnover-smoothing", "edit": "decay", "priority": 10,
+      "target_metric": "turnover", "target_direction": "decrease", "parameter_direction": "increase",
+      "trigger": {"checks": ["HIGH_TURNOVER"], "metric": "turnover", "operator": "gt", "threshold": 0.4},
+      "rationale": "Test whether more temporal averaging reduces measured trading activity without weakening signal quality."
+    },
+    {
+      "rule_id": "concentration-weight-cap", "edit": "truncation", "priority": 20,
+      "target_metric": "fitness", "target_direction": "increase", "parameter_direction": "decrease",
+      "trigger": {"checks": ["CONCENTRATED_WEIGHT"], "metric": null, "operator": null, "threshold": null},
+      "rationale": "Test whether a lower weight cap improves measured quality while removing the concentration failure."
+    },
+    {
+      "rule_id": "fitness-response", "edit": "decay", "priority": 30,
+      "target_metric": "fitness", "target_direction": "increase", "parameter_direction": "decrease",
+      "trigger": {"checks": ["LOW_FITNESS"], "metric": null, "operator": null, "threshold": null},
+      "rationale": "Test whether less smoothing improves Fitness through faster response, without asserting the cause of the failure."
+    },
+    {
+      "rule_id": "sharpe-response", "edit": "decay", "priority": 40,
+      "target_metric": "sharpe", "target_direction": "increase", "parameter_direction": "decrease",
+      "trigger": {"checks": ["LOW_SHARPE", "LOW_2Y_SHARPE"], "metric": null, "operator": null, "threshold": null},
+      "rationale": "Test whether less smoothing improves comparable measured Sharpe without changing the economic kernel."
+    },
+    {
+      "rule_id": "fitness-averaging", "edit": "decay", "priority": 50,
+      "target_metric": "fitness", "target_direction": "increase", "parameter_direction": "increase",
+      "trigger": {"checks": ["LOW_FITNESS"], "metric": null, "operator": null, "threshold": null},
+      "rationale": "Test temporal averaging as a competing Fitness hypothesis rather than treating noise reduction as a data fact."
+    },
+    {
+      "rule_id": "sharpe-averaging", "edit": "decay", "priority": 60,
+      "target_metric": "sharpe", "target_direction": "increase", "parameter_direction": "increase",
+      "trigger": {"checks": ["LOW_SHARPE", "LOW_2Y_SHARPE"], "metric": null, "operator": null, "threshold": null},
+      "rationale": "Test whether temporal averaging improves comparable measured Sharpe, retaining all original data and conditions."
+    }
+  ]
+}

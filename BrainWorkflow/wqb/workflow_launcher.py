@@ -5,14 +5,25 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from wqb.benchmark_rules import BENCHMARK_RULES_PATH
+from wqb.knowledge_paths import existing_machine_resource_path, relative_to_knowledge_root
+
 
 DEFAULT_KNOWLEDGE_ARTIFACTS = {
-    "data_ledger": "wiki/20_semantics/data_ledger.jsonl",
-    "template_library": "wiki/30_templates/template_library.jsonl",
-    "freshness_manifest": "wiki/80_maintenance/freshness_manifest.json",
-    "benchmark_rules": "wiki/50_benchmarks/correlation_and_novelty.md",
-    "activity_snapshot": "wiki/10_foundations/activity_snapshot.md",
+    "data_ledger": "machine/data_ledger.jsonl",
+    "template_library": "machine/template_library.jsonl",
+    "freshness_manifest": "machine/freshness_manifest.json",
+    "benchmark_rules": BENCHMARK_RULES_PATH.as_posix(),
+    "activity_snapshot": "raw/platform/activities/bootstrap_activity_snapshot.md",
 }
+
+
+def _knowledge_artifacts(knowledge_root: str | Path) -> dict[str, str]:
+    """Input: knowledge root. Output: artifact path map. Resolve canonical resources with legacy read fallback."""
+    artifacts = dict(DEFAULT_KNOWLEDGE_ARTIFACTS)
+    for name in ("data_ledger", "template_library", "freshness_manifest", "benchmark_rules"):
+        artifacts[name] = relative_to_knowledge_root(existing_machine_resource_path(knowledge_root, name), knowledge_root)
+    return artifacts
 
 
 @dataclass(frozen=True)
@@ -118,7 +129,7 @@ def create_run_manifest(config: WorkflowLaunchConfig, generated_at: str | None =
         live_api_enabled=bool(config.live_api_enabled),
         submit_policy=config.submit_policy,
         knowledge_root=config.knowledge_root,
-        knowledge_artifacts=dict(DEFAULT_KNOWLEDGE_ARTIFACTS),
+        knowledge_artifacts=_knowledge_artifacts(config.knowledge_root),
         readiness_report_path=readiness_path,
         handoff_dir=handoff_dir,
         lanes=list(config.lanes),

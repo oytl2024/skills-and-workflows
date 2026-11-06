@@ -1,25 +1,25 @@
 [
   {
     "name": "data_ledger",
-    "path": "knowledge/wiki/20_semantics/data_ledger.jsonl",
+    "path": "machine/data_ledger.jsonl",
     "updated_at": "2026-07-10",
     "max_age_days": 1
   },
   {
     "name": "template_library",
-    "path": "knowledge/wiki/30_templates/template_library.jsonl",
+    "path": "machine/template_library.jsonl",
     "updated_at": "2026-07-10",
     "max_age_days": 7
   },
   {
     "name": "benchmark_rules",
-    "path": "knowledge/wiki/50_benchmarks",
+    "path": "machine/benchmark_rules.jsonl",
     "updated_at": "2026-07-10",
     "max_age_days": 3
   },
   {
     "name": "activity_snapshot",
-    "path": "knowledge/wiki/10_foundations/activity_snapshot.md",
+    "path": "raw/platform/activities/bootstrap_activity_snapshot.md",
     "updated_at": "2026-07-10",
     "max_age_days": 1
   }
