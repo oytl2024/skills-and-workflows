@@ -1001,6 +1001,7 @@ def build_action_command(action: str, paths: ConsolePaths, form: dict[str, Any] 
         }
         command = build_raw_cli_command("workflow-start", paths, normalized)
         command[2] = "wqb.console_start"
+        command.extend(['--workspace-root', str(paths.project_root)])
         return command
     normalized = {key: (_truthy(value) if key in {"enable_live_api", "confirm_submit"} else value) for key, value in data.items()}
     if action == "capture-platform-data-fields":
@@ -1609,6 +1610,8 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
             self._send_json({
                 'app': 'BrainWorkflow',
                 'workflow_root': str(paths.workflow_root.resolve()),
+                'project_root': str(paths.project_root.resolve()),
+                'configuration_root': str(paths.configuration_root.resolve()),
                 'runs_root': str(paths.runs_root.resolve()),
                 'knowledge_root': str(paths.knowledge_root.resolve()),
                 'server_revision': CONSOLE_SERVER_REVISION,
@@ -1716,9 +1719,10 @@ def run_console(
     knowledge_root: str | Path | None = None,
     runs_root: str | Path | None = None,
     open_browser: bool = True,
+    paths: ConsolePaths | None = None,
 ) -> dict[str, Any]:
     """Input: server config. Output: startup summary. Run the local console until interrupted."""
-    paths = default_console_paths(knowledge_root, runs_root)
+    paths = paths if paths is not None else default_console_paths(knowledge_root, runs_root)
     server = make_console_server(host, port, paths)
     from wqb.maintenance_notifications import dispatch_startup_notifications
     threading.Thread(target=dispatch_startup_notifications, args=(paths.runs_root,),

@@ -197,6 +197,16 @@ After source repair, measure remaining failures and discuss semantic gate change
 
 ## 6. Acceptance And Remaining Authority
 
+Nov5 approved refinement: catalog completeness and exact-field observation are
+separate. A finite/stratified capture replaces only observed dataset/field/scope
+identities, preserving unobserved rows' original evidence, dates and usage.
+`coverage_status=measured_raw` describes a typed field explicitly present in a
+completed/partial matching capture generation, not exhaustive scope enumeration.
+The capture/compile `certification_status`/`source_status` remains partial. Missing
+type, scope or generation proof is not measured. Positive numeric coverage,
+raw-byte certification, age, timing/grain, semantic/binder and submission checks
+remain unchanged. No inferred timing, type or economic interpretation is created.
+
 - TDD covers large/multiscope catalogs, Unicode/line limits, generation changes, unsafe paths, index drift, date-only notes, unchanged replay, shared inventory, GC references and interrupted cleanup.
 - Exercise the real maintenance -> machine -> selected-resource -> Console read path with isolated raw/fake transport. No fabricated stage-success receipts, extra UI gates or late model calls.
 - Use bounded local actual-vault verification after isolated tests, with before/after raw/release/run evidence checks. Report inventory/readability separately from semantic and research readiness; no promise of zero downstream gaps.

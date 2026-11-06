@@ -1,5 +1,26 @@
 # 手动清理清单
 
+## 2026-11-06 Native Installation Replacement Audit
+
+Pending verified Git sync and full-suite acceptance: replace only
+`BrainWorkflow/output/desktop-application/installed/BrainWorkflow/` with the
+verified build `20261106-113104-7809/dist space 中文/BrainWorkflow/`, then refresh
+the adjacent three-key `installation.json` receipt. Both application trees have
+356 files with identical relative names, zero reparse entries; installed root
+has 357 files including its receipt (45,582,258 bytes at audit). Replacement
+build is 45,592,870 bytes. Recheck containment, ancestors, file names and owned
+processes immediately before publishing; no recursive removal is needed for
+this identical-layout overwrite. Stage the receipt last so partial copy cannot
+qualify as current. The old package remains reconstructible in local verified
+build `20261105-193909-3140`; product code is Git recoverable after sync.
+
+This is a generated application deployment, not permission to remove historical
+verification packages, source material, research/recovery records, private config,
+credentials or browser profiles. WebView2 profiles under `runs/desktop` are not
+inside the replacement tree. The three distinct old semantic inventories remain
+protected; no real inventory retirement/deletion is implied. Outcome and loaded
+revision must be recorded after execution, never inferred from this audit.
+
 ## 2026-10-21 单一根入口
 
 用户明确批准仅在 brain 最外层保留 AGENTS.md、todo.md、milestone.md。仓库 AGENTS 的独有规则已合入根 AGENTS；下列四个普通文件允许删除，原版本可从已同步的 `7bff56b` Git 历史恢复：`skills-and-workflows/AGENTS.md`、`skills-and-workflows/todo.md`、`skills-and-workflows/milestone.md`、`skills-and-workflows/BrainWorkflow/todo.md`。后三者只是根文件跳转页，无独有任务正文；历史归档不删除。入口回归改为检查根规则完整、嵌套入口不存在、归档哈希不变。本文旧段落中的“仓库 AGENTS.md”指当时位置，当前规则唯一入口为 brain/AGENTS.md。

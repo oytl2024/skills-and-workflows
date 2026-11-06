@@ -1,7 +1,9 @@
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import requests
 
@@ -12,6 +14,122 @@ from wqb.run_readiness import evaluate_run_readiness
 
 NOW = "2026-10-11T12:00:00+00:00"
 CONFIG = {"region": "USA", "delay": 1, "universe": "TOP3000", "batch_size": 30}
+
+
+class CaptureNormalizationTests(unittest.TestCase):
+    def test_staging_collision_preserves_existing_file(self):
+        """Input: deterministic staging-name collision. Output: both existing files preserved."""
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path, _, _ = self.capture(root)
+            before = path.read_bytes()
+            stage = path.with_name(path.name + '.collision.tmp')
+            stage.write_bytes(b'other writer')
+            with patch.object(recovery, 'uuid4', return_value=SimpleNamespace(hex='collision')):
+                with self.assertRaises(FileExistsError):
+                    recovery._normalize_capture(path, root, '/events')
+            self.assertEqual(stage.read_bytes(), b'other writer')
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_fsync_failure_preserves_original(self):
+        """Input: disk synchronization failure. Output: original bytes and directory retained."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path, _, _ = self.capture(root)
+            before, entries = path.read_bytes(), set(path.parent.iterdir())
+            with patch.object(recovery.os, 'fsync', side_effect=OSError('disk failure')):
+                with self.assertRaises(OSError):
+                    recovery._normalize_capture(path, root, '/events')
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(set(path.parent.iterdir()), entries)
+
+    def test_normalization_uses_shared_source_writer_guard(self):
+        """Input: capture with shared guard instrumented. Output: publication serialized with source writers."""
+        from contextlib import contextmanager
+        entered = []
+        @contextmanager
+        def guard(root):
+            entered.append(root)
+            yield
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path, _, _ = self.capture(root)
+            with patch.object(recovery, '_source_index_guard', guard, create=True):
+                recovery._normalize_capture(path, root, '/events')
+            self.assertEqual(entered, [root])
+            from scripts import capture_learn_material as capture
+            entered.clear()
+            with patch.object(capture, '_source_index_guard', guard):
+                capture.write_markdown(path, path.read_text(encoding='utf-8').splitlines(), root=root)
+            self.assertEqual(entered, [root])
+
+    def test_hardlinked_capture_is_refused_without_modifying_alias(self):
+        """Input: aliased temporary capture. Output: refusal and unchanged source bytes."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path, _, _ = self.capture(root)
+            alias = root / 'alias.md'
+            os.link(path, alias)
+            before = path.read_bytes()
+            with self.assertRaises(ValueError):
+                recovery._normalize_capture(path, root, '/events')
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(alias.read_bytes(), before)
+
+    def test_failed_atomic_replace_preserves_capture_and_cleans_stage(self):
+        """Input: injected publication failure. Output: original source retained and no staged leftovers."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path, _, _ = self.capture(root)
+            before = path.read_bytes()
+            entries = set(path.parent.iterdir())
+            with patch.object(Path, 'replace', side_effect=OSError('injected replace failure')):
+                with self.assertRaises(OSError):
+                    recovery._normalize_capture(path, root, '/events')
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(set(path.parent.iterdir()), entries)
+
+    def capture(self, root):
+        """Input: temporary vault Path. Output: original capture Path/metadata/body, no network."""
+        from scripts.capture_learn_material import write_raw_rows
+        from wqb.knowledge_contracts import parse_markdown_front_matter
+        path = write_raw_rows('Activity snapshot', 'platform incentive endpoints', [dict(id='fixture')],
+            NOW, root / 'raw/platform/learn/2026-10-11/fixture', 'activity_snapshot.md', [], root=root)
+        metadata, body = parse_markdown_front_matter(path.read_text(encoding='utf-8'))
+        return path, metadata, body
+
+    def test_capture_normalization_preserves_body_hash_and_is_idempotent(self):
+        """Input: fresh captured source. Output: exact preserved body/hash/date after repeated normalization."""
+        from wqb.knowledge_contracts import parse_markdown_front_matter
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path, metadata, body = self.capture(root)
+            recovery._normalize_capture(path, root, '/events')
+            normalized = path.read_bytes()
+            after, actual = parse_markdown_front_matter(normalized.decode().replace('\r\n', '\n'))
+            self.assertEqual(actual, body)
+            self.assertEqual(after['content_hash'], metadata['content_hash'])
+            self.assertEqual(after['captured_at'], metadata['captured_at'])
+            recovery._normalize_capture(path, root, '/events')
+            self.assertEqual(path.read_bytes(), normalized)
+
+    def test_only_exact_hash_proven_old_prefix_can_be_recovered(self):
+        """Input: known one-newline defect or unrelated edit. Output: exact restoration or refusal without writes."""
+        from wqb.knowledge_contracts import render_front_matter, parse_markdown_front_matter
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path, metadata, body = self.capture(root)
+            path.write_text(render_front_matter(metadata) + '\n' + body, encoding='utf-8')
+            result = recovery._normalize_capture(path, root, '/events')
+            self.assertTrue(result['recovered_prefix'])
+            self.assertEqual(parse_markdown_front_matter(path.read_text())[1], body)
+            for changed in ('\n\n' + body, body + 'unverified edit'):
+                path.write_text(render_front_matter(metadata) + changed, encoding='utf-8')
+                before = path.read_bytes()
+                with self.assertRaises(ValueError):
+                    recovery._normalize_capture(path, root, '/events')
+                self.assertEqual(path.read_bytes(), before)
 
 
 class FakeClient:

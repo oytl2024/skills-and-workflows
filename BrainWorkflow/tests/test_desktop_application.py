@@ -14,6 +14,45 @@ from wqb.desktop import DesktopConfig, DesktopError
 
 
 class DesktopApplicationTests(unittest.TestCase):
+    def test_relative_workspace_is_resolved_before_backend_cwd_changes(self):
+        """Input: relative workspace from caller. Output: absolute backend argument, same project/config root."""
+        workspace = Path('relative-native-workspace')
+        config = app.resolve_config(workspace, None, None)
+        command = app.backend_argv(config, workspace, 8765, frozen=True, executable='host.exe')
+        self.assertEqual(command[command.index('--workspace-root') + 1], str(workspace.resolve()))
+
+    def test_native_backend_keeps_workspace_configuration_separate_from_packaged_assets(self):
+        """Input: isolated package/workspace roots. Output: correctly bound paths/config, no private config copying."""
+        import json
+        from wqb.console_start import load_start_config
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            bundle = workspace / 'package/_internal'
+            product = workspace / 'skills-and-workflows/BrainWorkflow'
+            (product / 'configs').mkdir(parents=True)
+            (product / 'configs/workflow_local.json').write_text(json.dumps(dict(
+                region='USA', universe='TOP3000', delay=1,
+                research_policy=dict(paired_scout=True, preplanned_tree_version=1))), encoding='utf-8')
+            config = DesktopConfig(bundle, workspace / 'knowledge', workspace / 'runs')
+            paths = app.backend_console_paths(config, workspace)
+            self.assertEqual(paths.workflow_root, bundle)
+            self.assertEqual(paths.project_root, workspace)
+            self.assertEqual(paths.configuration_root, product)
+            self.assertEqual(paths.milestone_path, workspace / 'milestone.md')
+            self.assertEqual(load_start_config(paths)['research_policy']['preplanned_tree_version'], 1)
+            self.assertFalse((bundle / 'configs/workflow_local.json').exists())
+
+    def test_native_backend_main_passes_explicit_workspace_context(self):
+        """Input: native backend CLI roots. Output: existing backend receives explicit ConsolePaths, no GUI."""
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            with patch.object(app.desktop, 'run_backend', return_value=0) as backend:
+                self.assertEqual(app.main(['--backend', '--workspace-root', str(workspace), '--port', '8784']), 0)
+            paths = backend.call_args.kwargs['console_paths']
+            self.assertEqual(paths.project_root, workspace)
+            self.assertEqual(paths.knowledge_root, workspace / 'knowledge')
+            self.assertEqual(paths.runs_root, workspace / 'runs')
+
     def test_packaging_cache_is_workspace_local_and_environment_is_restored(self):
         """Input: packaged build script. Output: guard against writes to a user's global PyInstaller cache."""
         script = (Path(__file__).resolve().parents[1] / 'scripts/build_desktop.ps1').read_text(encoding='utf-8')
@@ -177,6 +216,9 @@ class DesktopApplicationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="desktop fixture ", dir=output) as directory:
             workspace = Path(directory) / "\u4e2d\u6587 space"
             workspace.mkdir()
+            configuration = workspace / 'skills-and-workflows/BrainWorkflow/configs'
+            configuration.mkdir(parents=True)
+            (configuration / 'workflow_local.json').write_text('{"research_policy":{"preplanned_tree_version":1}}', encoding='utf-8')
             config = app.resolve_config(workspace, None, None)
             with socket.socket() as probe:
                 probe.bind(("127.0.0.1", 0))
@@ -198,6 +240,8 @@ class DesktopApplicationTests(unittest.TestCase):
                     health = app.desktop.backend_health(port)
                     self.assertTrue(app.desktop.backend_roots_match(config, health))
                     self.assertEqual(health.get("code_revision"), app.LOADED_CODE_REVISION)
+                    self.assertEqual(Path(health['project_root']), workspace)
+                    self.assertEqual(Path(health['configuration_root']), configuration.parent)
                     self.assertTrue(app.desktop.owns_backend(config, port))
                     self.assertFalse((config.runs_root / "console_jobs").exists())
                 finally:

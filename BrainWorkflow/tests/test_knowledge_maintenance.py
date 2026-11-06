@@ -80,10 +80,11 @@ class KnowledgeMaintenanceTests(unittest.TestCase):
                 (root / 'machine/data_ledger.jsonl').read_text(encoding='utf-8').splitlines())}
             self.assertEqual(rows['USA']['field_description'], 'New USA')
             self.assertEqual(rows['USA']['source_updated_at'], '2026-10-16')
-            self.assertEqual(rows['USA']['coverage_status'], 'partial')
+            self.assertEqual(rows['USA']['coverage_status'], 'measured_raw')
             self.assertEqual(rows['EUR']['coverage_status'], 'measured_raw')
             self.assertEqual(report['status'], 'completed')
             self.assertEqual(len(report['data_compile']['captures']), 3)
+            self.assertEqual(report['data_compile']['captures'][1]['source_status'], 'partial')
             self.assertEqual(read_semantic_release(root), release)
 
     def test_active_capture_order_uses_timezone_aware_manifest_time(self):

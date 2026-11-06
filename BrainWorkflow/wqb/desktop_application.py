@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import hashlib
 import importlib
 import json
@@ -50,12 +51,22 @@ def resolve_config(workspace: Path, knowledge: Path | None, runs: Path | None) -
     """Input: workspace and optional data Paths. Output: DesktopConfig. Keep writable data outside bundle."""
     workspace = workspace.resolve()
     return DesktopConfig(product_root(), (knowledge or workspace / "knowledge").resolve(),
-                         (runs or workspace / "runs").resolve())
+                         (runs or workspace / "runs").resolve(), workspace_root=workspace)
+
+
+def backend_console_paths(config: DesktopConfig, workspace: Path):
+    """Input: DesktopConfig/workspace Path. Output: ConsolePaths; separate immutable assets from external config/data."""
+    from wqb.console_state import default_console_paths
+    if config.workspace_root is not None and config.workspace_root.resolve() != workspace.resolve():
+        raise DesktopError('Native backend workspace and configuration context differ.')
+    paths = default_console_paths(config.knowledge_root, config.runs_root, project_root=workspace)
+    return replace(paths, workflow_root=config.workflow_root)
 
 
 def backend_argv(config: DesktopConfig, workspace: Path, port: int, *,
                  frozen: bool | None = None, executable: str | None = None) -> list[str]:
     """Input: config, workspace, port and mode overrides. Output: argv. Avoid frozen EXE -m recursion."""
+    workspace = workspace.resolve()
     frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
     prefix = [executable or sys.executable]
     if not frozen:
@@ -253,12 +264,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if diagnostics["source_identity_valid"] and diagnostics['repair_rulebook_ready'] else 1
     config = None
     try:
-        workspace = args.workspace_root or default_workspace()
+        workspace = (args.workspace_root or default_workspace()).resolve()
         config = resolve_config(workspace, args.knowledge_root, args.runs_root)
         if args.port is not None and not 1 <= args.port <= 65535:
             raise DesktopError("Port must be between 1 and 65535.")
         if args.backend:
-            return desktop.run_backend(config, args.port or desktop.DEFAULT_PORTS[0])
+            return desktop.run_backend(config, args.port or desktop.DEFAULT_PORTS[0],
+                                       console_paths=backend_console_paths(config, workspace))
         launch_application(config, workspace, [args.port] if args.port else desktop.DEFAULT_PORTS)
         return 0
     except Exception as error:

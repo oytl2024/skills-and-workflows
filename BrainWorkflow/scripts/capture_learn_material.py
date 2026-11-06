@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import quote
 
 from wqb.client import BASE_URL, WQBClient
-from wqb.knowledge_contracts import SourceIndexRow, parse_markdown_front_matter, upsert_source_index_rows
+from wqb.knowledge_contracts import SourceIndexRow, parse_markdown_front_matter, upsert_source_index_rows, _source_index_guard
 
 
 KNOWLEDGE_ROOT_ENV = "BRAIN_KNOWLEDGE_ROOT"
@@ -229,8 +229,9 @@ def write_markdown(path: Path, lines: list[str], *, root: Path | None = None) ->
         text = re.sub(r'^content_hash: [a-f0-9]{64}$', 'content_hash: ' + body_hash,
                       text, count=1, flags=re.MULTILINE)
     path.parent.mkdir(parents=True, exist_ok=True)
-    guard_capture_path(active_root, path)
-    path.write_text(text, encoding="utf-8")
+    with _source_index_guard(active_root):
+        guard_capture_path(active_root, path)
+        path.write_text(text, encoding="utf-8")
 
 
 def stable_json_hash(payload: Any) -> str:

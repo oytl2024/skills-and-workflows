@@ -29,6 +29,25 @@ def fixture(paths):
 
 
 class OfficialPairedStartTests(unittest.TestCase):
+    def test_start_worker_retains_explicit_native_workspace_context(self):
+        """Input: native worker argv. Output: preparation receives original workspace/config, not bundle-derived parents."""
+        import io
+        from contextlib import redirect_stdout
+        from wqb import console_start as worker
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            config = workspace / 'skills-and-workflows/BrainWorkflow/configs'
+            config.mkdir(parents=True)
+            with patch.object(worker, 'execute_start', return_value=dict(status='completed', passed=True)) as execute, redirect_stdout(io.StringIO()):
+                code = worker.main(['workflow-start', '--workspace-root', str(workspace),
+                    '--knowledge-root', str(workspace / 'knowledge'), '--run-dir', str(workspace / 'runs'),
+                    '--objective', 'offline', '--selected-option-id', 'option-1', '--selected-region', 'USA',
+                    '--selected-delay', '1', '--selected-universe', 'TOP3000', '--start-request-id', 'offline'])
+            self.assertEqual(code, 0)
+            paths = execute.call_args.args[0]
+            self.assertEqual(paths.project_root, workspace)
+            self.assertEqual(paths.configuration_root, config.parent)
+
     def test_console_local_policy_overrides_example_without_editing_defaults(self):
         """Input: isolated Console paths. Output: assertions. Freeze local policy without changing shared defaults."""
         from wqb.console_start import register_start

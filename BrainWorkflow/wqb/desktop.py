@@ -42,6 +42,7 @@ class DesktopConfig:
     workflow_root: Path
     knowledge_root: Path
     runs_root: Path
+    workspace_root: Path | None = None
 
     @property
     def runtime_dir(self) -> Path:
@@ -237,13 +238,16 @@ def backend_health(port: int) -> dict[str, object]:
         return {}
 
 
-def backend_roots_match(config: DesktopConfig, payload: dict[str, object]) -> bool:
+def backend_roots_match(config: DesktopConfig, payload: dict[str, object], *, include_workspace: bool = True) -> bool:
     """Input: desktop config and health dict. Output: bool. Match app and all workspace roots."""
-    return payload.get("app") == "BrainWorkflow" and all(
+    matched = payload.get("app") == "BrainWorkflow" and all(
         isinstance(payload.get(name), str) and bool(payload[name])
         and canonical(payload[name]) == canonical(getattr(config, name))
         for name in ("workflow_root", "knowledge_root", "runs_root")
     )
+    return matched and (not include_workspace or config.workspace_root is None or (
+        isinstance(payload.get('project_root'), str) and bool(payload['project_root'])
+        and canonical(payload['project_root']) == canonical(config.workspace_root)))
 
 
 def owns_backend(config: DesktopConfig, port: int) -> bool:
@@ -272,6 +276,9 @@ def select_port(config: DesktopConfig, ports: list[int] | tuple[int, ...]) -> tu
     for port in ports:
         payload = backend_health(port)
         if not backend_roots_match(config, payload):
+            if backend_roots_match(config, payload, include_workspace=False):
+                raise DesktopError('Existing Console workspace context is missing or differs; '
+                                   'restart the verified backend before reopening. Research state is preserved.')
             continue
         if payload.get("code_revision") == LOADED_CODE_REVISION and isinstance(payload.get("server_revision"), str) and payload["server_revision"].strip():
             return port, True
@@ -319,7 +326,7 @@ def ensure_backend(config: DesktopConfig, ports: list[int] | tuple[int, ...] = D
         raise DesktopError("Console identity health check timed out. See backend.log beside startup.log.")
 
 
-def run_backend(config: DesktopConfig, port: int) -> int:
+def run_backend(config: DesktopConfig, port: int, *, console_paths=None) -> int:
     """Input: DesktopConfig and int port. Output: int exit code. Hold the lifetime lock around existing Console CLI."""
     lock = ProcessLock(config.runtime_dir / "backend.lock")
     if not lock.acquire():
@@ -330,6 +337,16 @@ def run_backend(config: DesktopConfig, port: int) -> int:
         if not port_available(port):
             raise DesktopError("The selected port was occupied during startup. Relaunch to choose another port.")
         os.environ.update(child_environment())
+        if console_paths is not None:
+            if any(canonical(getattr(console_paths, name)) != canonical(getattr(config, name))
+                   for name in ('workflow_root', 'knowledge_root', 'runs_root')):
+                raise DesktopError('Native backend context does not match its data/assets identity.')
+            if (config.workspace_root is not None
+                    and canonical(console_paths.project_root) != canonical(config.workspace_root)):
+                raise DesktopError('Native backend workspace identity differs from its configuration context.')
+            from wqb.console_server import run_console
+            run_console(host='127.0.0.1', port=port, open_browser=False, paths=console_paths)
+            return 0
         sys.argv = backend_command(config, port, find_python())[2:]
         runpy.run_module("wqb.cli", run_name="__main__")
         return 0

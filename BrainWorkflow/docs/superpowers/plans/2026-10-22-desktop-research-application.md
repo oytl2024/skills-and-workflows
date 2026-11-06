@@ -21,6 +21,15 @@ resource readiness, proof renewal or permission for platform/model calls.
 
 ## Global Constraints
 
+Nov5 actual-workspace integration follow-up: native backend must bind explicit
+workspace project/docs/config roots, not infer them from frozen bundle parents.
+Static assets remain bundle-owned. Reuse ConsolePaths and the existing lifetime
+lock/server, read configuration from the canonical external product directory,
+and carry workspace context into Start workers. Private configuration is never
+copied into the distributable. Add native-context and worker-path regressions;
+freeze, full-test and rebuild again before installing this source revision.
+The prior 2993 proof below is a checkpoint, not acceptance of later changes.
+
 Nov5 implementation acceptance: 2,993 offline tests, nine skips, 805.931 seconds;
 before/after source/test digest
 `2d746fdbaaa29d3c94d0bbec3bb07c728359fc026c27294ad00b850be077cf75`.

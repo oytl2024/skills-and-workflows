@@ -463,7 +463,8 @@ class DataFieldCaptureTests(unittest.TestCase):
                 compiled = json.loads((root / "machine" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
 
         self.assertEqual(outcomes[-1]["certification_status"], "partial")
-        self.assertEqual(compiled["coverage_status"], "partial")
+        self.assertEqual(summary["certification_status"], "partial")
+        self.assertEqual(compiled["coverage_status"], "measured_raw")
 
     def test_unlimited_capture_with_truncated_fields_stays_partial(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -479,7 +480,8 @@ class DataFieldCaptureTests(unittest.TestCase):
                 compiled = json.loads((root / "machine" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
 
         self.assertTrue(any("truncated" in row["message"] for row in errors))
-        self.assertEqual(compiled["coverage_status"], "partial")
+        self.assertEqual(summary["certification_status"], "partial")
+        self.assertEqual(compiled["coverage_status"], "measured_raw")
 
     def test_limited_resume_keeps_fully_certified_scope_without_new_terminal_event(self):
         with tempfile.TemporaryDirectory() as tmp:

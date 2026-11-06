@@ -35,11 +35,12 @@ def load_start_config(paths) -> dict:
     from wqb.config import DEFAULT_CONFIG, load_config
     from wqb.console_api import _read, _safe
     config = deepcopy(DEFAULT_CONFIG)
-    yaml_path = _safe(paths.workflow_root, paths.workflow_root / 'configs/stage1_usa_d1.yaml')
+    configuration = paths.configuration_root
+    yaml_path = _safe(configuration, configuration / 'configs/stage1_usa_d1.yaml')
     if yaml_path.exists():
         config.update(load_config(yaml_path))
     for relative in ('configs/workflow_defaults.example.json', 'configs/workflow_local.json'):
-        config.update(_read(paths.workflow_root, relative, optional=True) or {})
+        config.update(_read(configuration, relative, optional=True) or {})
     clean = {key: config[key] for key in START_CONFIG_FIELDS if key in config}
     if any(type(value) not in (str, int, float, bool) for value in clean.values()):
         raise ValueError('Console Start settings must be scalar values')
@@ -157,8 +158,8 @@ def register_start(paths, form: dict, job_id: str) -> dict:
     """Input: ConsolePaths, form dict, job ID str. Output: request dict. Reserve local prep without mission creation."""
     selection = _selection(form)
     from wqb.config import read_research_policy
-    policy = read_research_policy(paths.workflow_root / 'configs/workflow_defaults.example.json',
-                                  paths.workflow_root / 'configs/workflow_local.json')
+    policy = read_research_policy(paths.configuration_root / 'configs/workflow_defaults.example.json',
+                                  paths.configuration_root / 'configs/workflow_local.json')
     config = load_start_config(paths)
     preplanned = config['research_policy'].get('preplanned_tree_version') == 1
     with start_request_guard(paths.runs_root):
@@ -402,6 +403,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["workflow-start"])
     parser.add_argument("--knowledge-root", required=True)
+    parser.add_argument("--workspace-root", type=Path)
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--objective", required=True)
     parser.add_argument("--selected-option-id", required=True)
@@ -411,7 +413,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--enable-live-api", action="store_true")
     parser.add_argument("--start-request-id", required=True)
     args = parser.parse_args(argv)
-    paths = default_console_paths(args.knowledge_root, args.run_dir)
+    paths = default_console_paths(args.knowledge_root, args.run_dir, project_root=args.workspace_root)
     result = execute_start(paths, vars(args), args.start_request_id)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("status") == "completed" and result.get("passed") is True else 2

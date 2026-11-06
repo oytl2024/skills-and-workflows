@@ -48,14 +48,21 @@ class ConsolePaths:
     todo_path: Path
     job_root: Path
 
+    @property
+    def configuration_root(self) -> Path:
+        """Input: ConsolePaths. Output: Path; use workspace configuration while keeping packaged assets immutable."""
+        source = self.project_root / 'skills-and-workflows/BrainWorkflow'
+        return source if source.is_dir() else self.workflow_root
+
 
 def default_console_paths(
     knowledge_root: str | Path | None = None,
     runs_root: str | Path | None = None,
+    *, project_root: str | Path | None = None,
 ) -> ConsolePaths:
     """Input: optional roots. Output: ConsolePaths. Resolve default local console paths."""
     workflow_root = Path(__file__).resolve().parents[1]
-    project_root = resolve_project_root(workflow_root)
+    project_root = Path(project_root).resolve() if project_root is not None else resolve_project_root(workflow_root)
     knowledge = Path(knowledge_root) if knowledge_root is not None else project_root / "knowledge"
     runs = resolve_run_root(workflow_root, runs_root)
     return ConsolePaths(

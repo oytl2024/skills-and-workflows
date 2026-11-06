@@ -16,6 +16,19 @@ from unittest.mock import Mock, patch
 
 
 class DesktopTests(unittest.TestCase):
+    def test_backend_with_another_configuration_workspace_is_not_reused(self):
+        """Input: same assets/data but another project context. Output: visible rejection, no backend reuse/spawn."""
+        from dataclasses import replace
+        config = replace(self.config, workspace_root=self.root / 'workspace-B')
+        payload = dict(app='BrainWorkflow', workflow_root=str(config.workflow_root),
+            knowledge_root=str(config.knowledge_root), runs_root=str(config.runs_root),
+            project_root=str(self.root / 'workspace-A'), server_revision='fixture-server', code_revision='fixture-code')
+        self.assertFalse(self.desktop.backend_roots_match(config, payload))
+        with patch.object(self.desktop, 'backend_health', return_value=payload), \
+             patch.object(self.desktop, 'port_available', side_effect=AssertionError('must reject context mismatch')):
+            with self.assertRaises(self.desktop.DesktopError):
+                self.desktop.select_port(config, [8765])
+
     def test_native_dispatch_resolves_relative_roots_before_changing_directory(self):
         """Input: relative caller paths. Output: native argv absolute paths, retaining the caller's meaning."""
         with patch.object(self.desktop, 'installed_application', return_value=Path('native.exe')), \

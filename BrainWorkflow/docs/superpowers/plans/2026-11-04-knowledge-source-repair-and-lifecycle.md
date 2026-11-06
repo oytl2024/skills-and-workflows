@@ -107,6 +107,25 @@ successful migration. No platform/model/research/proof/budget authority follows.
 
 ## Verified Slice And Remaining Closure
 
+Nov5 actual-capture regression found `_normalize_capture` inserting an extra
+newline after `render_front_matter` (already newline-terminated), invalidating
+the recorded body hash. Preserve the body exactly; a known old one-newline
+prefix may be recovered only if removing it matches the pre-existing hash and
+identity/tool metadata. Other edits still need a fresh capture. Return before/
+after byte hashes, preserve capture time, and revalidate/reindex the actual
+bounded capture without new GETs or rewriting expected hashes to fit bytes.
+Unknown legacy metadata repair remains separately guarded.
+
+Nov5 follow-up approved and TDD: preserve unobserved identities during sampled
+ledger refresh; separate per-field observation from catalog completeness. Keep
+failed unbounded-scope invalidation, original dates/usage and all downstream
+semantic/timing/type gates. Actual capture: 21 bounded reads, 104 operator rows,
+65 USA D1 TOP3000 fields (49 VECTOR/16 MATRIX), positive reported coverage65;
+activity/scope validation passed, optional retired multiplier page404 retained.
+Capture is partial, zero simulations/models; compile/publish is not implied.
+This source follow-up supersedes the prior Console source fingerprint and needs
+fresh full regression, package/installed-copy verification before final delivery.
+
 Nov5 execution ruling: reference comparisons use per-owner lexical context and
 a bounded 10,000-value memo, preserving hashes, dictionary keys and ancestor
 references. Real 200 MB ledger scanning exceeds the obsolete-layout 30-second
@@ -150,10 +169,16 @@ job directories. Subsequent raw date validation took 0.408 seconds for 85,569
 catalog rows, retaining the Jul30 date. Health: zero blockers, eleven local-note
 warnings; this is not semantic or research readiness.
 
-The plan is NOT fully closed. P2's two actual Markdown hash drifts lack original
-corroboration; the operators repair preflight reports missing `operators.json`.
-Jul29/30 field captures remain over 90 days. New capture/model explanation,
-publication and proof renewal need their own authority. Nov5 P4 now implements
+The plan is NOT fully closed. Authorized Nov5 bounded capture supplies fresh
+operator/field/activity raw; it does not renew historical captures or certify
+new typed operator definitions. The seven new Learn sources' serializer-prefix
+drift is recoverable only by their existing recorded body hashes, preserving
+dates. Normalization now uses staged, synced replacement and the shared source
+writer guard; collision, disk failure and hardlink regressions protect originals.
+The authenticated activity pointer alone is updated in the freshness manifest.
+Jul29/30 captures remain over 90 days. New model explanation, publication and
+proof renewal need their own authority. General Delay1 MATRIX timing remains a
+separately proposed design, not deployed behavior. Nov5 P4 now implements
 guarded preparation/collection, lossless archives and historical-only readers;
 interruptions, admission and archive-consumption races have local regressions.
 Actual-vault reference scans still reach their finite safety limit, so all three
@@ -161,3 +186,15 @@ expanded inventories remain protected. No real inventory was archived/retired/
 deleted. This retains about 2.1 GB and must not be reported as completed GC or
 whole-project research readiness. Current Console acceptance/deployment evidence
 belongs in root todo.md; earlier package evidence above is historical only.
+
+Nov6 frozen follow-up acceptance: 3,009 offline tests passed, nine skips,
+812.028 seconds. Before/after production/test digest remained
+`54b9edd077691bd3fa70cc24e1b8e44cbe7b85c4131b9e379bff19a7b628793a`.
+Evidence: `output/desktop-validation/console-delivery-verified-full-suite-20261106.{log,json}`.
+Build `20261106-113104-7809` passed self-test and isolated native window,
+backend/assets, external workspace/config and profile containment checks with
+loaded source `9944984c350f1485579f8862c9bdde867739b4da9aed2882b634f228d3aeee98`.
+Frontend typecheck/15 tests and desktop/mobile interaction checks passed. These
+checks grant no research authority. Installed-copy outcome is recorded separately
+in the cleanup audit; timing generalization and actual inventory collection stay
+open under the boundaries above.

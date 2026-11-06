@@ -4,7 +4,10 @@
 
 Double-click workspace `BrainWorkflow.vbs` or package `launch-desktop.vbs`.
 The matching `.cmd` files are terminal-friendly diagnostic entries. These open
-an installed Edge/Chrome app-mode window, not a rewritten native UI. Launching
+the verified installed Windows WebView2 application when its installation
+receipt, EXE hash and bundled source revision match current source. An absent
+installation retains the historical Edge/Chrome compatibility path; a present
+but invalid installation is refused, never silently downgraded. Launching
 the app does not start a workflow. Closing its window leaves the backend alive;
 launching again reuses the matching backend and focuses or reopens the window.
 
@@ -27,6 +30,14 @@ are under `<runs-root>/desktop`: `startup.log`, `backend.log`, and `browser.log`
 For import/interpreter failures before logs exist, use the package CMD entry
 from a terminal and check `BRAINWORKFLOW_PYTHON`.
 
+Native asset and configuration roots differ deliberately: `workflow_root`
+identifies immutable bundled code/assets; `project_root` is the outer workspace;
+`configuration_root` identifies its existing product config/docs. Private user
+configuration is not copied into the EXE. `/api/health` reports these identities,
+and worker launch retains the same workspace. A backend from another workspace
+or source revision is not reused. Source changes require a verified rebuild and
+installed receipt update, not merely refreshing the app window.
+
 Windows quoting has two distinct boundaries: WScript treats backslashes
 literally, while Python uses CRT argument parsing and needs trailing
 backslashes escaped inside quotes. Do not reuse Python list2cmdline for WScript
@@ -36,7 +47,7 @@ disable delayed expansion to preserve `!` in paths. Both VBS process boundaries
 repair SystemRoot/windir before spawning children without clearing other
 environment variables.
 
-### Verification Evidence
+### Historical Browser Compatibility Evidence
 
 - RED: original desktop suite reproduced three launcher failures: root VBS
   returned without fake bootstrap output; both CMD invocations had syntax errors.

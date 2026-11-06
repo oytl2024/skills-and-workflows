@@ -669,10 +669,9 @@ def compile_data_ledger_from_raw(
                 measured = all(
                     scope_key is not None
                     and (outcome := scope_outcomes.get(scope_key)) is not None
-                    and outcome.get("status") == "completed"
-                    and outcome.get("certification_status") == "complete"
-                    and str(outcome.get("sampling_mode", "")) != "stratified"
-                    and int(outcome.get("field_budget", 0) or 0) == 0
+                    and outcome.get("status") in {"completed", "partial"}
+                    and all(row.get('field', {}).get('type') in {'MATRIX', 'VECTOR', 'GROUP'}
+                            for row in grouped[key])
                     and all(_row_matches_outcome_generation(row, outcome) for row in grouped[key])
                     for scope_key in row_scope_keys
                 )
@@ -681,6 +680,7 @@ def compile_data_ledger_from_raw(
                     if key[2] is not None
                     else None
                 ) or prior_records_by_field.get(key[:2])
+                # Field observation is independent of exhaustive catalog enumeration.
                 captured = _record_from_group(root, fields_path, grouped[key], source_day, prior) | {"coverage_status": "measured_raw" if measured else "partial"}
                 captured = _project_field_source(root, captured, source_projection, prior)
                 output_rows.append(merge_field_enrichment(root, captured,
@@ -689,10 +689,24 @@ def compile_data_ledger_from_raw(
                 (str(row.get("dataset_id", "")), str(row.get("field_id", "")))
                 for row in output_rows
             }
+            bounded_selection = (int(manifest.get('fields_per_scope', 0) or 0) > 0
+                or any(int(manifest.get('active_limits', {}).get(name, 0) or 0) > 0
+                       for name in ('max_datasets_per_scope', 'max_fields_per_dataset')))
+            sampled_scopes = (set(attempted_scope_keys) if bounded_selection else
+                {key for key, outcome in scope_outcomes.items()
+                 if outcome.get('sampling_mode') == 'stratified'
+                 or int(outcome.get('field_budget', 0) or 0) > 0})
+            observed_scopes = defaultdict(set)
+            for dataset, field_id, selected_scope in grouped:
+                if selected_scope is not None:
+                    observed_scopes[(dataset, field_id)].add(selected_scope)
             preserved_rows = []
             for row in prior_rows:
+                field_key = (str(row.get('dataset_id', '')), str(row.get('field_id', '')))
+                replacement_scopes = ((attempted_scope_keys - sampled_scopes)
+                    | (observed_scopes[field_key] & sampled_scopes))
                 preserved_rows.extend(
-                    _preserve_prior_row_fragments(row, attempted_scope_keys, attempted_field_keys)
+                    _preserve_prior_row_fragments(row, replacement_scopes, attempted_field_keys)
                 )
             output_rows = sorted([*preserved_rows, *output_rows], key=_row_sort_key)
             _write_jsonl(ledger_tmp_path, output_rows)

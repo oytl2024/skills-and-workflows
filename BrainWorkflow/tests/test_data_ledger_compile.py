@@ -16,6 +16,101 @@ def write_jsonl(path, rows):
 
 
 class DataLedgerCompileTests(unittest.TestCase):
+    def test_limited_capture_without_outcomes_cannot_remove_unobserved_fields(self):
+        """Input: incomplete limited capture over prior fields. Output: preserve unseen row/date; no measured promotion."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scope = dict(instrument_type='EQUITY', region='USA', delay=1, universe='TOP3000')
+            old = root / 'raw/platform/data_fields/2026-10-01'
+            write_jsonl(old / 'data_fields.jsonl', [dict(scope=scope,
+                data_set={'id': 'd'}, field={'id': name, 'type': 'MATRIX'}) for name in ('a', 'b')])
+            compile_data_ledger_from_raw(root, old, '2026-10-01T00:00:00Z')
+            ledger = root / 'machine/data_ledger.jsonl'
+            prior = {row['field_id']: row for row in map(json.loads, ledger.read_text().splitlines())}
+            capture = root / 'raw/platform/data_fields/2026-11-05'
+            write_jsonl(capture / 'data_fields.jsonl', [dict(scope=scope,
+                data_set={'id': 'd'}, field={'id': 'a', 'type': 'MATRIX'})])
+            (capture / 'manifest.json').write_text(json.dumps(dict(active_limits=dict(max_fields_per_dataset=1))), encoding='utf-8')
+            compile_data_ledger_from_raw(root, capture, '2026-11-05T00:00:00Z')
+            after = {row['field_id']: row for row in map(json.loads, ledger.read_text().splitlines())}
+            self.assertIn('b', after)
+            self.assertEqual(after['b'], prior['b'])
+            self.assertEqual(after['a']['coverage_status'], 'partial')
+
+    def test_sample_without_explicit_supported_type_is_not_measured(self):
+        """Input: sampled field with unknown/missing type. Output: partial evidence, never presumed MATRIX."""
+        for field_type in (None, 'UNKNOWN'):
+            with self.subTest(field_type=field_type), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                capture = root / 'raw/platform/data_fields/2026-11-05'
+                scope = dict(instrument_type='EQUITY', region='USA', delay=1, universe='TOP3000')
+                field = dict(id='f', coverage=0.9)
+                if field_type is not None:
+                    field['type'] = field_type
+                write_jsonl(capture / 'data_fields.jsonl', [dict(scope=scope, data_set={'id': 'd'}, field=field)])
+                write_jsonl(capture / 'scopes.jsonl', [dict(scope=scope, status='completed',
+                    certification_status='partial', sampling_mode='stratified', field_budget=100)])
+                compile_data_ledger_from_raw(root, capture, '2026-11-05T00:00:00Z')
+                row = json.loads((root / 'machine/data_ledger.jsonl').read_text())
+                self.assertEqual(row['coverage_status'], 'partial')
+
+    def test_observed_typed_sample_is_measured_without_certifying_catalog_completeness(self):
+        """Input: API-observed typed field in a sample. Output: measured field evidence, partial catalog, no inferred facts."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = root / 'raw/platform/data_fields/2026-11-05'
+            scope = dict(instrument_type='EQUITY', region='USA', delay=1, universe='TOP3000')
+            write_jsonl(capture / 'data_fields.jsonl', [dict(scope=scope,
+                data_set={'id': 'd'}, field={'id': 'f', 'type': 'MATRIX', 'coverage': 0.8})])
+            write_jsonl(capture / 'scopes.jsonl', [dict(scope=scope, status='completed',
+                certification_status='partial', sampling_mode='stratified', field_budget=100)])
+            (capture / 'manifest.json').write_text(json.dumps(dict(certification_status='partial',
+                requested_matrix=[scope])), encoding='utf-8')
+            result = compile_data_ledger_from_raw(root, capture, '2026-11-05T00:00:00Z')
+            row = json.loads((root / 'machine/data_ledger.jsonl').read_text())
+            self.assertEqual(row['coverage_status'], 'measured_raw')
+            self.assertEqual(result['source_status'], 'partial')
+            self.assertEqual(row['coverage'], 0.8)
+            self.assertNotIn('timing_contract', row)
+            self.assertNotIn('available_at', row)
+
+    def test_stratified_refresh_preserves_unobserved_fields_and_original_evidence(self):
+        """Input: partial sample over an existing scope. Output: updated observed identity only; retain other history."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scope = dict(instrument_type='EQUITY', region='USA', delay=1, universe='TOP3000')
+            eur = dict(scope, region='EUR')
+            old = root / 'raw/platform/data_fields/2026-10-01'
+            write_jsonl(old / 'data_fields.jsonl', [dict(scope=selected,
+                data_set={'id': dataset}, field={'id': field, 'type': 'MATRIX'})
+                for dataset, field, selected in [('x', 'a', scope), ('x', 'b', scope),
+                                                  ('y', 'c', scope), ('x', 'a', eur)]])
+            compile_data_ledger_from_raw(root, old, '2026-10-01T00:00:00Z')
+            ledger = root / 'machine/data_ledger.jsonl'
+            prior = [json.loads(line) for line in ledger.read_text().splitlines()]
+            for row in prior:
+                row.update(simulation_usage_count=3, submitted_usage_count=2)
+            write_jsonl(ledger, prior)
+            capture = root / 'raw/platform/data_fields/2026-11-05'
+            write_jsonl(capture / 'data_fields.jsonl', [dict(scope=scope,
+                data_set={'id': 'x'}, field={'id': 'a', 'type': 'MATRIX', 'description': 'new observed description'})])
+            write_jsonl(capture / 'scopes.jsonl', [dict(scope=scope, status='completed',
+                certification_status='partial', sampling_mode='stratified', field_budget=100)])
+            (capture / 'manifest.json').write_text(json.dumps(dict(certification_status='partial',
+                requested_matrix=[scope], fields_per_scope=100)), encoding='utf-8')
+            result = compile_data_ledger_from_raw(root, capture, '2026-11-05T00:00:00Z')
+            after = [json.loads(line) for line in ledger.read_text().splitlines()]
+            key = lambda row: (row['dataset_id'], row['field_id'], row['region'])
+            before_by_key, after_by_key = {key(row): row for row in prior}, {key(row): row for row in after}
+            self.assertEqual(set(before_by_key), set(after_by_key))
+            for identity in set(before_by_key) - {('x', 'a', 'USA')}:
+                self.assertEqual(after_by_key[identity], before_by_key[identity])
+            changed = after_by_key[('x', 'a', 'USA')]
+            self.assertEqual(changed['source_updated_at'], '2026-11-05')
+            self.assertEqual(changed['simulation_usage_count'], 3)
+            self.assertEqual(changed['coverage_status'], 'measured_raw')
+            self.assertEqual(result['source_status'], 'partial')
+
     def test_recompile_preserves_distinct_submission_usage_provenance(self):
         """Input: captured field and existing usage fixture. Output: assertions; compilation cannot erase reconciliation identities."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -171,7 +266,7 @@ class DataLedgerCompileTests(unittest.TestCase):
         self.assertEqual(raw_row["coverage_status"], "measured_raw")
         self.assertEqual(raw_row["source_updated_at"], "2026-07-16")
 
-    def test_compile_keeps_certified_and_partial_exact_scopes_separate(self):
+    def test_compile_keeps_observed_exact_scopes_separate_from_catalog_certification(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
             capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
@@ -190,7 +285,7 @@ class DataLedgerCompileTests(unittest.TestCase):
             compile_data_ledger_from_raw(root, capture_dir=capture, generated_at="2026-07-16T09:00:00+00:00")
             rows = [json.loads(line) for line in (root / "machine" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()]
 
-        self.assertEqual([(row["region"], row["coverage_status"]) for row in rows], [("EUR", "partial"), ("USA", "measured_raw")])
+        self.assertEqual([(row["region"], row["coverage_status"]) for row in rows], [("EUR", "measured_raw"), ("USA", "measured_raw")])
         self.assertTrue(all(len(row["available_scopes"]) == 1 for row in rows))
 
     def test_compile_does_not_measure_rows_from_prior_partial_generation_after_resume_success(self):
@@ -339,7 +434,7 @@ class DataLedgerCompileTests(unittest.TestCase):
         self.assertEqual(by_region["EUR"]["source_updated_at"], "2026-07-15")
         self.assertEqual(by_region["USA"]["source_updated_at"], "2026-07-16")
 
-    def test_targeted_compile_replaces_attempted_scope_with_partial_state(self):
+    def test_targeted_compile_records_observed_field_despite_partial_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
             ledger = root / "machine" / "data_ledger.jsonl"
@@ -388,7 +483,7 @@ class DataLedgerCompileTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["region"], "EUR")
-        self.assertEqual(rows[0]["coverage_status"], "partial")
+        self.assertEqual(rows[0]["coverage_status"], "measured_raw")
 
     def test_targeted_compile_removes_prior_measured_row_for_completed_zero_field_attempt(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -508,7 +603,7 @@ class DataLedgerCompileTests(unittest.TestCase):
 
         self.assertEqual(summary["source_status"], "partial")
 
-    def test_compile_marks_stratified_scope_partial_even_when_scope_row_claims_complete(self):
+    def test_compile_keeps_stratified_catalog_partial_but_records_observed_field(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "knowledge"
             capture = root / "raw" / "platform" / "data_fields" / "2026-07-16"
@@ -521,7 +616,7 @@ class DataLedgerCompileTests(unittest.TestCase):
             row = json.loads((root / "machine" / "data_ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
 
         self.assertEqual(summary["source_status"], "partial")
-        self.assertEqual(row["coverage_status"], "partial")
+        self.assertEqual(row["coverage_status"], "measured_raw")
 
     def test_compile_marks_negative_delay_scope_partial(self):
         with tempfile.TemporaryDirectory() as tmp:

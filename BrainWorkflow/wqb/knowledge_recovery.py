@@ -8,13 +8,14 @@ import os
 from pathlib import Path
 import shutil
 from urllib.parse import urlencode
+from uuid import uuid4
 
 from scripts.capture_learn_material import (
     result_rows, write_raw_documentation_pages, write_raw_errors,
-    write_raw_operators, write_raw_rows,
+    write_raw_operators, write_raw_rows, guard_capture_path,
 )
 from wqb.client import WQBClient
-from wqb.knowledge_contracts import parse_markdown_front_matter, render_front_matter
+from wqb.knowledge_contracts import parse_markdown_front_matter, render_front_matter, _source_index_guard
 
 from wqb.knowledge_maintenance import run_knowledge_maintenance
 from wqb.run_readiness import evaluate_run_readiness
@@ -130,12 +131,57 @@ class _CaptureClient:
         return self._fetch("options_json", path)
 
 
-def _normalize_capture(path: Path, root: Path, endpoint: str) -> None:
-    """Input: capture/root Paths and endpoint str. Output: None. Canonicalize provenance without helper globals."""
-    metadata, body = parse_markdown_front_matter(path.read_text(encoding="utf-8"))
+def _normalize_capture(path: Path, root: Path, endpoint: str) -> dict:
+    """Input: capture/root Paths and endpoint str. Output: byte/hash receipt; preserve the recorded body and capture date."""
+    guard_capture_path(root, path)
+    with _source_index_guard(root):
+        return _normalize_capture_unlocked(path, root, endpoint)
+
+
+def _normalize_capture_unlocked(path: Path, root: Path, endpoint: str) -> dict:
+    """Input: guarded capture/root Paths and endpoint str. Output: atomic normalization receipt under source writer lock."""
+    guard_capture_path(root, path)
+    if path.stat().st_nlink != 1:
+        raise ValueError('hard-linked capture normalization refused')
+    before = path.read_bytes()
+    metadata, body = parse_markdown_front_matter(before.decode('utf-8').replace('\r\n', '\n'))
+    expected = metadata.get('content_hash')
+    if (metadata.get('capture_tool') != 'scripts/capture_learn_material.py'
+            or metadata.get('content_status') != 'raw_markdown' or not isinstance(expected, str)
+            or len(expected) != 64 or any(char not in '0123456789abcdef' for char in expected.lower())
+            or not isinstance(endpoint, str) or not endpoint.strip() or '\n' in endpoint or '\r' in endpoint):
+        raise ValueError('unverified capture normalization metadata')
+    recovered = False
+    if hashlib.sha256(body.encode('utf-8')).hexdigest() != expected.lower():
+        # Recover only the known old serializer's extra prefix, proved by its existing hash.
+        if (metadata.get('source_path') != path.relative_to(root).as_posix() or not body.startswith('\n')
+                or hashlib.sha256(body[1:].encode('utf-8')).hexdigest() != expected.lower()):
+            raise ValueError('capture body differs from recorded hash; fresh capture required')
+        body, recovered = body[1:], True
     metadata["source_path"] = path.relative_to(root).as_posix()
     metadata["source_endpoint"] = endpoint
-    path.write_text(render_front_matter(metadata) + "\n" + body, encoding="utf-8")
+    guard_capture_path(root, path)
+    if path.read_bytes() != before:
+        raise ValueError('capture changed during normalization')
+    staged = path.with_name(path.name + '.' + uuid4().hex + '.tmp')
+    created = False
+    try:
+        with staged.open('xb') as stream:
+            created = True
+            stream.write((render_front_matter(metadata) + body).encode('utf-8'))
+            stream.flush()
+            os.fsync(stream.fileno())
+        guard_capture_path(root, path)
+        if path.stat().st_nlink != 1 or path.read_bytes() != before:
+            raise ValueError('capture changed during normalization')
+        staged.replace(path)
+    finally:
+        if created:
+            staged.unlink(missing_ok=True)
+    return dict(source_path=metadata['source_path'], captured_at=metadata.get('captured_at'),
+                body_sha256=expected, recovered_prefix=recovered,
+                before_sha256=hashlib.sha256(before).hexdigest(),
+                after_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
 
 
 def _validate_scope(tracked: _CaptureClient, scope: dict, instrument: str) -> dict:
