@@ -393,3 +393,12 @@ skills-and-workflows\BrainWorkflow\NVIDIA Corporation
 - Isolated packaged smoke passed: native window, loaded code/context, WebView2,
   assets and snapshot. It used disposable roots, issued no Start or platform call,
   and stopped only its owned GUI/backend. This does not replace full regression.
+- Executed after implementation `a7667eb` was pushed and remote equality checked:
+  358 files copied/hash-verified, receipt replaced last. Full reviewed proof:
+  3146 tests/9 skips/894.073s, unchanged source/test digest `70f92159...`.
+  Real root launcher loaded `78ecda0780...`; old mission hashes unchanged.
+  Post-install 98 regressions passed; snapshot Start/Stop enabled with four options
+  and no blocker, old mission retired. No Start, model, platform call or Alpha
+  submission occurred. Deletion/obsolete-source list remains empty; historical
+  verification and distinct source inventories remain protected, not duplicates
+  silently removed. Private configuration and receipts were not uploaded.

@@ -90,7 +90,7 @@ and must not be uploaded or treated as proof for every future Alpha.
 - [x] Normalize verified result-period evidence for the existing date comparison;
   keep tree/Seed thresholds, comparable-period requirement and rollback unchanged.
   Missing/conflicting evidence remains recoverable/explicit, not no-signal.
-- [ ] Configure only NEW research with the observed local comparison period after
+- [x] Configure only NEW research with the observed local comparison period after
   acceptance, retaining its provenance; future results must independently match.
   Existing frozen contexts/requests, quotas and Stop stay unchanged. This is a
   result-input adapter and configuration closure, not a relaxation of Seed rules.
@@ -114,9 +114,9 @@ come from PNL, not the response's requested settings.endDate.
 - [x] Independent review at medium or lower; close findings with regressions.
 - [x] Freeze source, full offline tests and digest, frontend checks, native build
   and isolated window/backend/root-context tests. No code edits during full suite.
-- [ ] Commit/push and verify remote equality; audited installed replacement,
+- [x] Commit/push and verify remote equality; audited installed replacement,
   affected regressions, loaded-version proof and cleanup-outcome sync.
-- [ ] Preserve protected knowledge/research/recovery evidence; report unrelated
+- [x] Preserve protected knowledge/research/recovery evidence; report unrelated
   inventory-reference retirement gap separately, never silently delete originals.
 
 Nov8 source-freeze evidence: catalog N2 real-driver/Stop acceptance passed with
@@ -147,3 +147,14 @@ decode warnings remain in the log but caused no test failure; they are not
 silently claimed repaired by this admission change.
 their exact handoff is in root todo.md. Do not replace the deployed app or renew
 proof before integrated acceptance and verified Git synchronization.
+
+Nov8 delivery accepted: implementation `a7667eb305e70d0fc1ef154e081308cef3af53d0`
+was pushed and remote equality verified before replacing the 358-file app.
+Root click entry loads revision `78ecda0780c0e220984c218707eda74b530e3c14ecd0cd0cb1260d48c6d358db`;
+mission-state hashes unchanged, no Start pressed. New local configuration changes
+only the preplanned version flag and observed comparison period, not old mission
+authority or limits. Read-only snapshot: Start/Stop enabled, four options, no
+blocker; the old mission is retired. Post-install 98 regressions pass. No files
+were deleted: both new modules are required; historical/source/research evidence
+remains protected. The independent old-inventory retirement remains open, not a
+claim of completed storage collection. This audit outcome is separately synced.
