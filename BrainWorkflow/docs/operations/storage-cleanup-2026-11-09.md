@@ -64,6 +64,25 @@ Read-only preparation found no sensitive filenames or links in these targets.
 
 ## Acceptance
 
-Pending execution: record actual removed/net bytes, protected hashes, application
-health/action consistency and affected regression results, then sync the outcome.
-Inventory/run-copy retirement and future automatic retention remain separate work.
+Batch A completed after audit commit `54183cf` was pushed and remote equality
+verified. Removed all 32 allowlisted payload directories: 1,135,244,667 bytes.
+Sixteen verified work-metadata archives total 2,290,655 bytes, giving net
+reclamation of **1,132,954,012 bytes** (1.13 GB decimal). Old staged-source hashes
+and complete current/rollback/installed file hashes are unchanged. The original
+production/test digest still matches the passing Nov8 full-suite proof; the
+running application's loaded revision remains `78ecda0780...`. No research started.
+
+Private receipts: `output/desktop-validation/build-cleanup-result-20261109.json`
+and `storage-cleanup-verification-20261109.json`. Pre-collection 42 documentation
+and desktop regressions passed; the same 42 post-collection tests passed in
+1.615 seconds after compacting the canonical handoff index to its size limit.
+
+Overall storage retirement is NOT complete. The read-only audit of all three old
+inventories validates their original records but returns `audit_only/protected`:
+job content validation was not requested, replacement and external-reference
+closure are required, shared-writer retirement was not verified. These are not
+proof that a current research step needs all three inventories. No plan retirement
+or inventory deletion occurred. The 1.15 GB run-local recovery copies and browser
+profiles remain outside this batch. Future self-contained tree-package retirement
+and automatically triggered artifact retention require separate implementation;
+this one-time collection does not claim those mechanisms are already deployed.
