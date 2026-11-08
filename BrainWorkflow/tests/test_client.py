@@ -13,6 +13,27 @@ from wqb.client import BASE_URL, WQBClient
 from wqb.runtime_control import CONTROL_ENV, RuntimePaused, read_runtime_control, request_runtime_state, update_runtime_status
 
 
+class MeasurementWindowClientModeTests(unittest.TestCase):
+    def test_only_new_frozen_catalog_missions_request_window_evidence(self):
+        from wqb.cli import build_client
+
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory) / 'mission'
+            run.mkdir()
+            base = dict(request_timeout_seconds=30, max_retries=2, base_backoff_seconds=1)
+            for policy, admission, expected in (({}, None, False),
+                    ({'preplanned_tree_version': 1}, None, False),
+                    ({'preplanned_tree_version': 1}, 'knowledge_catalog_v1', True)):
+                snapshot = dict(research_policy=policy)
+                if admission:
+                    snapshot['resource_admission_policy'] = admission
+                (run / 'run_manifest.json').write_text(json.dumps(dict(
+                    run_id=run.name, start_snapshot=snapshot)), encoding='utf-8')
+                client = build_client({**base, 'active_workflow_run_dir': str(run)})
+                self.assertIs(getattr(client, 'measurement_window_required', False), expected)
+            self.assertFalse(getattr(build_client(base), 'measurement_window_required', False))
+
+
 class FakeResponse:
     def __init__(self, status_code: int = 200, headers: dict | None = None) -> None:
         self.status_code = status_code

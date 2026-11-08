@@ -1,5 +1,6 @@
 import time
 import os
+import math
 from contextlib import nullcontext
 from typing import Any
 from pathlib import Path
@@ -115,8 +116,20 @@ class WQBClient:
         response.raise_for_status()
         self.authenticated = True
 
-    def request(self, method: str, path: str, *, respect_retry_after: bool = True, **kwargs: Any) -> requests.Response:
+    def request(self, method: str, path: str, *, respect_retry_after: bool = True,
+                max_attempts: int | None = None, request_timeout_seconds: float | None = None,
+                **kwargs: Any) -> requests.Response:
         """Input: HTTP method/path. Output: response. Retry transient failures and respect platform pacing."""
+        if (max_attempts is not None or request_timeout_seconds is not None) and method.upper() not in {'GET', 'OPTIONS'}:
+            raise ValueError('per-request reductions apply only to reads')
+        if max_attempts is not None and (type(max_attempts) is not int or not 1 <= max_attempts <= self.max_retries + 1):
+            raise ValueError('read attempts must reduce the configured limit')
+        timeout = self.timeout_seconds
+        if request_timeout_seconds is not None:
+            if (type(request_timeout_seconds) not in (int, float) or not math.isfinite(request_timeout_seconds)
+                    or not 0 < request_timeout_seconds <= self.timeout_seconds):
+                raise ValueError('read timeout must reduce the configured limit')
+            timeout = request_timeout_seconds
         if path.startswith(("http://", "https://")):
             url = path
         else:
@@ -136,6 +149,8 @@ class WQBClient:
         if not self.authenticated:
             self.authenticate()
         retry_limit = 0 if simulation_submit else self.max_retries
+        if max_attempts is not None:
+            retry_limit = min(retry_limit, max_attempts - 1)
         for attempt in range(retry_limit + 1):
             from wqb.owned_network_deadline import owned_submission_gate
             gate = owned_submission_gate(Path(os.environ[CONTROL_ENV])) if managed_submit else nullcontext()
@@ -167,7 +182,7 @@ class WQBClient:
                             raise
                 try:
                     response = self._dispatch(method, url, simulation_identities=identities,
-                                              timeout=self.timeout_seconds, **kwargs)
+                                              timeout=timeout, **kwargs)
                 except requests.exceptions.RequestException:
                     if simulation_submit:
                         raise RuntimeError("simulation submission outcome unknown; reconcile before retry") from None
@@ -192,17 +207,17 @@ class WQBClient:
                 error.simulation_submit = False
                 raise error
             retry_after = response.headers.get("Retry-After")
-            if respect_retry_after and retry_after and attempt < self.max_retries:
+            if respect_retry_after and retry_after and attempt < retry_limit:
                 cooperative_sleep(float(retry_after))
                 continue
-            if response.status_code == 401 and attempt < self.max_retries:
+            if response.status_code == 401 and attempt < retry_limit:
                 self.authenticated = False
                 self.authenticate()
                 continue
-            if respect_retry_after and response.status_code == 429 and attempt < self.max_retries:
+            if respect_retry_after and response.status_code == 429 and attempt < retry_limit:
                 cooperative_sleep(self.base_backoff_seconds * (attempt + 1))
                 continue
-            if 500 <= response.status_code < 600 and attempt < self.max_retries:
+            if 500 <= response.status_code < 600 and attempt < retry_limit:
                 cooperative_sleep(self.base_backoff_seconds * (attempt + 1))
                 continue
             return response

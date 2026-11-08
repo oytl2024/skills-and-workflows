@@ -145,6 +145,19 @@ def build_client(config: dict[str, Any]) -> WQBClient:
     knowledge_root = config.get("knowledge_root")
     if isinstance(knowledge_root, (str, Path)) and Path(knowledge_root).is_absolute():
         client.knowledge_root = Path(knowledge_root)
+    active = config.get('active_workflow_run_dir')
+    if active:
+        manifest_path = Path(active) / 'run_manifest.json'
+        if manifest_path.is_file():
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+            snapshot = manifest.get('start_snapshot', {})
+            from wqb.resource_evidence import KNOWLEDGE_CATALOG_POLICY
+            policy = snapshot.get('research_policy', {})
+            version = policy.get('preplanned_tree_version')
+            client.measurement_window_required = (
+                manifest.get('run_id') == Path(active).name
+                and type(version) is int and version == 1
+                and snapshot.get('resource_admission_policy') == KNOWLEDGE_CATALOG_POLICY)
     return client
 
 

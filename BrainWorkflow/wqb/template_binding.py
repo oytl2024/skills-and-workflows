@@ -13,7 +13,8 @@ import re
 from string import Formatter
 
 from wqb.semantic_contracts import input_slot_from_dict, operator_definition_from_dict
-from wqb.resource_evidence import resolve_timing_contract
+from wqb.resource_evidence import (resolve_timing_contract, knowledge_catalog_admission,
+                                   catalog_operator_definition, PROJECT_WINDOW_POLICY)
 
 
 IDENTIFIER = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
@@ -101,7 +102,7 @@ def _scope_matches(row: dict, scope: dict) -> bool:
     return False
 
 
-def _select_field(slot: object, rows: list[dict], scope: dict, resource_version: int = 1) -> dict:
+def _select_field(slot: object, rows: list[dict], scope: dict, resource_version: int = 1, *, catalog_mode: bool = False) -> dict:
     """Input: InputSlot, snapshot list[dict], scope dict. Output: unique row dict. Select by explicit semantics/type/facts."""
     candidates = []
     for row in rows:
@@ -112,7 +113,8 @@ def _select_field(slot: object, rows: list[dict], scope: dict, resource_version:
         if not isinstance(description, str) or not isinstance(tags, list):
             continue
         # Semantics must be explicit tags or complete phrases in the source description, never field IDs.
-        if not all(term.casefold() in [tag.casefold() for tag in tags if isinstance(tag, str)] or
+        if not all((catalog_mode and term == 'field:' + str(row.get('dataset_id')) + '/' + str(row.get('field_id', row.get('id')))) or
+                   term.casefold() in [tag.casefold() for tag in tags if isinstance(tag, str)] or
                    re.search(r'(?<!\w)' + re.escape(term.casefold()) + r'(?!\w)', description.casefold())
                    for term in slot.required_semantics):
             continue
@@ -125,6 +127,8 @@ def _select_field(slot: object, rows: list[dict], scope: dict, resource_version:
     field_id = row.get('field_id', row.get('id'))
     if not isinstance(field_id, str) or not IDENTIFIER.fullmatch(field_id):
         raise TemplateBindingError(f'{slot.name}: invalid field identity')
+    if catalog_mode:
+        return row
     if resource_version == 1 and 'timing_contract' in slot.required_metadata:
         raise TemplateBindingError(f'{slot.name}: timing_contract requires resource version 2')
     required = set(slot.required_metadata) | ({'available_at'} if resource_version == 1 else set())
@@ -227,6 +231,9 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
     version = template.get('binding_version', 1)
     if type(version) is not int or version not in (1, 2):
         raise TemplateBindingError('unsupported binding_version')
+    catalog_mode = knowledge_catalog_admission(evidence_context or {})
+    if catalog_mode and (version != 2 or resource_version != 2):
+        raise TemplateBindingError('catalog admission requires typed binding and resource version 2')
     if version == 1:
         result = _legacy_bind(template, field_rows, scope)
         calls = {item.func.id for item in ast.walk(ast.parse(result['bound_expression'], mode='eval'))
@@ -242,8 +249,9 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
     slots = [input_slot_from_dict(row) for row in template.get('input_slots', [])]
     if not slots or len({slot.name for slot in slots}) != len(slots):
         raise TemplateBindingError('v2 requires distinct named input_slots')
-    selected = {slot.name: _select_field(slot, field_rows, scope, resource_version) for slot in slots}
-    timing = {name: _field_timing(row, scope, evidence_context) for name, row in selected.items()} if resource_version == 2 else {}
+    selected = {slot.name: _select_field(slot, field_rows, scope, resource_version,
+                                      catalog_mode=catalog_mode) for slot in slots}
+    timing = {name: _field_timing(row, scope, evidence_context) for name, row in selected.items()} if resource_version == 2 and not catalog_mode else {}
     # Even disjoint semantic matches cannot distinguish identical expression IDs across datasets.
     for row in selected.values():
         field_id = row.get('field_id', row.get('id'))
@@ -254,7 +262,7 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
     by_slot = {slot.name: slot for slot in slots}
     node, tokens = parse_kernel(template.get('skeleton'), set(by_slot), scope.get('window', 20))
     provenance, consumed = [], set()
-    definitions, receipts = {}, {}
+    definitions, receipts, parameter_policies = {}, {}, {}
 
     def definition(name: str) -> dict:
         """Input: operator name str. Output: dict. Require one documented typed definition from supplied snapshot."""
@@ -266,7 +274,7 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
         row = matches[0]
         basis = row.get('definition_basis')
         project = isinstance(basis, dict) and basis.get('rule_id') == 'ts_delta_project_window'
-        if project or resource_version == 2 and basis is not None:
+        if not catalog_mode and (project or resource_version == 2 and basis is not None):
             if resource_version != 2 or not isinstance(evidence_context, dict) or not {
                     'source_index', 'source_texts'} <= evidence_context.keys():
                 raise TemplateBindingError('derived operator requires explicit resource v2 and evidence context')
@@ -277,6 +285,13 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
                 raise TemplateBindingError(f'{name}: unsupported definition basis: {result["rejections"]}')
             receipts[name] = result['value']
         definitions[name] = operator_definition_from_dict(row['definition'])
+        if catalog_mode:
+            if isinstance(evidence_context, dict) and {'source_index', 'source_texts'} <= evidence_context.keys():
+                definitions[name] = catalog_operator_definition(row, evidence_context['source_index'], evidence_context['source_texts'])
+            if project:
+                if name != PROJECT_WINDOW_POLICY['operator']:
+                    raise TemplateBindingError('project window policy does not match operator identity')
+                parameter_policies[name] = PROJECT_WINDOW_POLICY
         return definitions[name]
 
     for slot in slots:
@@ -344,7 +359,7 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
                 raise TemplateBindingError(f'{name}: unknown or duplicate parameter {kw.arg}')
             supplied[kw.arg] = kw.value
         receipt = receipts.get(name)
-        policy = receipt.get('parameter_policy') if receipt else None
+        policy = parameter_policies.get(name) or (receipt.get('parameter_policy') if receipt else None)
         entry = dict(operator=name, evidence_refs=copy.deepcopy(contract['evidence_refs']))
         if receipt is not None:
             entry['definition_receipt'] = copy.deepcopy(receipt)
@@ -396,7 +411,7 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
         bindings[slot.name] = dict(field_id=row.get('field_id', row.get('id')), dataset_id=row.get('dataset_id'),
                                    field_type=slot.field_type, role=slot.role,
                                    required_semantics=list(slot.required_semantics),
-                                   metadata={key: copy.deepcopy(row[key]) for key in sorted(metadata)},
+                                   metadata={key: copy.deepcopy(row[key]) for key in sorted(metadata) if not catalog_mode or key in row},
                                    reduction=copy.deepcopy(slot.reduction))
         if timing.get(slot.name) is not None:
             bindings[slot.name]['timing_receipt'] = timing[slot.name]

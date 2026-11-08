@@ -89,7 +89,8 @@ import hashlib
 
 from wqb import hypothesis_design as contract
 from wqb.resource_evidence import (resource_contract_version, resolve_operator_definition,
-                                   OPERATOR_RULES, OPERATOR_MEANING_SUFFIXES)
+                                   OPERATOR_RULES, OPERATOR_MEANING_SUFFIXES, knowledge_catalog_admission,
+                                   catalog_operator_definition)
 from wqb.knowledge_compile import _coverage_field_supported, _coverage_operator_supported
 from wqb.semantic_contracts import (SemanticPolicy, _indexed_source, _path,
     input_slot_from_dict, operator_definition_from_dict, validate_semantic_record)
@@ -167,7 +168,7 @@ def _settings(settings: dict, scope: dict) -> None:
 def _resources(resources: dict, scope: dict) -> tuple[dict, dict]:
     """Input: resources/scope dicts. Output: copied resources/verified Task2 pack dicts."""
     keys = {'field_rows', 'operator_rows', 'source_index', 'source_texts', 'settings', 'evidence_pack'}
-    if not isinstance(resources, dict) or set(resources) - {'resource_contract_version'} != keys:
+    if not isinstance(resources, dict) or set(resources) - {'resource_contract_version', 'resource_admission_policy'} != keys:
         _fail('invalid_resources', 'resources', 'expected exact resource contract keys')
     data = {key: contract._json_copy(value, source_metadata=True,
             full_source=key in {'source_texts', 'evidence_pack'})
@@ -187,6 +188,8 @@ def _resources(resources: dict, scope: dict) -> tuple[dict, dict]:
         _fail('invalid_resources', 'evidence_pack', 'expected original Task2 pack')
     if resource_contract_version(data) != resource_contract_version(original):
         _fail('invalid_resources', 'resource_contract_version', 'resource envelope and evidence pack disagree')
+    if knowledge_catalog_admission(data) != knowledge_catalog_admission(original):
+        _fail('invalid_resources', 'resource_admission_policy', 'resource envelope and evidence pack disagree')
     if original.get('scope') != scope:
         _fail('incompatible_scope', 'scope', 'scope differs from validated design scope')
     if original.get('source_index') != data['source_index']:
@@ -248,12 +251,16 @@ def _operator(name: str, rows: list[dict], pack: dict) -> None:
         if len(matches) != 1:
             raise ValueError('missing or ambiguous documented definition')
         row = matches[0]
-        issues = validate_semantic_record(row, pack['source_index'])
-        if issues:
-            raise ValueError(str(issues))
+        catalog_mode = knowledge_catalog_admission(pack)
+        if not catalog_mode:
+            issues = validate_semantic_record(row, pack['source_index'])
+            if issues:
+                raise ValueError(str(issues))
         definition = operator_definition_from_dict(row['definition'])
+        if catalog_mode:
+            definition = catalog_operator_definition(row, pack['source_index'], pack['source_texts'])
         version = resource_contract_version(pack)
-        if not _coverage_operator_supported(row, pack['source_texts'], source_index=pack['source_index'],
+        if not catalog_mode and not _coverage_operator_supported(row, pack['source_texts'], source_index=pack['source_index'],
                                             resource_contract_version=version):
             raise ValueError('definition differs from exact sourced operator facts')
         conditional = name in CONDITION_OPERATOR_CONTRACTS
@@ -263,9 +270,9 @@ def _operator(name: str, rows: list[dict], pack: dict) -> None:
                 or [p['type'] for p in definition['parameters']] != types
                 or any(not p['required'] or 'default' in p for p in definition['parameters'])
                 or (conditional and [p['name'] for p in definition['parameters']] != CONDITION_PARAMETER_NAMES[name])
-                or ((version == 1 or conditional) and meaning not in meanings)):
+                or (not catalog_mode and (version == 1 or conditional) and meaning not in meanings)):
             raise ValueError('unsupported documented signature or meaning for ' + name)
-        if version == 2 and not conditional:
+        if version == 2 and not conditional and not catalog_mode:
             receipt = resolve_operator_definition(row, pack['source_index'], pack['source_texts'],
                                                  resource_contract_version=2)
             rule_meaning = OPERATOR_RULES[name]['meaning']
@@ -296,6 +303,9 @@ def _binding(template: dict, data: dict, pack: dict, scope: dict) -> dict:
     version = resource_contract_version(data)
     options = dict(resource_contract_version=version, evidence_context=dict(
         source_index=pack['source_index'], source_texts=pack['source_texts'])) if version == 2 else {}
+    catalog_mode = knowledge_catalog_admission(data)
+    if catalog_mode:
+        options['evidence_context']['resource_admission_policy'] = data['resource_admission_policy']
     try:
         binding = bind_template(template, data['field_rows'], data['operator_rows'], scope, **options)
     except TemplateBindingError as exc:
@@ -317,6 +327,8 @@ def _binding(template: dict, data: dict, pack: dict, scope: dict) -> dict:
                 if message.startswith(slot['name'] + ':'):
                     code = 'incompatible_scope'
         _fail(code, 'binding', message)
+    if catalog_mode:
+        return binding
     verified_rows = []
     for slot in template['input_slots']:
         chosen = binding['bindings'][slot['name']]
@@ -359,8 +371,11 @@ def _binding(template: dict, data: dict, pack: dict, scope: dict) -> dict:
 def _evidence(design: dict, binding: dict, data: dict, pack: dict, scope: dict) -> list[dict]:
     """Input: design/binding/resources/pack/scope dicts. Output: all consumed provenance refs."""
     refs = deepcopy(design['evidence_refs'])
+    from wqb.resource_evidence import catalog_field_source_paths
     paths = {path for chosen in binding['bindings'].values()
-             for path in _selected_row(chosen, data, scope)['source_paths']}
+             for path in (catalog_field_source_paths(_selected_row(chosen, data, scope),
+                 pack['source_index'], pack['source_texts'], scope) if knowledge_catalog_admission(data)
+                 else _selected_row(chosen, data, scope)['source_paths'])}
     paths.update(source['source_path'] for chosen in binding['bindings'].values()
                  for source in chosen.get('timing_receipt', {}).get('sources', []))
     for path in sorted(paths):
@@ -460,7 +475,9 @@ def compile_design(design: dict, resources: dict, scope: dict) -> dict:
             row = _selected_row(chosen, data, scope)
             refs = _evidence(dict(evidence_refs=[]), dict(bindings={name: chosen}, operator_provenance=[]),
                              data, pack, scope)
-            context_bindings[name] = dict(deepcopy(chosen), source_paths=sorted(row['source_paths']), evidence_refs=refs)
+            context_bindings[name] = dict(deepcopy(chosen),
+                source_paths=(sorted({ref['source_path'] for ref in refs}) if knowledge_catalog_admission(data)
+                              else sorted(row['source_paths'])), evidence_refs=refs)
         experiment = dict(experiment_id='experiment_' + digest, design_id=normalized['design_id'],
             compiler_version=compiler_version, compilation_digest=digest,
             baseline_template_id=drafts[0]['template_id'], arms=arms, changed_dimension='feature',

@@ -2,6 +2,24 @@
 
 Opening the desktop app does not create a Codex task or call a GPT model. Initial preplanned research uses a bounded read-only model task per lane to propose hypotheses, roles and a finite experiment tree. Subsequent tree decisions and Repair are deterministic and consume frozen rules. A pending checkpoint is not evidence of model execution. See root todo.md for actual deployment/readiness, not just implemented capabilities.
 
+## Catalog Admission Boundary
+
+New frozen `knowledge_catalog_v1` contexts expose source-backed catalog resources
+without requiring a published economic-semantic interpretation. Missing meaning,
+polarity, timing or grain is explicitly unknown, not a reason to hide an identity
+and not a fact the model may invent. The bounded catalog view is not proof that
+every visible operator/field combination is compilable: the current feature DSL
+requires MATRIX signal roles; unknown operator signatures remain visible but
+cannot pass deterministic type/arity validation. No implicit VECTOR reduction is
+introduced. Actual source identity, dates and returned-field coverage are kept.
+
+Resource admission, AST/type validation, experiment-tree standards, execution
+routing, Seed gates, finite Repair search and permission/accounting are separate
+contracts. This update changes admission and the result-input adapter, not Seed
+thresholds, tree rollback, Repair grids or Stop/submission authority. Frozen runs
+without the marker retain their prior rules. Deployment status is in root todo.md;
+source support alone does not prove the installed app has switched entries.
+
 `wqb/ai_checkpoints.py` provides the first durable worker contract. A caller supplies an explicit executable argv with `{input}` and `{output}` placeholders. The worker receives a JSON checkpoint input and must write JSON output with a nonempty `summary`. Every attempt stores input, output location, and running/completed/failed status in the decisions directory. No default model, credential, or shell command is selected, and an empty argv leaves the checkpoint pending. The worker does not submit Alpha or change research rules.
 
 The run-local adapter lives in `wqb/codex_ai_worker.py`: it passes bounded evidence excerpts to `codex exec` with `--sandbox read-only`, `model_reasoning_effort=medium`, a JSON output schema, and a 600-second inner timeout. The enclosing checkpoint worker persists attempt input/output/status and has a 900-second outer timeout. It does not run WQB API calls, change workflow files, or submit an Alpha. When the Codex executable is unavailable, the checkpoint fails visibly while the deterministic workflow remains independently auditable. Direct CLI workflow runs without `--ai-executor codex` leave checkpoints pending; the Console workflow-run path configures it explicitly.

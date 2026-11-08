@@ -18,6 +18,7 @@ from wqb.knowledge_paths import machine_resource_path
 from wqb.lockfile import json_lock_transition_guard
 from wqb.research_group import MAX_LANES, read_group
 from wqb.runtime_control import _write
+from wqb.resource_evidence import knowledge_catalog_admission, KNOWLEDGE_CATALOG_POLICY
 from wqb.semantic_compilation import (_digest, _material, _safe,
     verify_design_materials, verify_source_equivalence)
 from wqb.semantic_contracts import SemanticPolicy
@@ -120,6 +121,52 @@ def _source_context(root: Path, requested: dict, registered: dict) -> dict:
     return texts
 
 
+def _catalog_field_sources(root: Path, row: dict, scope: dict, texts: dict, index: dict,
+                           extract_proofs: dict) -> list[str]:
+    """Input: vault/unchanged field/scope/verified texts/canonical index/proof cache. Output: existing receipt-bound evidence paths."""
+    import hashlib
+    from wqb.knowledge_contracts import parse_markdown_front_matter, verify_field_source_extract
+
+    paths = []
+    for original in row['source_paths']:
+        if original in texts:
+            paths.append(original)
+            continue
+        registered = index.get(original)
+        if not isinstance(registered, dict) or registered.get('path') != original:
+            raise ValueError('canonical original source registration missing: ' + original)
+        captured = datetime.fromisoformat(registered['captured_at'].replace('Z', '+00:00'))
+        if captured.tzinfo is None or not 0 <= (datetime.now(timezone.utc) - captured).total_seconds() / 86400 <= KNOWLEDGE_MAX_AGE_DAYS:
+            raise ValueError('canonical original source outside knowledge age policy: ' + original)
+        equivalents = []
+        for candidate in sorted(texts):
+            if index[candidate].get('content_status') != 'verified_raw_extract':
+                continue
+            metadata, _ = parse_markdown_front_matter(texts[candidate].replace('\r\n', '\n'))
+            if metadata.get('original_source_path') != original:
+                continue
+            if metadata.get('original_sha256') != registered.get('content_hash'):
+                raise ValueError('extracted source contradicts canonical original hash: ' + original)
+            if candidate not in extract_proofs:
+                extract_proofs[candidate] = verify_field_source_extract(root, candidate)
+            proof = extract_proofs[candidate]
+            if (proof.get('status') != 'verified' or proof.get('source_path') != original
+                    or proof.get('excerpt_path') != candidate
+                    or proof.get('original_sha256') != registered.get('content_hash')
+                    or proof.get('excerpt_sha256') != hashlib.sha256(texts[candidate].encode('utf-8')).hexdigest()):
+                raise ValueError('field source equivalence receipt differs from frozen materials: ' + candidate)
+            for field, dataset, captured_scope in _coverage_source_fields(texts[candidate]):
+                if ((field.get('id'), dataset.get('id')) == (row['field_id'], row['dataset_id'])
+                        and _scope_matches(dict(captured_scope, dataset_id=row['dataset_id']), scope)):
+                    if field.get('type', field.get('field_type')) != row['field_type']:
+                        raise ValueError('catalog field type differs from extracted technical type: ' + row['field_id'])
+                    equivalents.append(candidate)
+        if not equivalents:
+            raise ValueError('missing exact-scope verified field source equivalence: ' + original)
+        paths.extend(equivalents)
+    return list(dict.fromkeys(paths))
+
+
 def _validate_resource(root: Path, resource: dict, scope: dict, ledger: list[dict], index: dict) -> dict:
     """Input: vault/resource/scope/canonical ledger/index. Output: validated copied compiler resources dict."""
     resource, _ = _resources(resource, scope)
@@ -129,7 +176,8 @@ def _validate_resource(root: Path, resource: dict, scope: dict, ledger: list[dic
     fields = resource['field_rows']
     if not 1 <= len(fields) <= MAX_FIELDS_PER_LANE:
         raise ValueError('lane requires 1..30 source-backed fields')
-    semantic_paths, semantic_histories = _field_semantic_context(root, fields, index)
+    catalog_mode = knowledge_catalog_admission(resource)
+    semantic_paths, semantic_histories = (set(), []) if catalog_mode else _field_semantic_context(root, fields, index)
     if semantic_paths - resource['source_index'].keys():
         raise ValueError('field explanation sources missing from frozen resource context')
     supplied_histories = {
@@ -139,6 +187,7 @@ def _validate_resource(root: Path, resource: dict, scope: dict, ledger: list[dic
            not in supplied_histories for history in semantic_histories):
         raise ValueError('field explanation hypotheses missing from frozen resource context')
     version = resource.get('resource_contract_version', 1)
+    extract_proofs = {}
     for row in fields:
         identity = (row.get('dataset_id'), row.get('field_id'))
         matches = [item for item in ledger if (item.get('dataset_id'), item.get('field_id')) == identity
@@ -148,14 +197,19 @@ def _validate_resource(root: Path, resource: dict, scope: dict, ledger: list[dic
         if (not _scope_matches(row, scope) or not _row_has_measured_platform_coverage(row)
                 or not _row_has_positive_coverage(row) or not _row_has_source_date(row)):
             raise ValueError('missing measured positive dated exact-scope coverage: ' + str(identity))
-        if not _coverage_field_supported(dict(row, semantic_tags=[]), texts, resource['source_index'], scope,
+        if not catalog_mode and not _coverage_field_supported(dict(row, semantic_tags=[]), texts, resource['source_index'], scope,
                                          resource_contract_version=version):
             raise ValueError('missing source-backed description/type/timing/grain/metadata: ' + str(identity))
         measured = []
-        for path in row['source_paths']:
+        field_sources = (_catalog_field_sources(root, row, scope, texts, index, extract_proofs)
+                         if catalog_mode else row['source_paths'])
+        for path in field_sources:
             for field, dataset, captured in _coverage_source_fields(texts[path]):
                 if (field.get('id') == identity[1] and dataset.get('id') == identity[0]
                         and _scope_matches(dict(captured, dataset_id=identity[0]), scope)):
+                    if catalog_mode and (row.get('field_type') not in {'MATRIX', 'VECTOR', 'GROUP'}
+                            or field.get('type', field.get('field_type')) != row['field_type']):
+                        raise ValueError('catalog field type differs from captured technical type: ' + str(identity))
                     value = field.get('coverage')
                     if type(value) in (int, float) and math.isfinite(value) and value > 0:
                         measured.append(value)
@@ -164,7 +218,7 @@ def _validate_resource(root: Path, resource: dict, scope: dict, ledger: list[dic
         age = (datetime.now(timezone.utc).date() - date.fromisoformat(row['source_updated_at'])).days
         if not 0 <= age <= KNOWLEDGE_MAX_AGE_DAYS:
             raise ValueError('field source date outside knowledge age policy: ' + str(identity))
-    for row in resource['operator_rows']:
+    for row in ([] if catalog_mode else resource['operator_rows']):
         if not _coverage_operator_supported(row, texts, source_index=resource['source_index'],
                                             resource_contract_version=version):
             raise ValueError('missing typed source-backed operator: ' + str(row.get('operator')))
@@ -207,6 +261,14 @@ def _local_resources(root: Path, scope: dict, config: dict, count: int) -> tuple
     raw text and the existing settings/compiler/coverage helpers. Never compile
     the vault, publish a release, capture data or load an arbitrary Python builder.
     """
+    if knowledge_catalog_admission(config):
+        from wqb.research_resource_catalog import read_catalog_resources
+        settings = build_settings({**config,
+            **{key: scope[key] for key in ('region', 'delay', 'universe')},
+            'instrument_type': scope['instrument_type']})
+        resources, diagnostics = read_catalog_resources(root, scope, count, settings=settings,
+                                                       max_fields_per_lane=MAX_FIELDS_PER_LANE)
+        return resources, [], diagnostics
     index = {}
     for row in _audit_resource_rows(machine_resource_path(root, 'source_index'), root):
         if row['path'] in index:
@@ -415,6 +477,8 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
         identity = dict(knowledge_root=str(root), selected_option=selected_option, authority=authority,
                         scope=scope, measurement_period=period, policy=policy, settings=settings,
                         repair_search_policy=supplied_repair)
+        if knowledge_catalog_admission(config):
+            identity['resource_admission_policy'] = KNOWLEDGE_CATALOG_POLICY
         if default_rulebook is not None:
             identity['repair_rulebook'] = deepcopy(default_rulebook)
         directory = _safe(runs, 'start_preflight/preplanned/' + _digest(identity))

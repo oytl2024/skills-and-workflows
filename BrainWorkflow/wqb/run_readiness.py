@@ -15,6 +15,7 @@ from wqb.data_ledger import (
 )
 from wqb.knowledge_freshness import evaluate_freshness, load_freshness_manifest
 from wqb.knowledge_paths import existing_machine_resource_path
+from wqb.resource_evidence import knowledge_catalog_admission
 from wqb.template_library import load_template_library_from_knowledge, select_templates_for_data, template_library_path_for_knowledge
 
 
@@ -551,6 +552,18 @@ def evaluate_run_readiness(
     current = date.fromisoformat(today_value) if today_value else date.today()
     generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     issues: list[ReadinessIssue] = []
+    catalog_mode = False
+    if start_snapshot is not None:
+        try:
+            if knowledge_catalog_admission(start_snapshot):
+                from wqb.hypothesis_selection import validate_operational_resource_context
+                context = validate_operational_resource_context(start_snapshot)
+                if not knowledge_catalog_admission(context):
+                    raise ValueError('frozen catalog context policy differs')
+                catalog_mode = True
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            issues.append(_issue('block', 'invalid_catalog_context', str(error), root,
+                                 'Restore the original validated resource context.'))
     freshness_records: list[Any] = []
     manifest = existing_machine_resource_path(root, FRESHNESS_MANIFEST_RESOURCE)
     if not manifest.exists():
@@ -576,12 +589,19 @@ def evaluate_run_readiness(
                         )
                     )
             for status in statuses:
+                if catalog_mode and status.name in {'template_library', 'operator_catalog'}:
+                    if not status.artifact_exists or status.stale:
+                        issues.append(_issue('warn', 'optional_semantic_catalog',
+                            'Frozen catalog research does not require global semantic publication: ' + status.name,
+                            status.path, 'Optional semantic enrichment can be maintained separately.'))
+                    continue
                 if not status.artifact_exists:
                     issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "missing_artifact", f"Required artifact is missing: {status.name}", status.path, "Run bootstrap-knowledge."))
                 elif status.stale:
                     issues.append(_issue("block" if mode in STRICT_BLOCKING_MODES else "warn", "stale_artifact", f"Required artifact is stale: {status.name}", status.path, "Run knowledge maintenance."))
     _check_jsonl_artifact(data_ledger_path_for_knowledge(root), "data_ledger", issues, mode)
-    _check_jsonl_artifact(template_library_path_for_knowledge(root), "template_library", issues, mode)
+    if not catalog_mode:
+        _check_jsonl_artifact(template_library_path_for_knowledge(root), "template_library", issues, mode)
     _check_benchmark_rulebook(benchmark_rules_path_for_knowledge(root), issues, mode)
     _validate_scope_artifacts(
         root,

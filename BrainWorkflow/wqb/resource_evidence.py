@@ -34,6 +34,65 @@ from wqb.semantic_contracts import (
 )
 
 
+KNOWLEDGE_CATALOG_POLICY = 'knowledge_catalog_v1'
+
+
+def knowledge_catalog_admission(resources: dict) -> bool:
+    """Input: producer resource/pack dict. Output: bool; recognize explicit catalog admission without weakening old contexts."""
+    if 'resource_admission_policy' not in resources:
+        return False
+    if resources['resource_admission_policy'] != KNOWLEDGE_CATALOG_POLICY:
+        raise ValueError('unsupported resource admission policy')
+    return True
+
+
+def catalog_field_source_paths(row: dict, index: dict, texts: dict, scope: dict) -> list[str]:
+    """Input: canonical field and frozen sources/scope dicts. Output: actual evidence paths, without changing ledger identity.
+
+    Start authenticates immutable extract receipts against originals. Downstream
+    pure consumers retain that frozen certificate and recheck extract bytes,
+    original identity and exact captured field facts instead of renaming raw.
+    """
+    from wqb.knowledge_compile import _coverage_source_fields
+    from wqb.template_binding import _scope_matches
+
+    paths = []
+    originals = row.get('source_paths')
+    if not isinstance(originals, list) or not originals:
+        raise ValueError('field requires canonical source paths')
+    for original in originals:
+        if original in index and original in texts:
+            paths.append(original)
+            continue
+        candidates, hashes = [], set()
+        for path, source in index.items():
+            if source.get('content_status') != 'verified_raw_extract' or path not in texts:
+                continue
+            metadata, _ = parse_markdown_front_matter(texts[path].replace('\r\n', '\n'))
+            if metadata.get('original_source_path') != original:
+                continue
+            digest = metadata.get('original_sha256')
+            if not isinstance(digest, str) or not re.fullmatch('[0-9a-fA-F]{64}', digest):
+                raise ValueError('extract requires original source digest')
+            _source(dict(source_path=path, sha256=source['content_hash'],
+                capture_date=source['captured_at'][:10], kind='documented', experiment_refs=[]),
+                index, texts, _technical_catalog=True)
+            matches = [(field, dataset, captured) for field, dataset, captured in _coverage_source_fields(texts[path])
+                if (field.get('id'), dataset.get('id')) == (row['field_id'], row['dataset_id'])
+                and _scope_matches(dict(captured, dataset_id=dataset.get('id')), scope)]
+            if not matches:
+                continue
+            if any(field.get('type', field.get('field_type')) != row['field_type']
+                   or field.get('coverage') != row['coverage'] for field, _, _ in matches):
+                raise ValueError('extract field facts contradict canonical field')
+            hashes.add(digest.lower())
+            candidates.append(path)
+        if not candidates or len(hashes) != 1:
+            raise ValueError('missing or conflicting frozen field source equivalence: ' + original)
+        paths.extend(sorted(candidates))
+    return list(dict.fromkeys(paths))
+
+
 SOURCE_FAMILIES = {
     "platform_learn_material": {"raw/platform/learn"},
     "platform_data_field_capture": {"raw/platform/data_fields"},
@@ -284,7 +343,8 @@ def _check_header(text: str) -> None:
     raise ValueError("unterminated frontmatter header")
 
 
-def _source(ref: dict, source_index: dict, source_texts: dict, *, _hypothesis_only: bool = False) -> str:
+def _source(ref: dict, source_index: dict, source_texts: dict, *, _hypothesis_only: bool = False,
+            _technical_catalog: bool = False) -> str:
     """Input: ref/index/full sources dicts. Output: verified body str. Check identity and actual bytes."""
     if not isinstance(source_index, dict) or not isinstance(source_texts, dict):
         raise ValueError("expected source index and complete source texts")
@@ -295,7 +355,7 @@ def _source(ref: dict, source_index: dict, source_texts: dict, *, _hypothesis_on
     issues = validate_semantic_record(dict(evidence_refs=[ref]), source_index)
     if issues:
         raise ValueError("invalid premise provenance: " + issues[0]["message"])
-    if row["source_family"] not in SOURCE_FAMILIES.get(row["source_type"], set()):
+    if not _technical_catalog and row["source_family"] not in SOURCE_FAMILIES.get(row["source_type"], set()):
         user_family = next((family for family in ('raw/user', 'raw/community/user_messages', 'raw/research')
                             if path.startswith(family + '/')), None)
         if (not _hypothesis_only or ref.get('kind') != 'hypothesis' or user_family is None
@@ -1094,6 +1154,32 @@ def _operator_receipt_context(body: str, source: dict, raw: str | bytes, operato
     if match[1] != canonical:
         raise ValueError("GET receipt does not reproduce complete captured operator cards")
     return canonical
+
+
+def catalog_operator_definition(record: dict, source_index: dict, source_texts: dict) -> dict:
+    """Input: catalog operator/index/full texts dicts. Output: actual typed definition; compare technical facts, not economic prose."""
+    from wqb.semantic_compilation import _markdown_definitions
+    from wqb.knowledge_compile import _coverage_json_objects
+    definition = operator_definition_from_dict(record['definition'])
+    keys = ('input_types', 'output_type', 'parameters')
+    expected = {key: definition[key] for key in keys}
+    found = False
+    for ref in definition['evidence_refs']:
+        body = _source(ref, source_index, source_texts, _technical_catalog=True)
+        candidates = [_markdown_definitions(body, require_description=False).get(record['operator'])]
+        candidates.extend(item.get('definition') for item in _coverage_json_objects(body)
+            if item.get('operator', item.get('name', item.get('id'))) == record['operator'])
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            if any(key in candidate and not _equal(candidate[key], expected[key]) for key in keys):
+                raise ValueError('catalog signature contradicts captured technical facts: ' + record['operator'])
+            found = found or all(key in candidate for key in keys)
+    if not found:
+        resolved = resolve_operator_definition(record, source_index, source_texts, resource_contract_version=2)
+        if resolved['status'] != 'supported' or any(not _equal(resolved['value']['definition'][key], expected[key]) for key in keys):
+            raise ValueError('catalog operator lacks a supported technical signature: ' + record['operator'])
+    return definition
 
 
 def _direct_operator_definition(record: dict, source_index: dict, source_texts: dict) -> dict:

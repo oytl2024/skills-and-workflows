@@ -38,6 +38,8 @@ def _authenticated_task(run: Path) -> dict:
     version = resources['evidence_pack'].get('resource_contract_version', 1)
     if version != 1:
         resources['resource_contract_version'] = version
+    if 'resource_admission_policy' in resources['evidence_pack']:
+        resources['resource_admission_policy'] = resources['evidence_pack']['resource_admission_policy']
     current = _resource_certificate(run, Path(manifest['knowledge_root']), resources, manifest['selected_scope'])
     for key in ('owning_run', 'policy', 'scope', 'sources', 'source_index_sha256'):
         if current[key] != certificate[key]:

@@ -374,3 +374,22 @@ skills-and-workflows\BrainWorkflow\NVIDIA Corporation
 - Post-audit regression: 146 tests passed, one skip, 6.671 seconds (root entry,
   source directory, guarded cleanup and Console contracts). No source/test
   edits or real deletions followed the stable full-suite proof.
+
+## Nov8 Catalog Admission Desktop Audit
+
+- Pending accepted update; no installation or deletion is authorized by this
+  audit alone. Full offline proof and verified branch push must precede replacement.
+- Exact generated distribution: `output/desktop-application/20261108-223912-0783/`
+  with its `dist space` application tree. Destination remains
+  `output/desktop-application/installed/BrainWorkflow/` inside the workspace.
+- Read-only containment/link/layout audit: old 356 files, new 358; only additions
+  are `_internal/wqb/measurement_window.py` and
+  `_internal/wqb/research_resource_catalog.py`. No old-only paths; deletion list
+  is empty. Generated installation receipt is replaced last after copied hashes
+  match. Source changes remain Git-recoverable after verified synchronization.
+- Keep all original knowledge, research identities/results/recovery evidence,
+  profiles, private config and prior source-bound verification evidence. No
+  browser/profile or distinct historical-inventory cleanup is part of this update.
+- Isolated packaged smoke passed: native window, loaded code/context, WebView2,
+  assets and snapshot. It used disposable roots, issued no Start or platform call,
+  and stopped only its owned GUI/backend. This does not replace full regression.

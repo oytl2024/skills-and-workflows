@@ -4,6 +4,7 @@ from typing import Any
 
 from wqb.candidate_evidence import capture_evidence_revision, load_candidate_evidence, save_candidate_evidence
 from wqb.models import CheckItem, CheckSummary
+from wqb.measurement_window import EVIDENCE_KEY, fetch_window_evidence
 
 
 CHECK_RESPONSE_RETRIES = 3
@@ -14,6 +15,15 @@ PENDING_RESULTS = {"PENDING"}
 SUBMISSION_ONLY_CHECKS = {"SELF_CORRELATION", "PROD_CORRELATION", "DATA_DIVERSITY", "REGULAR_SUBMISSION",
                           "POWER_POOL_CORRELATION", "MATCHES_THEMES"}
 BASELINE_REQUIRED_CHECKS = {"LOW_SHARPE", "LOW_FITNESS"}
+
+
+def _window_metrics(client, alpha_id: str, metrics: dict, alpha: dict | None = None) -> dict:
+    """Input: client, Alpha ID, metrics and optional raw detail. Output: copied metrics with opt-in actual proof."""
+    if getattr(client, 'measurement_window_required', False) is not True or metrics.get('endDate'):
+        return metrics
+    if alpha is None:
+        alpha = client.get_json(f'/alphas/{alpha_id}')
+    return {**metrics, EVIDENCE_KEY: fetch_window_evidence(client, alpha_id, alpha)}
 
 
 def classify_check_response(alpha_id: str, check_response: dict[str, Any], metrics: dict[str, Any]) -> CheckSummary:
@@ -66,12 +76,13 @@ def fetch_check_summary(
     """Input: WQB client and alpha id. Output: classified check summary. Fetch alpha detail and check JSON."""
     cached = load_candidate_evidence(client, alpha_id)
     if cached is not None:
-        return classify_check_response(alpha_id, cached[0], cached[1])
+        return classify_check_response(alpha_id, cached[0], _window_metrics(client, alpha_id, cached[1]))
     evidence_revision = capture_evidence_revision(client, alpha_id)
     alpha = client.get_json(f"/alphas/{alpha_id}")
     metrics = alpha.get("is", {}) if isinstance(alpha, dict) else {}
     if not isinstance(metrics, dict):
         metrics = {}
+    metrics = _window_metrics(client, alpha_id, metrics, alpha)
     audit = {"evidence_source": "fresh", "checked_at": time.time(),
              "expires_at": None, "persistence_status": "ineligible"}
     baseline_checks = metrics.get("checks", []) if isinstance(metrics, dict) else []

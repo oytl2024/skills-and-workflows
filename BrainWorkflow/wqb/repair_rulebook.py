@@ -42,7 +42,7 @@ def build_default_repair_policy(resources: dict, rulebook: dict | None = None) -
     Source references establish data properties only; proposed setting effects
     remain project hypotheses and require measured before/after comparisons.
     """
-    from wqb.repair_search import compile_repair_search_policy, _policy
+    from wqb.repair_search import compile_repair_search_policy, _policy, _field_source_paths, _catalog_admission
     catalog = load_repair_rulebook() if rulebook is None else deepcopy(rulebook)
     _validate_catalog(catalog)
     certified = compile_repair_search_policy(resources, dict(compile_version=1, rules=[], traits={}))
@@ -50,7 +50,9 @@ def build_default_repair_policy(resources: dict, rulebook: dict | None = None) -
     fields = certified['resources']['field_rows']
     if not fields or any(row['field_type'] not in {'MATRIX', 'VECTOR'} for row in fields):
         raise ValueError('default Repair requires sourced numeric fields')
-    paths = sorted({path for row in fields for path in row['source_paths']})
+    paths = sorted({path for row in fields for path in _field_source_paths(row,
+        resources['source_index'], resources['source_texts'], resources['evidence_pack']['scope'],
+        _catalog_admission(resources))})
     references = [dict(source_path=path, sha256=resources['source_index'][path]['content_hash'],
                        capture_date=resources['source_index'][path]['captured_at'][:10],
                        kind='documented', experiment_refs=[]) for path in paths]
@@ -66,4 +68,6 @@ def build_default_repair_policy(resources: dict, rulebook: dict | None = None) -
     compiled = _policy(dict(schema_version=2, rulebook_id=catalog['rulebook_id'], rules=rules, traits=facts))
     compiled['resources'] = {key: deepcopy(certified['resources'][key]) for key in (
         'resource_contract_version', 'field_rows', 'operator_rows', 'scope', 'evidence_context')}
+    if 'resource_admission_policy' in certified['resources']:
+        compiled['resources']['resource_admission_policy'] = certified['resources']['resource_admission_policy']
     return compiled

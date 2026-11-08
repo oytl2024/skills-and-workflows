@@ -8,6 +8,7 @@ from wqb.benchmark import benchmark_alpha_record
 from wqb.benchmark_rules import (BenchmarkRule, benchmark_rule_to_dict,
                                 default_benchmark_rules, validate_benchmark_rule_row)
 from wqb.checker import SUBMISSION_ONLY_CHECKS
+from wqb.measurement_window import EVIDENCE_KEY, verified_window_period
 
 
 SCHEMA_VERSION = 1
@@ -143,6 +144,9 @@ def _measured_period(row: dict) -> tuple[date, date] | None:
     if declared is None:
         return None
     metrics = row['metrics']
+    if EVIDENCE_KEY in metrics:
+        verified = _period(verified_window_period(row))
+        return verified if verified == declared else None
     if not any(key in metrics for key in ('startDate', 'endDate')):
         return declared
     start, end = (_canonical_date(metrics.get(key)) for key in ('startDate', 'endDate'))

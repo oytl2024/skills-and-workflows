@@ -42,6 +42,7 @@ from wqb.hypothesis_design import design_output_schema, validate_hypothesis_desi
 from wqb.lockfile import json_lock_transition_guard
 from wqb.runtime_control import _write
 from wqb.semantic_compilation import _check_schema, _safe
+from wqb.resource_evidence import knowledge_catalog_admission
 from wqb.semantic_contracts import SemanticPolicy
 
 
@@ -136,6 +137,13 @@ def _brief(resources: dict, manifest: dict, certificate: dict, receipts: list, p
         inputs = receipt['compiler_input']
         if inputs['scope'] == certificate['scope'] and inputs['resources'] == resources:
             compatible.append(receipt)
+    composition = __doc__
+    if knowledge_catalog_admission(resources):
+        composition += ('\nResource policy knowledge_catalog_v1: all supplied catalog resources are eligible for exploration. '
+            'Unknown economic meaning, cadence, units, timing or vector grain remain unknown, not established facts. '
+            'Use field:<dataset_id>/<field_id> role selectors for exact identity binding; these are not economic meanings. '
+            'Express interpretations as hypotheses and competing explanations. Keep existing feature, type and tree rules. '
+            'An operator with no technical signature remains visible, but do not invent its signature or claim it compiled.\n')
     return dict(schema_version=1, scope=certificate['scope'],
         measurement_period=manifest['start_snapshot']['measurement_period'],
         plan_depth=policy['plan_depth'], max_width=policy['initial_hypotheses'],
@@ -144,7 +152,7 @@ def _brief(resources: dict, manifest: dict, certificate: dict, receipts: list, p
         evidence_pack=deepcopy(resources['evidence_pack']),
         compatible_template_receipts=compatible,
         resource_certificate_sha256=certificate['content_sha256'],
-        composition_contract=__doc__,
+        composition_contract=composition,
         output_schema=_output_schema(resources.get('resource_contract_version', 1)))
 
 

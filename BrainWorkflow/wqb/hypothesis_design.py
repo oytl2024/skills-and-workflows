@@ -83,7 +83,7 @@ from wqb.semantic_contracts import (SemanticPolicy, CARD_FIELDS, IDENTIFIER,
     hypothesis_card_from_dict, input_slot_from_dict, validate_semantic_record)
 from wqb.semantic_compilation import _check_schema
 from wqb.knowledge_contracts import parse_markdown_front_matter
-from wqb.resource_evidence import PROJECT_WINDOW_POLICY, resource_contract_version
+from wqb.resource_evidence import PROJECT_WINDOW_POLICY, resource_contract_version, knowledge_catalog_admission
 from wqb.mechanism_evidence import MAX_CONTEXT as MAX_MECHANISM_CONTEXT
 
 
@@ -278,9 +278,11 @@ def _refs(refs: list, pack: dict) -> list[dict]:
 def _pack(evidence_pack: dict) -> dict:
     """Input: upstream-verified pack dict. Output: copied consistency-checked pack dict."""
     required = {'source_index', 'scope', 'allowed_role_semantics', 'allowed_operator_intents'}
-    if not isinstance(evidence_pack, dict) or not required <= evidence_pack.keys() or evidence_pack.keys() - required - {'source_texts', 'histories', 'resource_contract_version', 'mechanism_context'}:
+    if not isinstance(evidence_pack, dict) or not required <= evidence_pack.keys() or evidence_pack.keys() - required - {'source_texts', 'histories', 'resource_contract_version', 'mechanism_context', 'resource_admission_policy'}:
         raise ValueError('unknown or missing evidence pack fields')
     resource_contract_version(evidence_pack)
+    if knowledge_catalog_admission(evidence_pack) and resource_contract_version(evidence_pack) != 2:
+        raise ValueError('catalog admission requires resource contract version 2')
     pack = _json_copy(evidence_pack, source_metadata=True)
     if len(_canonical(pack).encode()) > MAX_JSON_BYTES:
         raise ValueError('oversized evidence pack')
@@ -458,10 +460,10 @@ def validate_hypothesis_design(answer: dict, evidence_pack: dict, policy: Semant
         for role in design['field_roles']:
             input_slot_from_dict(dict(role, role=role['name']))
             role['required_semantics'] = _strings(role['required_semantics'])
-            role['required_metadata'] = _strings(role['required_metadata'])
+            role['required_metadata'] = _strings(role['required_metadata'], nonempty=not knowledge_catalog_admission(pack))
             if set(role['required_semantics']) - set(pack['allowed_role_semantics']):
                 raise ValueError('role semantics absent from supplied evidence')
-            if (not ({'available_at'} | ({'timing_contract'} if version == 2 else set())) & set(role['required_metadata']) or (role['field_type'] == 'VECTOR' and 'vector_grain' not in role['required_metadata'])):
+            if not knowledge_catalog_admission(pack) and (not ({'available_at'} | ({'timing_contract'} if version == 2 else set())) & set(role['required_metadata']) or (role['field_type'] == 'VECTOR' and 'vector_grain' not in role['required_metadata'])):
                 raise ValueError('explicit availability/vector grain requirement missing')
             if role['name'] in roles:
                 raise ValueError('duplicate role names')
@@ -529,5 +531,7 @@ def validate_hypothesis_design(answer: dict, evidence_pack: dict, policy: Semant
                         allowed_operator_intents=pack['allowed_operator_intents'])
         if version == 2:
             identity['resource_contract_version'] = version
+        if knowledge_catalog_admission(pack):
+            identity['resource_admission_policy'] = pack['resource_admission_policy']
         design['design_id'] = 'design_' + hashlib.sha256(_canonical(identity).encode('utf-8')).hexdigest()
     return result

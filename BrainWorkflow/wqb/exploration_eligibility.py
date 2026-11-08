@@ -9,7 +9,8 @@ from wqb.hypothesis_design import compile_hypothesis_design
 from wqb.knowledge_paths import machine_resource_path
 from wqb.lockfile import json_lock_transition_guard
 from wqb.runtime_control import _write
-from wqb.semantic_compilation import _material, _safe
+from wqb.resource_evidence import knowledge_catalog_admission
+from wqb.semantic_compilation import _material, _safe, verify_source_equivalence
 
 
 EXPLORATION_VERSION = 1
@@ -144,9 +145,10 @@ def _resource_certificate(run: Path, knowledge_root: Path, resources: dict, scop
         raise ValueError('exploration requires exact indexed source texts')
     sources = {}
     for path, row in sorted(requested.items()):
-        if _digest(row) != _digest(registered.get(path)) or row.get('path') != path:
+        if row.get('path') != path:
             raise ValueError('requested source differs from canonical registration')
-        verified, text = _material(vault, registered[path])
+        equivalent = verify_source_equivalence(vault, row, registered.get(path))
+        verified, text = equivalent['source_index'], equivalent['source_text']
         if text != texts[path]:
             raise ValueError('exploration source text differs from actual raw bytes')
         sources[path] = verified
@@ -264,12 +266,15 @@ def build_exploration_snapshot(receipts: list[dict], *, resource_certificates: l
         raise ValueError('duplicate exploration receipts')
     scope = verified[0]['compiler_input']['scope']
     version = verified[0]['compiler_input']['resources'].get('resource_contract_version', 1)
+    admission = verified[0]['compiler_input']['resources'].get('resource_admission_policy')
     fields, operators, templates = [], [], []
     for row in verified:
         inputs = row['compiler_input']
         resources = inputs['resources']
         if inputs['scope'] != scope or resources.get('resource_contract_version', 1) != version:
             raise ValueError('exploration pairs must share scope and resource version')
+        if resources.get('resource_admission_policy') != admission:
+            raise ValueError('exploration pairs must share resource admission policy')
         for target, source in ((fields, resources['field_rows']),
                                (operators, resources['operator_rows']),
                                (templates, row['compiled']['drafts'])):
@@ -288,11 +293,14 @@ def build_exploration_snapshot(receipts: list[dict], *, resource_certificates: l
             raise ValueError('exploration certificates must share owning run and frozen policy')
         context['resource_certificates'] = certificates
         policy = deepcopy(certificates[0]['policy'])
-    return dict(resource_contract_version=version, hypothesis_binding_version=2,
+    snapshot = dict(resource_contract_version=version, hypothesis_binding_version=2,
                 selected_scope=deepcopy(scope), template_rows=templates,
                 data_ledger_rows=fields, operator_rows=operators,
                 research_policy=policy,
                 exploration_context=context)
+    if admission is not None:
+        snapshot['resource_admission_policy'] = admission
+    return snapshot
 
 
 def validate_exploration_snapshot(snapshot: dict) -> dict:
@@ -315,8 +323,8 @@ def validate_exploration_snapshot(snapshot: dict) -> dict:
             and _digest(snapshot['research_policy']) != _digest(rebuilt['research_policy'])):
         raise ValueError('exploration snapshot differs from certified frozen policy')
     for key in ('resource_contract_version', 'hypothesis_binding_version', 'selected_scope',
-                'template_rows', 'data_ledger_rows', 'operator_rows', 'exploration_context'):
-        if _digest(snapshot.get(key)) != _digest(rebuilt[key]):
+                'template_rows', 'data_ledger_rows', 'operator_rows', 'exploration_context', 'resource_admission_policy'):
+        if _digest(snapshot.get(key)) != _digest(rebuilt.get(key)):
             raise ValueError('exploration snapshot differs from verified ' + key)
     index, texts, experiments = {}, {}, []
     for receipt in rebuilt['exploration_context']['receipts']:
@@ -327,9 +335,12 @@ def validate_exploration_snapshot(snapshot: dict) -> dict:
                 raise ValueError('exploration source conflicts across pairs')
             index[path], texts[path] = source, text
         experiments.append(receipt['compiled']['experiment'])
-    return dict(resource_contract_version=rebuilt['resource_contract_version'],
+    result = dict(resource_contract_version=rebuilt['resource_contract_version'],
                 source_index=index, source_texts=texts, experiments=experiments,
                 exploration_template_ids=[row['template_id'] for row in rebuilt['template_rows']])
+    if knowledge_catalog_admission(rebuilt):
+        result['resource_admission_policy'] = rebuilt['resource_admission_policy']
+    return result
 
 
 def validate_operational_exploration(run: Path, knowledge_root: Path, snapshot: dict) -> dict:

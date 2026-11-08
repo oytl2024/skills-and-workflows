@@ -23,6 +23,11 @@ the unproven setting effect. Completed failure names OR a measured metric
 predicate activate a rule. Normalized gap and matching failure count rank it
 before declared priority/ID. Pending checks never become failed checks. V1
 canonicalization, fixed ordering and persisted receipt rebuilding stay unchanged.
+
+Explicit knowledge_catalog_v1 resources use sourced identity/type/coverage/date
+and technical signatures without semantic publication or timing/grain proof.
+Finite mathematical mappings and source-established traits remain mandatory;
+absence of the marker preserves strict historical validation.
 """
 
 import ast
@@ -31,6 +36,7 @@ import hashlib
 import json
 import math
 import re
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from wqb.cli import simulation_identity_hash
@@ -39,6 +45,7 @@ from wqb.repair_policy import DECAY_LIMIT, TRUNCATION_LIMIT, NEUTRALIZATIONS
 from wqb.repair_trace import TARGET_DIRECTIONS
 from wqb.benchmark import REPAIRABLE_CHECKS
 from wqb.semantic_contracts import evidence_ref_from_dict
+from wqb.resource_evidence import knowledge_catalog_admission
 from wqb.template_binding import IDENTIFIER, UNKNOWN_METADATA, TemplateBindingError, bind_template
 
 
@@ -69,14 +76,169 @@ COMPILED_INVARIANTS = {
 COMPILED_TRAIT_FACTS = {'nuisance_exposure': 'nuisance_exposure', 'grain': 'vector_grain'}
 
 
+def _catalog_admission(resources: dict) -> bool:
+    """Input: resource dict. Output: bool or ValueError; validate explicit admission and projection agreement."""
+    catalog = knowledge_catalog_admission(resources)
+    for key in ('evidence_pack', 'evidence_context'):
+        context = resources.get(key, {})
+        if (isinstance(context, dict)
+                and (key == 'evidence_pack' and key in resources or 'resource_admission_policy' in context)
+                and knowledge_catalog_admission(context) != catalog):
+            raise ValueError('Repair resource admission policy differs from ' + key)
+    if catalog and (type(resources.get('resource_contract_version')) is not int
+                    or resources['resource_contract_version'] != 2):
+        raise ValueError('catalog admission requires resource contract version 2')
+    return catalog
+
+
+def _repair_capture_date_supported(value: object, source_date: str, now: datetime) -> bool:
+    """Input: raw timestamp object/ledger date str/current aware datetime. Output: bool; no date inference or renewal."""
+    from wqb.knowledge_age_policy import KNOWLEDGE_MAX_AGE_DAYS
+    try:
+        captured_at = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return (captured_at.tzinfo is not None and captured_at.date().isoformat() == source_date
+            and timedelta(0) <= now - captured_at <= timedelta(days=KNOWLEDGE_MAX_AGE_DAYS))
+
+
+def _repair_capture_contexts(text: str) -> list[tuple[dict, tuple]]:
+    """Input: raw text str. Output: (object dict, ancestor dates tuple) list; retain branch-local capture dates."""
+    from wqb.knowledge_compile import _coverage_json_objects
+    objects = _coverage_json_objects(text)
+    children = set()
+    # The shared reader returns roots and flattened descendants; recover each tree once.
+    for item in objects:
+        pending = list(item.values())
+        while pending:
+            value = pending.pop()
+            if isinstance(value, dict):
+                children.add(id(value))
+            elif isinstance(value, list):
+                pending.extend(value)
+    pending = [(item, ()) for item in objects if id(item) not in children]
+    contexts = []
+    while pending:
+        value, dates = pending.pop()
+        if isinstance(value, dict):
+            if 'generated_at' in value:
+                dates = dates + (value['generated_at'],)
+            contexts.append((value, dates))
+            pending.extend((child, dates) for child in value.values() if isinstance(child, (dict, list)))
+        elif isinstance(value, list):
+            pending.extend((child, dates) for child in value if isinstance(child, (dict, list)))
+    return contexts
+
+
+def _field_source_paths(row: dict, index: dict, texts: dict, scope: dict, catalog: bool) -> list[str]:
+    """Input: canonical field/frozen sources/scope and mode. Output: evidence paths; keep legacy paths unchanged."""
+    if not catalog:
+        return row['source_paths']
+    from wqb.resource_evidence import catalog_field_source_paths
+    return catalog_field_source_paths(row, index, texts, scope)
+
+
+def _repair_field_supported(row: dict, texts: dict, index: dict, scope: dict, catalog: bool) -> bool:
+    """Input: field/raw/index/scope dicts and catalog bool. Output: bool; preserve technical and measured facts, not semantic proof."""
+    from wqb.knowledge_compile import _coverage_field_supported, _coverage_source_fields
+    from wqb.knowledge_age_policy import KNOWLEDGE_MAX_AGE_DAYS
+    from wqb.template_binding import _known, _scope_matches
+    from wqb.workflow_stage_adapters import (_row_has_measured_platform_coverage,
+        _row_has_positive_coverage, _row_has_source_date)
+    if not catalog:
+        return _coverage_field_supported(dict(row, semantic_tags=[]), texts, index, scope,
+                                         resource_contract_version=2)
+    if (not isinstance(row.get('field_id'), str) or not IDENTIFIER.fullmatch(row['field_id'])
+            or 'id' in row and row['id'] != row['field_id']
+            or not isinstance(row.get('dataset_id'), str) or not _known(row['dataset_id'])
+            or row.get('field_type') not in ('MATRIX', 'VECTOR', 'GROUP') or not _scope_matches(row, scope)
+            or not _row_has_measured_platform_coverage(row) or not _row_has_positive_coverage(row)
+            or not _row_has_source_date(row) or not _number(row.get('coverage'))):
+        return False
+    now = datetime.now(timezone.utc)
+    age = (now.date() - date.fromisoformat(row['source_updated_at'])).days
+    if not 0 <= age <= KNOWLEDGE_MAX_AGE_DAYS:
+        return False
+    try:
+        paths = _field_source_paths(row, index, texts, scope, catalog)
+    except (ValueError, KeyError, TypeError):
+        return False
+    if not isinstance(paths, list) or not paths or any(not isinstance(p, str) or p not in texts for p in paths):
+        return False
+    measured = []
+    for path in paths:
+        source = index.get(path, {})
+        if (source.get('source_type') != 'platform_data_field_capture'
+                or source.get('source_family') != 'raw/platform/data_fields'
+                or not path.startswith('raw/platform/data_fields/')):
+            return False
+        if not _repair_capture_date_supported(source.get('captured_at'), row['source_updated_at'], now):
+            return False
+        for capture, capture_dates in _repair_capture_contexts(texts[path]):
+            if not capture_dates:
+                continue
+            field = capture.get('field', capture)
+            if not isinstance(field, dict):
+                continue
+            dataset = capture.get('data_set', field.get('dataset', {}))
+            captured_scope = capture.get('scope', capture)
+            if (isinstance(dataset, dict) and isinstance(captured_scope, dict)
+                    and field.get('id') == row['field_id'] and dataset.get('id') == row['dataset_id']
+                    and _scope_matches(dict(captured_scope, dataset_id=dataset['id']), scope)
+                    and any(not _repair_capture_date_supported(stamp, row['source_updated_at'], now)
+                            for stamp in capture_dates)):
+                return False
+        for field, dataset, captured in _coverage_source_fields(texts[path]):
+            if (field.get('id') != row['field_id'] or dataset.get('id') != row['dataset_id']
+                    or not _scope_matches(dict(captured, dataset_id=dataset['id']), scope)):
+                continue
+            facts = dict(dataset_id=dataset['id'], field_type=field.get('type'),
+                         **{key: captured[key] for key in ('instrument_type', 'region', 'delay', 'universe')
+                            if key in captured})
+            if (field.get('type') != row['field_type'] or any(key in field and
+                    (type(field[key]) is not type(value) or field[key] != value) for key, value in facts.items())):
+                return False
+            value = field.get('coverage')
+            if _number(value) and value > 0:
+                measured.append(value)
+    return bool(measured) and row['coverage'] == max(measured)
+
+
+def _repair_operator_supported(row: dict, context: dict, catalog: bool) -> bool:
+    """Input: operator/source-context dicts and catalog bool. Output: bool; require explicit technical signature and provenance."""
+    from wqb.resource_evidence import catalog_operator_definition, resolve_operator_definition
+    if not catalog:
+        return resolve_operator_definition(row, context['source_index'], context['source_texts'],
+                                           resource_contract_version=2)['status'] == 'supported'
+    if not isinstance(row.get('operator'), str) or not IDENTIFIER.fullmatch(row['operator']):
+        return False
+    try:
+        catalog_operator_definition(row, context['source_index'], context['source_texts'])
+    except (ValueError, TypeError, KeyError):
+        return False
+    return True
+
+
+def _parent_resources(resources: dict, selected: list) -> dict:
+    """Input: frozen resource dict/selected field list. Output: compiler resource dict retaining explicit admission."""
+    catalog = _catalog_admission(resources)
+    result = dict(resource_contract_version=2, field_rows=selected, operator_rows=resources['operator_rows'],
+                  evidence_pack=dict(scope=resources['scope']), **resources['evidence_context'])
+    if catalog:
+        result['resource_admission_policy'] = resources['resource_admission_policy']
+        result['evidence_pack']['resource_admission_policy'] = resources['resource_admission_policy']
+    return result
+
+
 def compile_repair_search_policy(resources: dict, project_policy: dict) -> dict:
     """Input: frozen source resources/project finite policy dicts. Output: strict policy dict.
 
     Source facts authorize prerequisites, not platform parameter domains or
     measured improvements. Parent binding is deferred until Repair acceptance.
     """
-    from wqb.resource_evidence import _source, verify_premise, resolve_operator_definition
-    from wqb.knowledge_compile import _coverage_field_supported, _coverage_source_fields
+    from wqb.resource_evidence import _source, verify_premise
+    from wqb.knowledge_compile import _coverage_source_fields
+    catalog = _catalog_admission(resources)
     if (type(project_policy.get('compile_version')) is not int or project_policy['compile_version'] != 1
             or set(project_policy) - {'compile_version', 'rules', 'traits'}):
         raise ValueError('unsupported Repair compiler input')
@@ -88,20 +250,22 @@ def compile_repair_search_policy(resources: dict, project_policy: dict) -> dict:
     for path, source in index.items():
         ref = dict(source_path=path, sha256=source['content_hash'],
                    capture_date=source['captured_at'][:10], kind='documented', experiment_refs=[])
-        _source(ref, index, texts)
+        _source(ref, index, texts, _technical_catalog=catalog)
         refs[path] = ref
     fields = resources['field_rows']
-    # Repair consumes numeric/type/timing facts, not advisory semantic tags.
-    if not fields or any(not _coverage_field_supported(dict(row, semantic_tags=[]), texts, index, scope,
-            resource_contract_version=2) for row in fields):
+    if not fields or any(not _repair_field_supported(row, texts, index, scope, catalog) for row in fields):
+        if catalog:
+            raise ValueError('Repair field facts differ from sourced identity/scope/type/coverage/date')
         raise ValueError('Repair field facts differ from sourced scope/type/timing/grain')
     traits = {}
-    field_refs = [refs[p] for p in sorted({p for row in fields for p in row['source_paths']})]
+    field_refs = [refs[p] for p in sorted({p for row in fields
+        for p in _field_source_paths(row, index, texts, scope, catalog)})]
     if all(row['field_type'] == 'MATRIX' for row in fields):
         traits['matrix_observation'] = dict(basis='source', value=True, evidence_refs=field_refs)
     frequencies = []
     for row in fields:
-        values = [field.get('sampling_frequency_sessions') for path in row['source_paths']
+        values = [field.get('sampling_frequency_sessions')
+            for path in _field_source_paths(row, index, texts, scope, catalog)
             for field, dataset, captured in _coverage_source_fields(texts[path])
             if field.get('id') == row['field_id'] and dataset.get('id') == row['dataset_id']
             and all(type(captured.get(k)) is type(scope[k]) and captured.get(k) == scope[k]
@@ -148,10 +312,12 @@ def compile_repair_search_policy(resources: dict, project_policy: dict) -> dict:
             if len(rows) != 1:
                 raise ValueError('missing or ambiguous transform definition')
             row = rows[0]
-            receipt = resolve_operator_definition(row, index, texts, resource_contract_version=2)
+            supported = _repair_operator_supported(row, resources, catalog)
+            if catalog and not supported:
+                raise ValueError('Repair operator differs from captured technical signature')
             definition = row['definition']
             parameters = definition['parameters']
-            if (receipt['status'] != 'supported' or definition['description'] != meaning
+            if (not supported or not catalog and definition['description'] != meaning
                     or definition['input_types'] != ['MATRIX'] or definition['output_type'] != 'MATRIX'
                     or len(parameters) != 2 or [p['type'] for p in parameters] != ['MATRIX', scalar]
                     or any(not p['required'] or 'default' in p for p in parameters)
@@ -172,6 +338,9 @@ def compile_repair_search_policy(resources: dict, project_policy: dict) -> dict:
         operator_rows=copy.deepcopy(resources['operator_rows']), scope=copy.deepcopy(scope),
         evidence_context=dict(source_index=copy.deepcopy(index), source_texts=copy.deepcopy(texts)),
         producer=dict(compile_version=1, project_policy=copy.deepcopy(project_policy)))
+    if catalog:
+        policy['resources']['resource_admission_policy'] = resources['resource_admission_policy']
+        policy['resources']['evidence_context']['resource_admission_policy'] = resources['resource_admission_policy']
     return policy
 
 
@@ -186,6 +355,9 @@ def _materialize_parent(policy: dict, parent: dict) -> dict:
         return policy
     result = copy.deepcopy(policy)
     resources = result['resources']
+    catalog = _catalog_admission(resources)
+    if catalog:
+        resources['evidence_context']['resource_admission_policy'] = resources['resource_admission_policy']
     tree = ast.parse(parent['expression'], mode='eval')
     functions = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
     parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
@@ -210,7 +382,9 @@ def _materialize_parent(policy: dict, parent: dict) -> dict:
                         or len(call.args) != 1 or call.args[0] is not leaf or call.keywords):
                     raise ValueError('VECTOR parent needs explicit unary sourced reducer')
                 reducers.add(call.func.id)
-            if len(reducers) != 1 or not row.get('vector_grain'):
+            if len(reducers) != 1 or not catalog and not row.get('vector_grain'):
+                if catalog:
+                    raise ValueError('VECTOR reducer missing or ambiguous')
                 raise ValueError('VECTOR grain/reducer missing or ambiguous')
             reducer = next(iter(reducers))
             definitions = [r['definition'] for r in resources['operator_rows'] if r.get('operator') == reducer]
@@ -224,7 +398,8 @@ def _materialize_parent(policy: dict, parent: dict) -> dict:
             raise ValueError('parent placeholder collision')
         tokens[name] = token
         selected.append(row)
-        slots.append(dict(name=slot, role='signal', required_semantics=[row['field_description']],
+        semantics = ['field:' + row['dataset_id'] + '/' + row['field_id']] if catalog else [row['field_description']]
+        slots.append(dict(name=slot, role='signal', required_semantics=semantics,
                           field_type=row['field_type'], required_metadata=[], reduction=reduction))
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and id(node) not in functions:
@@ -235,19 +410,18 @@ def _materialize_parent(policy: dict, parent: dict) -> dict:
     # A resource-pack fact cannot authorize unrelated fields in the accepted parent.
     if metric_directed:
         _validate_v2_sources(resources)
-        from wqb.resource_evidence import _source, resolve_operator_definition
+        from wqb.resource_evidence import _source
         context = resources['evidence_context']
         refs = [ref for rule in result['rules'] for ref in rule['evidence_refs']]
         refs.extend(ref for fact in result['traits'].values()
                     if isinstance(fact, dict) for ref in fact.get('evidence_refs', []))
         for ref in refs:
-            _source(ref, context['source_index'], context['source_texts'])
+            _source(ref, context['source_index'], context['source_texts'], _technical_catalog=catalog)
         calls = {node.func.id for node in ast.walk(tree)
                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
         for name in calls:
             rows = [row for row in resources['operator_rows'] if row.get('operator') == name]
-            if len(rows) != 1 or resolve_operator_definition(rows[0], context['source_index'],
-                    context['source_texts'], resource_contract_version=2)['status'] != 'supported':
+            if len(rows) != 1 or not _repair_operator_supported(rows[0], context, catalog):
                 raise ValueError('accepted parent operator differs from frozen source definition')
         scope = resources['scope']
         if (any(type(scope.get(key)) is not type(parent['settings'].get(key))
@@ -270,9 +444,7 @@ def _materialize_parent(policy: dict, parent: dict) -> dict:
         removed = set(project.get('traits', {})) - set(applicable)
         project['traits'] = applicable
         project['rules'] = [rule for rule in project['rules'] if not removed.intersection(rule['requires'])]
-        result = compile_repair_search_policy(dict(resource_contract_version=2, field_rows=selected,
-            operator_rows=resources['operator_rows'], evidence_pack=dict(scope=resources['scope']),
-            **resources['evidence_context']), project)
+        result = compile_repair_search_policy(_parent_resources(resources, selected), project)
     if 'stop' in policy:
         result['stop'] = policy['stop']
     resources = result['resources']
@@ -288,19 +460,22 @@ def _materialize_parent(policy: dict, parent: dict) -> dict:
 
 def _validate_v2_sources(resources: dict) -> None:
     """Input: v2 frozen resources dict. Output: None or ValueError; verify exact source bytes/fields."""
-    from wqb.knowledge_compile import _coverage_field_supported
     from wqb.resource_evidence import _source
+    catalog = _catalog_admission(resources)
     if resources.get('resource_contract_version') != 2:
         raise ValueError('metric-directed Repair requires v2 field sources')
     context, scope = resources['evidence_context'], resources['scope']
     fields = resources['field_rows']
-    for path in sorted({path for row in fields for path in row['source_paths']}):
+    for path in sorted({path for row in fields for path in _field_source_paths(row,
+            context['source_index'], context['source_texts'], scope, catalog)}):
         source = context['source_index'][path]
         _source(dict(source_path=path, sha256=source['content_hash'], kind='documented',
                      capture_date=source['captured_at'][:10], experiment_refs=[]),
-                context['source_index'], context['source_texts'])
-    if not fields or any(not _coverage_field_supported(dict(row, semantic_tags=[]), context['source_texts'], context['source_index'],
-            scope, resource_contract_version=2) for row in fields):
+                context['source_index'], context['source_texts'], _technical_catalog=catalog)
+    if not fields or any(not _repair_field_supported(row, context['source_texts'], context['source_index'],
+            scope, catalog) for row in fields):
+        if catalog:
+            raise ValueError('Repair fields differ from frozen source identity/scope/type/coverage/date')
         raise ValueError('Repair fields differ from frozen source scope/type/timing/grain')
 
 
@@ -308,8 +483,7 @@ def _parent_traits(traits: dict, selected: list, resources: dict) -> dict:
     """Input: declared traits/actual parent rows/resources. Output: only source-proven parent-local traits."""
     from wqb.knowledge_compile import _coverage_source_fields
     context, scope = resources['evidence_context'], resources['scope']
-    compiled = compile_repair_search_policy(dict(resource_contract_version=2, field_rows=selected,
-        operator_rows=resources['operator_rows'], evidence_pack=dict(scope=scope), **context),
+    compiled = compile_repair_search_policy(_parent_resources(resources, selected),
         dict(compile_version=1, rules=[], traits={}))
     established = compiled['traits']
     if all(row['field_type'] in ('MATRIX', 'VECTOR') for row in selected):
@@ -317,7 +491,8 @@ def _parent_traits(traits: dict, selected: list, resources: dict) -> dict:
     for name, field_fact in COMPILED_TRAIT_FACTS.items():
         values = []
         for row in selected:
-            facts = [field.get(field_fact) for path in row['source_paths']
+            facts = [field.get(field_fact) for path in _field_source_paths(row,
+                context['source_index'], context['source_texts'], scope, _catalog_admission(resources))
                 for field, dataset, captured in _coverage_source_fields(context['source_texts'][path])
                 if field.get('id') == row['field_id'] and dataset.get('id') == row['dataset_id']
                 and all(type(captured.get(k)) is type(scope[k]) and captured.get(k) == scope[k]
@@ -336,7 +511,8 @@ def _parent_traits(traits: dict, selected: list, resources: dict) -> dict:
                 or _trait_reason(traits, name, fact['value'])):
             continue
         paths = {ref['source_path'] for ref in fact['evidence_refs']}
-        if all(paths.intersection(row['source_paths']) for row in selected):
+        if all(paths.intersection(_field_source_paths(row, context['source_index'],
+                context['source_texts'], scope, _catalog_admission(resources))) for row in selected):
             result[name] = copy.deepcopy(fact)
     # Parent-local frequency is mandatory even when a heterogeneous batch omitted it.
     if 'sampling_frequency_sessions' in established:
@@ -377,6 +553,8 @@ def _policy(policy: dict) -> dict:
             or not isinstance(policy.get('traits'), dict)):
         raise ValueError('Unsupported policy shape/version')
     metric_directed = policy['schema_version'] == 2
+    if isinstance(policy.get('resources'), dict):
+        _catalog_admission(policy['resources'])
     if metric_directed and 'rulebook_id' in policy and not _bounded_text(policy['rulebook_id']):
         raise ValueError('Expected bounded nonempty rulebook_id')
     rules = policy.get('rules')
@@ -482,7 +660,6 @@ def _failure_evidence(parent: dict) -> set:
 
 def _transform_source_reason(rule: dict, resources: dict) -> str:
     """Input: v2 rule/resources dicts. Output: reason str; retain only the existing sourced invariants."""
-    from wqb.resource_evidence import resolve_operator_definition
     transform = rule['transform']
     rows = [row for row in resources['operator_rows'] if row.get('operator') == transform['operator']]
     if len(rows) != 1:
@@ -490,19 +667,19 @@ def _transform_source_reason(rule: dict, resources: dict) -> str:
     row = rows[0]
     context = resources['evidence_context']
     try:
-        receipt = resolve_operator_definition(row, context['source_index'], context['source_texts'],
-                                             resource_contract_version=2)
+        catalog = _catalog_admission(resources)
+        verified = _repair_operator_supported(row, context, catalog)
         definition = row['definition']
         parameters = definition['parameters']
         supported = any(transform['operator'] == name and rule['effect'] == effect
-            and transform['parameter_kind'] == kind and definition['description'] == meaning
+            and transform['parameter_kind'] == kind and (catalog or definition['description'] == meaning)
             and definition['input_types'] == ['MATRIX'] and definition['output_type'] == 'MATRIX'
             and len(parameters) == 2 and [p['type'] for p in parameters] == ['MATRIX', scalar]
             and all(p['required'] and 'default' not in p for p in parameters)
             and transform['parameter'] == parameters[1]['name']
             and (kind != 'window' or transform['frequency_trait'] == 'sampling_frequency_sessions')
             for name, effect, kind, scalar, meaning in COMPILED_INVARIANTS.values())
-        return '' if supported and receipt['status'] == 'supported' else 'unsupported_transform'
+        return '' if supported and verified else 'unsupported_transform'
     except (ValueError, TypeError, KeyError):
         return 'unsupported_transform'
 
@@ -580,8 +757,11 @@ def _typed_transform(parent: dict, rule: dict, value: object, resources: dict) -
     if 'instrument_type' in scope and scope['instrument_type'] != parent['settings'].get('instrumentType'):
         raise TemplateBindingError('Binding instrument type differs from parent settings')
     args = (resources.get('field_rows', []), resources.get('operator_rows', []), resources.get('scope', {}))
+    context = resources.get('evidence_context')
+    if _catalog_admission(resources):
+        context = dict(context or {}, resource_admission_policy=resources['resource_admission_policy'])
     kwargs = dict(resource_contract_version=resources.get('resource_contract_version', 1),
-                  evidence_context=resources.get('evidence_context'))
+                  evidence_context=context)
     baseline = bind_template(template, *args, **kwargs)
     parent_ast = ast.dump(ast.parse(parent['expression'], mode='eval').body)
     if ast.dump(ast.parse(baseline['bound_expression'], mode='eval').body) != parent_ast:
@@ -844,6 +1024,9 @@ def _frozen_policy(run: Path) -> tuple[dict, str]:
     if not context:
         raise ValueError('deterministic Repair requires verified operational resources')
     policy = _policy(snapshot['repair_search_policy'])
+    resources = policy.get('resources', {})
+    if _catalog_admission(resources) and not knowledge_catalog_admission(context):
+        raise ValueError('Repair resource admission differs from owning frozen context')
     if policy['schema_version'] == 2:
         resources = policy.get('resources', {})
         _validate_v2_sources(resources)
@@ -858,9 +1041,8 @@ def _frozen_policy(run: Path) -> tuple[dict, str]:
         for key in ('source_index', 'source_texts'):
             if any(context[key].get(path) != value for path, value in frozen_context[key].items()):
                 raise ValueError('compiled Repair sources differ from frozen context')
-        rebuilt = compile_repair_search_policy(dict(resource_contract_version=2,
-            field_rows=resources['field_rows'], operator_rows=resources['operator_rows'],
-            evidence_pack=dict(scope=resources['scope']), **frozen_context), producer['project_policy'])
+        rebuilt = compile_repair_search_policy(_parent_resources(resources, resources['field_rows']),
+                                               producer['project_policy'])
         if rebuilt != policy:
             raise ValueError('compiled Repair producer policy changed')
     if policy.get('resources'):
@@ -870,7 +1052,7 @@ def _frozen_policy(run: Path) -> tuple[dict, str]:
                 raise ValueError('Repair transform resources differ from owning frozen snapshot')
         from wqb.hypothesis_template_compiler import _operator
         for rule in policy['rules']:
-            if rule['edit'] == 'transform' and not producer:
+            if rule['edit'] == 'transform' and not producer and not _catalog_admission(resources):
                 _operator(rule['transform']['operator'], resources['operator_rows'], context)
     refs = [ref for rule in policy['rules'] for ref in rule['evidence_refs']]
     refs.extend(ref for trait in policy['traits'].values() for ref in trait.get('evidence_refs', []))

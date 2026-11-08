@@ -653,19 +653,21 @@ def _measurement_matches(row: dict, payload: dict) -> bool:
         return False
 
 
-def _markdown_definitions(text: str) -> dict:
+def _markdown_definitions(text: str, *, require_description: bool = True) -> dict:
     """Input: Markdown str. Output: operator->definition dict. Parse only complete source-labelled typed facts."""
     definitions = {}
     headings = list(re.finditer(r'^###\s+`?([A-Za-z_][A-Za-z0-9_.-]*)`?\s*$', text, re.MULTILINE))
     for number, heading in enumerate(headings):
         if sum(item[1] == heading[1] for item in headings) != 1:
+            if not require_description:
+                raise ValueError('ambiguous catalog technical heading: ' + heading[1])
             continue
         section = text[heading.end():headings[number + 1].start() if number + 1 < len(headings) else len(text)]
         def label(name: str) -> str:
             """Input: exact label str. Output: str. Require one unambiguous labelled Markdown line."""
             values = re.findall(r'^- ' + re.escape(name) + r':\s*(.+)$', section, re.MULTILINE)
             return values[0].strip() if len(values) == 1 else ''
-        if label('Source id') != '`' + heading[1] + '`' or not label('Description'):
+        if label('Source id') != '`' + heading[1] + '`' or (require_description and not label('Description')):
             continue
         inputs = label('Input types')
         output = label('Output type')
@@ -688,7 +690,7 @@ def _markdown_definitions(text: str) -> dict:
             parameters.append(parameter)
         else:
             if parameters and len({p['name'] for p in parameters}) == len(parameters) and heading[1] not in definitions:
-                definitions[heading[1]] = dict(description=label('Description'), input_types=re.findall(r'`([A-Z]+)`', inputs),
+                definitions[heading[1]] = dict(description=label('Description') or 'Economic description unavailable; technical declaration only.', input_types=re.findall(r'`([A-Z]+)`', inputs),
                     output_type=output.strip('`'), parameters=parameters)
     return definitions
 

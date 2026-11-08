@@ -51,6 +51,9 @@ def load_start_config(paths) -> dict:
     if type(version) is not int or version not in (0, 1):
         raise ValueError('preplanned_tree_version must be integer 0 or 1')
     clean['research_policy'] = {key: policy[key] for key in START_POLICY_FIELDS if key in policy}
+    if version == 1:
+        from wqb.resource_evidence import KNOWLEDGE_CATALOG_POLICY
+        clean['resource_admission_policy'] = KNOWLEDGE_CATALOG_POLICY
     if any(type(value) not in (bool, int) for value in clean['research_policy'].values()):
         raise ValueError('Console Start policy settings must be boolean or integer values')
     if 'repair_search_policy' in config:
@@ -157,7 +160,7 @@ def _require_retired_intent(runs_root: Path, intent: dict) -> None:
 def register_start(paths, form: dict, job_id: str) -> dict:
     """Input: ConsolePaths, form dict, job ID str. Output: request dict. Reserve local prep without mission creation."""
     selection = _selection(form)
-    from wqb.config import read_research_policy
+    from wqb.config import DEFAULT_CONFIG, read_research_policy
     policy = read_research_policy(paths.configuration_root / 'configs/workflow_defaults.example.json',
                                   paths.configuration_root / 'configs/workflow_local.json')
     config = load_start_config(paths)
@@ -180,6 +183,9 @@ def register_start(paths, form: dict, job_id: str) -> dict:
             if _source_intent(paths.runs_root)['run_dir'] or (paths.runs_root / 'active_research_group.json').exists():
                 raise ValueError('preplanned Start cannot adopt or replace an active mission')
             config['selected_scope'] = {**config.get('selected_scope', {}), **selection['scope']}
+            config['selected_scope'].setdefault('instrument_type',
+                config.get('instrument_type', DEFAULT_CONFIG['instrument_type']))
+            config['selected_scope'].setdefault('as_of', datetime.now(timezone.utc).isoformat())
             config.update(selection['scope'])
             extra = dict(preplanned_config=config, preplanned_option=_selected_option(paths, selection['selected_option_id']))
         return _write_request(paths.runs_root, {

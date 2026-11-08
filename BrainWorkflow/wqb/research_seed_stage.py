@@ -7,6 +7,7 @@ from pathlib import Path
 
 from wqb.benchmark_rules import load_run_benchmark_rules
 from wqb.cli import simulation_identity_hash
+from wqb.measurement_window import EVIDENCE_KEY, verified_window_period
 from wqb.runtime_control import _write
 from wqb.seed_policy import select_seeds
 
@@ -24,8 +25,8 @@ def preplanned_research_enabled(run: Path) -> bool:
 def normalize_measured_row(row: dict, lane_id: str) -> dict:
     """Input: checked row dict and lane ID str. Output: copied row with only derivable measurement metadata.
 
-    Scope derives from exact submitted settings; missing dates stay missing. Do
-    not invent the measurement period from requested plan dates or fill metrics.
+    Scope derives from exact submitted settings; dates need reported metrics or
+    verified actual window evidence, never requested plan dates or filled metrics.
     """
     result = deepcopy(row)
     settings, metrics = result.get('settings'), result.get('metrics')
@@ -39,6 +40,11 @@ def normalize_measured_row(row: dict, lane_id: str) -> dict:
     scope_keys = ('region', 'delay', 'universe')
     if all(key in settings for key in scope_keys):
         result.setdefault('measurement_scope', {key: settings[key] for key in scope_keys})
+    if EVIDENCE_KEY in metrics:
+        period = verified_window_period(result)
+        if period is not None:
+            result.setdefault('test_period', period)
+        return result
     if 'test_period' not in result and all(isinstance(metrics.get(key), str) for key in ('startDate', 'endDate')):
         try:
             start, end = [date.fromisoformat(metrics[key]) for key in ('startDate', 'endDate')]
