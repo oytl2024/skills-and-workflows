@@ -86,3 +86,26 @@ or inventory deletion occurred. The 1.15 GB run-local recovery copies and browse
 profiles remain outside this batch. Future self-contained tree-package retirement
 and automatically triggered artifact retention require separate implementation;
 this one-time collection does not claim those mechanisms are already deployed.
+
+## Batch B: Named Old Profile Removal
+
+User explicitly approved permanent deletion of these two potentially sensitive
+dedicated profiles on Nov9, after no-process/path checks:
+
+- `brain/runs/desktop/browser`: 1,304 files, 524,510,272 logical bytes.
+- `brain/skills-and-workflows/BrainWorkflow/.desktop-launch-smoke-20260923`:
+  470 files, 70,623,751 logical bytes.
+
+Both resolved literal directories are inside the workspace; no root/descendant
+reparse points were found. Source/config/script/launcher exact-name searches found
+no current dependency. A process-only SystemRoot/windir correction made the CIM
+command-line inspection work; no non-shell process referenced either target.
+Repeat these checks immediately before removal and refuse unexpected changes.
+
+These private profiles are not Git-backed and will not be uploaded or archived.
+The named approval accepts permanent loss of their old sessions. This batch does
+not include current `runs/desktop/webview2`, general Chrome/Edge profiles,
+credentials elsewhere, research evidence, inventory or application binaries.
+Commit/push this audit and verify branch equality before literal-path deletion;
+run affected desktop/entry regressions and sync the resulting receipt afterward.
+Lifecycle implementation remains an independent uncommitted maintenance change.
