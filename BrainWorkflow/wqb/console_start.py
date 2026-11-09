@@ -27,7 +27,8 @@ START_CONFIG_FIELDS = (
     'max_recoveries', 'live_api_enabled', 'parallel_workflows', 'plan_depth', 'initial_hypotheses',
 )
 START_POLICY_FIELDS = ('preplanned_tree_version', 'paired_scout', 'exploration_scout',
-    'exploration_policy_version', 'parallel_workflows', 'plan_depth', 'initial_hypotheses')
+    'exploration_policy_version', 'parallel_workflows', 'plan_depth', 'initial_hypotheses',
+    'execution_package_version')
 
 
 def load_start_config(paths) -> dict:
@@ -56,6 +57,8 @@ def load_start_config(paths) -> dict:
         clean['resource_admission_policy'] = KNOWLEDGE_CATALOG_POLICY
     if any(type(value) not in (bool, int) for value in clean['research_policy'].values()):
         raise ValueError('Console Start policy settings must be boolean or integer values')
+    from wqb.execution_package import package_enabled
+    package_enabled(clean)
     if 'repair_search_policy' in config:
         from wqb.repair_search import _policy
         clean['repair_search_policy'] = _policy(config['repair_search_policy'])

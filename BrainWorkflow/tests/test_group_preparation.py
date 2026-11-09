@@ -5,6 +5,7 @@ import unittest
 
 from wqb.benchmark_rules import benchmark_rules_path_for_knowledge, default_benchmark_rules, write_benchmark_rules_jsonl
 from wqb.group_preparation import prepare_group_lanes
+import json
 
 
 class GroupPreparationTests(unittest.TestCase):
@@ -33,6 +34,18 @@ class GroupPreparationTests(unittest.TestCase):
                 dict(option_id='offline-option'),
                 dict(enable_live_api=False, max_runtime_seconds=3600, max_recoveries=3))
         self.assertFalse((self.paths.run_root / 'research_groups').exists())
+
+    def test_package_version_is_frozen_before_any_model_or_worker(self):
+        result = prepare_group_lanes(self.paths, [self.fixture.resources], self.fixture.scope,
+            dict(option_id='offline-option'),
+            dict(enable_live_api=False, max_runtime_seconds=3600, max_recoveries=3),
+            execution_package_version=1)
+        lane = result['group']['lanes'][0]
+        manifest = json.loads((self.paths.run_root / lane['run_id'] / 'run_manifest.json').read_text())
+        self.assertEqual(manifest['start_snapshot']['research_policy']['execution_package_version'], 1)
+        self.assertEqual(result['certificates'][0]['policy'], manifest['start_snapshot']['research_policy'])
+        self.assertFalse((self.paths.run_root / lane['run_id'] / 'runtime/experiment_tree.json').exists())
+        self.assertEqual(result['group']['desired_state'], 'paused')
 
 
 if __name__ == '__main__':

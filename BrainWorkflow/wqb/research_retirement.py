@@ -88,6 +88,14 @@ def retirement_boundary(run: Path) -> dict | None:
             raise ValueError('deterministic_repair must be boolean')
     except (OSError, ValueError, UnicodeError) as error:
         return _boundary(run, 'damaged', f'invalid frozen manifest: {error}', ['run_manifest.json'])
+    from wqb.execution_package_lifecycle import RETIRED_RECEIPT, load_retired_summary
+    try:
+        if _local_path(run, RETIRED_RECEIPT).exists():
+            load_retired_summary(run)
+            return _boundary(run, 'retired', 'completed execution package is retired; history is read-only',
+                             ['run_manifest.json', RETIRED_RECEIPT])
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        return _boundary(run, 'damaged', 'invalid execution retirement evidence: ' + str(error), [RETIRED_RECEIPT])
     if deterministic:
         return None
     evidence = ['run_manifest.json#start_snapshot.research_policy.deterministic_repair=false'] if 'deterministic_repair' in policy else []

@@ -63,6 +63,26 @@ def _guard_dispatch(group):
     return json_lock_transition_guard(group / 'worker_dispatch', LOCK_SECONDS, LOCK_SLEEP, 'group launch busy')
 
 
+def _validate_prepared_resource_context(run: Path, knowledge: Path, snapshot: dict, state) -> None:
+    """Input: member owner/vault Paths, frozen snapshot and state object/dict. Output: None; retired members are history, not active resource authority."""
+    boundary = retirement_boundary(run)
+    if boundary is None:
+        validate_operational_exploration(run, knowledge, snapshot)
+        return
+    from wqb.execution_package import package_enabled, _digest as package_digest
+    from wqb.execution_package_lifecycle import load_retired_summary
+    if boundary.get('status') != 'retired' or not package_enabled(snapshot):
+        raise ValueError('group member retirement evidence is damaged or unsupported')
+    summary = load_retired_summary(run)
+    status = state.get('status') if isinstance(state, dict) else state.status
+    stage = state.get('current_stage') if isinstance(state, dict) else state.current_stage
+    if (status != 'completed' or stage != 'complete'
+            or summary['authority']['snapshot_sha256'] != package_digest(snapshot)):
+        raise ValueError('retired group member differs from frozen completed owner')
+    from wqb.exploration_eligibility import validate_exploration_snapshot
+    validate_exploration_snapshot(snapshot)
+
+
 def _prepared(paths, group: Path) -> tuple[dict, list]:
     """Input: paths/group Path. Output: verified group and lane tuples; no runtime writes."""
     root = _safe(paths.run_root)
@@ -84,7 +104,7 @@ def _prepared(paths, group: Path) -> tuple[dict, list]:
         if manifest.get('run_id') != run.name or _safe(manifest['knowledge_root']) != _safe(paths.knowledge_root):
             raise ValueError('prepared lane manifest identity mismatch')
         snapshot = manifest.get('start_snapshot')
-        validate_operational_exploration(run, paths.knowledge_root, snapshot)
+        _validate_prepared_resource_context(run, paths.knowledge_root, snapshot, discovery.state)
         from wqb.workflow_stage_adapters import _snapshot_schedule_inputs
         _snapshot_schedule_inputs(snapshot, manifest['selected_option_id'], manifest['selected_scope'])
         receipts = snapshot['exploration_context']['receipts']

@@ -456,6 +456,8 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
     """
     result = dict(status='blocked', reason='', missing_facts=[], warnings=[], prepared_lanes=0)
     try:
+        from wqb.execution_package import package_enabled, PACKAGE_VERSION
+        use_package = package_enabled(config)
         scope, period, policy = _parameters(config)
         result['requested_lanes'] = policy['parallel_workflows']
         if type(selected_option) is not dict or not selected_option.get('option_id'):
@@ -479,6 +481,8 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
                         repair_search_policy=supplied_repair)
         if knowledge_catalog_admission(config):
             identity['resource_admission_policy'] = KNOWLEDGE_CATALOG_POLICY
+        if use_package:
+            identity['execution_package_version'] = PACKAGE_VERSION
         if default_rulebook is not None:
             identity['repair_rulebook'] = deepcopy(default_rulebook)
         directory = _safe(runs, 'start_preflight/preplanned/' + _digest(identity))
@@ -497,7 +501,8 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
                     raise ValueError('no source-backed exact-scope lane resources; local maintenance required')
                 repair_policies = [_repair_policy(resource, supplied_repair, rulebook=default_rulebook) for resource in resources]
                 prepared = prepare_group_lanes(paths, resources, scope, selected_option, authority,
-                    plan_depth=policy['plan_depth'], initial_hypotheses=policy['initial_hypotheses'])
+                    plan_depth=policy['plan_depth'], initial_hypotheses=policy['initial_hypotheses'],
+                    **({'execution_package_version': PACKAGE_VERSION} if use_package else {}))
                 group = prepared['group']
                 state = dict(identity=identity, resources=resources, receipts=receipts,
                     diagnostics=diagnostics, group_dir=group['group_dir'], request_revision=group['request_revision'],

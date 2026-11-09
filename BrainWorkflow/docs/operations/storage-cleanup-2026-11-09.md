@@ -121,3 +121,56 @@ private audited script: `remove-named-profiles-20261109.ps1` beside it. Neither 
 uploaded with session contents. Do not rerun the one-shot deletion script.
 Combined Batch A+B net reclamation is **1,728,088,035 bytes** (~1.73 GB decimal).
 Old inventories and run-local knowledge recovery copies are still protected.
+
+## Batch C: Recovery Copy Scope (Pending Verification)
+
+User named approval on Nov9 permits removal after verified lossless local archival
+of precisely these two expanded copies, including their contained `.obsidian`:
+
+- `brain/runs/20260812T032626000000-b45f98a6/runtime/knowledge_recovery/6889bb348d51206eb531/knowledge`
+- `brain/runs/20260812T032626000000-b45f98a6/runtime/knowledge_recovery/8cddada2cc65ce241582/knowledge`
+
+Do not upload private archives. Preserve current `brain/knowledge/.obsidian`,
+original recovery receipts, `sources/`, research/POST/check identities and all
+accounting. Approval does not bypass owner/reference closure, archive integrity,
+no-writer checks, regression acceptance or pre-deletion Git equality. This section
+records authorization only: no Batch C archival or collection has occurred yet.
+
+Inventory closure diagnostic: the bounded cold scan finally reached an old
+recovery-copy `raw/maintenance/delivery_gates/2026-08-02.json` whose documentary
+`evidence_path` names the original vault root. It returned protected after806.859s,
+636,616,801 bytes/1,654 owners, not a timeout. This is not proof that a live run uses
+the Oct30 inventories. Verify/archive the closed copied histories before repeating
+inventory closure; do not exempt arbitrary ancestor paths or discard that report.
+Private receipt: `output/desktop-validation/archive-closure-cached-20261109.json`.
+
+Batch C pre-collection evidence: both exact copies passed the complete owner scan
+and original 29/29 identity closure, each with184 files (574,345,325 and574,344,053
+bytes). A routing root is not a scientific input: verified exited Console jobs,
+cancelled Start CAS owner identities and the authenticated shared budget-store
+root are projected only in the temporary reference view. Explicit input paths,
+unknown active records and all original file hashes remain protected. The full
+diagnostic traversed2,755 owners; it is not deletion authorization by itself.
+Private receipt: `recovery-copies-budget-owner-audit-20261109.json` in desktop-validation.
+Necessary archives remain local. Current vault configuration, research receipts,
+raw checks and accounting are excluded from deletion. Final source verification,
+Git equality and literal-path collection still precede any removal.
+
+Both local archives are now prepared and round-trip verified: 11,913,917 and
+11,913,360 compressed bytes respectively, preserving184 original files each.
+Private preparation receipt: `prepared-recovery-history-20261109.json`.
+Native literal-path preflight validates each remaining member hash and rejects
+unexpected files, links or named live consumers. This is preparation only; the
+expanded directories remain until the final collection outcome is recorded.
+
+## Batch D: Superseded Nov9 Build Payloads
+
+After the compatible release passes full verification and Git sync, collect only
+`work/` and the literal `dist space 中文/` under these uninstalled build IDs:
+`20261109-145647-9895` and `20261109-214018-8504`. Their staged source, manifests,
+logs, smoke receipts and build metadata remain. Neither is a current release or
+verified rollback: both predate the final legacy-brief compatibility correction.
+Keep installed payload, final compatible build `20261109-220044-3881`, and both
+previous protected Nov8/Nov6 releases. No profile, configuration or research path
+is included. Native collection must bind exact file hashes and reject links,
+live owners or source/target drift; outcome is recorded separately.

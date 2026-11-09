@@ -435,6 +435,7 @@ def require_readiness_gate(
     universe: str | None = None,
     delay: int | None = None,
     start_snapshot: dict | None = None,
+    execution_run_dir: str | Path | None = None,
 ) -> None:
     """Input: readiness inputs and output dir. Output: none. Raise with report paths when execution is blocked."""
     report = evaluate_run_readiness(
@@ -447,6 +448,7 @@ def require_readiness_gate(
         universe=universe,
         delay=delay,
         **({'start_snapshot': start_snapshot} if start_snapshot is not None else {}),
+        **({'execution_run_dir': execution_run_dir} if execution_run_dir is not None else {}),
     )
     json_path, markdown_path = write_readiness_reports(Path(output_dir), report)
     if report.blocked:
@@ -483,6 +485,9 @@ def _live_gate_kwargs(config: dict[str, Any], run_dir: Path) -> dict[str, Any]:
             if any(manifest['selected_scope'][key] != scope[key] for key in scope):
                 raise ValueError('source readiness manifest scope mismatch')
             result['start_snapshot'] = snapshot
+            from wqb.execution_package import package_enabled
+            if package_enabled(snapshot):
+                result['execution_run_dir'] = active
         except (OSError, ValueError, KeyError, TypeError) as error:
             raise ResearchPlanningBlocked('invalid source readiness context: ' + str(error)) from error
     return result

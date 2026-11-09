@@ -40,6 +40,10 @@ def _authenticated_task(run: Path) -> dict:
         resources['resource_contract_version'] = version
     if 'resource_admission_policy' in resources['evidence_pack']:
         resources['resource_admission_policy'] = resources['evidence_pack']['resource_admission_policy']
+    if planning._annotation_mode(manifest):
+        resources['settings'] = deepcopy(brief['annotation_context']['compilation_settings'])
+        if _digest(resources) != certificate['resources_sha256']:
+            raise ValueError('annotation compilation resources changed')
     current = _resource_certificate(run, Path(manifest['knowledge_root']), resources, manifest['selected_scope'])
     for key in ('owning_run', 'policy', 'scope', 'sources', 'source_index_sha256'):
         if current[key] != certificate[key]:
@@ -72,6 +76,8 @@ def initial_model_projection(run: Path) -> dict:
     for key in ('source_texts', 'sources', 'data_traits', 'operator_rows', 'evidence_pack',
                 'compatible_template_receipts', 'composition_contract', 'output_schema'):
         references[key] = '/brief/' + key
+    if planning._annotation_mode(task['manifest']):
+        references['annotation_context'] = '/brief/annotation_context'
     references['source_texts'] = {name: '/brief/source_texts/' + name.replace('~', '~0').replace('/', '~1')
                                 for name in brief['source_texts']}
     projection = dict(task=dict(path=planning.TASK_PATH, sha256=hashlib.sha256(path.read_bytes()).hexdigest()),
@@ -135,8 +141,23 @@ def create_initial_model_runner(run: Path, config: dict):
         if result['status'] != 'completed':
             raise RuntimeError('initial model checkpoint ' + result['status'] + ': ' + str(result.get('error', '')))
         _authenticated_task(run)
-        answer = {key: deepcopy(result[key]) for key in ('summary', 'designs', 'tree')}
+        keys = ('summary', 'designs', 'tree')
+        if planning._annotation_mode(task['manifest']):
+            keys += ('data_characteristics',)
+        answer = {key: deepcopy(result[key]) for key in keys}
         _check_schema(task['brief']['output_schema'], answer)
+        if planning._annotation_mode(task['manifest']):
+            context = task['brief']
+            resources = dict(source_index=context['sources'], source_texts=context['source_texts'],
+                field_rows=context['data_traits'], operator_rows=context['operator_rows'],
+                evidence_pack=context['evidence_pack'],
+                settings=context['annotation_context']['compilation_settings'])
+            version = resources['evidence_pack'].get('resource_contract_version', 1)
+            if version != 1:
+                resources['resource_contract_version'] = version
+            if 'resource_admission_policy' in resources['evidence_pack']:
+                resources['resource_admission_policy'] = resources['evidence_pack']['resource_admission_policy']
+            planning._compiled_graph(answer, resources, context['scope'], context)
         return answer
 
     return runner

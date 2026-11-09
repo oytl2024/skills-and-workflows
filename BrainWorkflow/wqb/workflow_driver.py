@@ -24,6 +24,51 @@ WAIT_SLICE_SECONDS = 1.0
 DAILY_RECONCILE_SECONDS = 60.0
 
 
+def _package_cleanup_paused(run: Path) -> bool:
+    """Input: owner Path. Output: bool; respect durable lane/group Stop without treating it as a code defect."""
+    if read_runtime_control(run).get('desired_state') == 'paused':
+        return True
+    from wqb.research_group import group_for_run
+    group = group_for_run(run)
+    return group is not None and group.get('desired_state') == 'paused'
+
+
+def _retire_completed_package(run: Path, owner_id: str, now: str) -> dict | None:
+    """Input: completed run, current worker token/time strings. Output: retirement/deferred result, never changed research outcome."""
+    from wqb.execution_package import package_enabled
+    from wqb.execution_package_lifecycle import retire_execution_package
+    manifest = _read(run / 'run_manifest.json')
+    if not package_enabled(manifest.get('start_snapshot', {})):
+        return None
+    try:
+        if _package_cleanup_paused(run):
+            return dict(status='deferred', reason='user_paused', run_id=run.name)
+        return retire_execution_package(run, now, worker_owner_id=owner_id)
+    except Exception as error:
+        try:
+            if _package_cleanup_paused(run):
+                return dict(status='deferred', reason='user_paused', run_id=run.name)
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        # Cleanup defects must not rewrite an already recorded scientific outcome.
+        fault = dict(status='deferred', reason=type(error).__name__ + ': ' + str(error), run_id=run.name, observed_at=now)
+        path = run / 'runtime/execution_package/retirement_fault.json'
+        try:
+            _write(path, fault)
+            blocker = classify_blocker(dict(current_stage='complete', next_action='maintenance-blocker',
+                pause_reason='execution package retirement: ' + str(error), evidence_path=str(path)))
+            case = ensure_recovery_case(run, blocker, now)
+            case = dispatch_notification(run, case, now)
+            return dict(fault, case_id=case.get('case_id'), evidence_path=str(path))
+        except Exception as delivery_error:
+            fault.update(notification_delivery='unknown', notification_error=str(delivery_error))
+            try:
+                _write(path, fault)
+            except OSError as write_error:
+                fault['evidence_write_error'] = str(write_error)
+            return dict(fault, evidence_path=str(path))
+
+
 def resolve_ai_executor_argv(config: dict[str, Any]) -> list[str]:
     """Input: runtime config dict. Output: explicit worker argv. Select a bounded run-local AI adapter."""
     if config.get("ai_executor") == "codex":
@@ -356,6 +401,11 @@ def run_workflow_driver(
             update_runtime_status(run, recovery_case=case)
         update_runtime_status(run, status=runtime_status, reason=reason, next_wake_at="", last_result=result,
                               elapsed_seconds=elapsed_before + _seconds_until(now_func(), start))
+        if runtime_status == 'completed' and result.get('current_stage') == 'complete':
+            retirement = _retire_completed_package(run, str(lock.get('owner_id', '')), now_func())
+            if retirement is not None:
+                result = {**result, 'execution_package_retirement': retirement}
+                update_runtime_status(run, last_result=result)
         from wqb.runtime_boundaries import record_runtime_boundary, dispatch_boundary_notice, project_runtime_boundary
         if runtime_status == 'blocked' and reason in RESOURCE_ACTIONS:
             boundary = record_runtime_boundary(run, reason, {'current_stage': result.get('current_stage'),

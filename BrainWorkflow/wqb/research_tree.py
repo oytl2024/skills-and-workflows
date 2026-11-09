@@ -76,13 +76,17 @@ def _read(run: Path, relative: str) -> dict:
     return value
 
 
-def _authenticate(run: Path, proposed: dict, resources: dict) -> tuple[dict, dict, str]:
+def _authenticate(run: Path, proposed: dict, resources: dict, *, certify_sources: bool = False) -> tuple[dict, dict, str]:
     """Input: run/tree/resource dicts. Output: validated tree, frozen snapshot, manifest hash tuple."""
     manifest_path = _safe(run, 'run_manifest.json')
     raw = manifest_path.read_bytes()
     manifest = json.loads(raw)
     snapshot = manifest['start_snapshot']
-    context = validate_operational_exploration(run, Path(manifest['knowledge_root']), snapshot)
+    if certify_sources:
+        from wqb.exploration_eligibility import _validate_operational_exploration_sources
+        context = _validate_operational_exploration_sources(run, Path(manifest['knowledge_root']), snapshot)
+    else:
+        context = validate_operational_exploration(run, Path(manifest['knowledge_root']), snapshot)
     if (_digest(proposed.get('scope')) != _digest(snapshot['selected_scope']) or
             _digest(proposed.get('period')) != _digest(snapshot.get('measurement_period'))):
         raise ValueError('tree scope/period differs from owning frozen Start')
@@ -124,29 +128,46 @@ def _authenticate(run: Path, proposed: dict, resources: dict) -> tuple[dict, dic
     return validated, snapshot, hashlib.sha256(raw).hexdigest()
 
 
-def freeze_tree(run: Path, proposed_tree: dict, resources: dict) -> dict:
-    """Input: run Path/proposed graph/resources dicts. Output: immutable authenticated attachment dict."""
-    run = _root(run)
-    validated, snapshot, manifest_hash = _authenticate(run, proposed_tree, resources)
-    attachment = dict(schema_version=1, status='frozen', run_id=run.name,
+def _authenticated_attachment(run: Path, proposed: dict, resources: dict,
+                              validated: dict, snapshot: dict, manifest_hash: str) -> dict:
+    """Input: owner/proposal/resources and verified outputs. Output: unchanged canonical tree attachment schema."""
+    return dict(schema_version=1, status='frozen', run_id=run.name,
         manifest_sha256=manifest_hash, start_snapshot_sha256=_digest(snapshot),
-        proposed_tree=deepcopy(proposed_tree), resources=deepcopy(resources),
+        proposed_tree=deepcopy(proposed), resources=deepcopy(resources),
         tree=validated['tree'], tree_digest=validated['tree_digest'],
         execution_simulation_identities=validated['execution_simulation_identities'],
         simulation_count=validated['simulation_count'])
+
+
+def freeze_tree(run: Path, proposed_tree: dict, resources: dict) -> dict:
+    """Input: run Path/proposed graph/resources dicts. Output: immutable authenticated attachment dict."""
+    run = _root(run)
+    from wqb.execution_package import package_enabled, seal_execution_context, load_execution_package, SEAL_PATH
+    manifest = _read(run, 'run_manifest.json')
+    if package_enabled(manifest['start_snapshot']) and _safe(run, SEAL_PATH).exists():
+        saved = load_execution_package(run)['attachment']
+        if saved['proposed_tree'] != proposed_tree or saved['resources'] != resources:
+            raise ValueError('sealed tree proposal or resources changed')
+        return deepcopy(saved)
+    validated, snapshot, manifest_hash = _authenticate(run, proposed_tree, resources, certify_sources=True)
+    attachment = _authenticated_attachment(run, proposed_tree, resources, validated, snapshot, manifest_hash)
     _store_immutable(run, ATTACHMENT, attachment)
+    if package_enabled(snapshot):
+        seal_execution_context(run)
     return deepcopy(attachment)
 
 
 def _load(run: Path) -> tuple[dict, dict]:
     """Input: owning run Path. Output: authenticated attachment/snapshot tuple, never fresh planning."""
+    from wqb.execution_package import package_enabled, load_execution_package
+    manifest = _read(run, 'run_manifest.json')
+    if package_enabled(manifest.get('start_snapshot', {})):
+        package = load_execution_package(run)
+        return package['attachment'], package['snapshot']
     saved = _read(run, ATTACHMENT)
     validated, snapshot, manifest_hash = _authenticate(run, saved['proposed_tree'], saved['resources'])
-    expected = dict(schema_version=1, status='frozen', run_id=run.name,
-        manifest_sha256=manifest_hash, start_snapshot_sha256=_digest(snapshot),
-        proposed_tree=saved['proposed_tree'], resources=saved['resources'], tree=validated['tree'],
-        execution_simulation_identities=validated['execution_simulation_identities'],
-        tree_digest=validated['tree_digest'], simulation_count=validated['simulation_count'])
+    expected = _authenticated_attachment(run, saved['proposed_tree'], saved['resources'],
+                                         validated, snapshot, manifest_hash)
     if _digest(saved) != _digest(expected):
         raise ValueError('frozen tree attachment or owning Start changed')
     return saved, snapshot
@@ -349,11 +370,20 @@ def _global_excluded(run: Path, snapshot: dict) -> set:
             continue
         directory = _safe(peer, 'runtime/research_plans')
         if directory.exists():
+            attachment = None
             for path in directory.glob('tree-plan-*.json'):
                 if path.name.endswith('.experiments.json'):
                     continue
                 plan = _read(peer, path.relative_to(peer).as_posix())
-                _verify_plan(peer, _read(peer, ATTACHMENT), plan)
+                if attachment is None:
+                    from wqb.execution_package_lifecycle import RETIRED_RECEIPT, load_retired_summary
+                    if _safe(peer, RETIRED_RECEIPT).exists():
+                        from wqb.execution_package_storage import read_archived_input
+                        load_retired_summary(peer)
+                        attachment = json.loads(read_archived_input(peer, ATTACHMENT))
+                    else:
+                        attachment = _read(peer, ATTACHMENT)
+                _verify_plan(peer, attachment, plan)
                 excluded.update(plan['reserved_simulation_identities'])
     return excluded
 

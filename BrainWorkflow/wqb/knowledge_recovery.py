@@ -30,7 +30,8 @@ MAX_COPY_SECONDS = 60
 DERIVED_RESOURCES = {"template_library", "benchmark_rules", "research_records", "source_index"}
 OPTIONAL_RETIRED_PATH = "/tutorial-pages/multiplier-rules"
 RECOVERY_IMPLEMENTATION_FILES = ('knowledge_recovery.py', 'knowledge_maintenance.py',
-                                 'knowledge_clean_compile.py', 'knowledge_vault_migration.py')
+                                 'knowledge_clean_compile.py', 'knowledge_vault_migration.py',
+                                 'knowledge_recovery_retirement.py')
 SOURCE_CODE_REVISION = hashlib.sha256(b''.join(
     (Path(__file__).parent / name).read_bytes() for name in RECOVERY_IMPLEMENTATION_FILES)).hexdigest()
 
@@ -370,6 +371,22 @@ def _restore_factual_contract(root: Path, original_manifest: list[dict], scopes:
 
 
 def recover_knowledge(root: Path, config: dict, now: str, run_dir: Path, client=None) -> dict:
+    """Input: vault/run Paths, config/time/client. Output: recovery receipt or fail-closed historical blocker."""
+    from wqb.knowledge_recovery_retirement import retired_recovery_blocker, recovery_history_guard
+    source, owner = Path(root).resolve(), Path(run_dir).resolve()
+    if source == owner or source in owner.parents or owner in source.parents:
+        return _recover_knowledge(root, config, now, run_dir, client)
+    blocked = retired_recovery_blocker(run_dir)
+    if blocked is not None:
+        return blocked
+    with recovery_history_guard(run_dir):
+        blocked = retired_recovery_blocker(run_dir)
+        if blocked is not None:
+            return blocked
+        return _recover_knowledge(root, config, now, run_dir, client)
+
+
+def _recover_knowledge(root: Path, config: dict, now: str, run_dir: Path, client=None) -> dict:
     """Input: vault/run Paths, original scope config dict, ISO str, optional GET client. Output: completed/blocked receipt dict.
 
     The caller must use returned knowledge_root for subsequent readiness and source binding.

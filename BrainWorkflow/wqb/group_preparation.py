@@ -25,7 +25,8 @@ def _digest(value: dict) -> str:
 
 
 def prepare_group_lanes(paths, resources: list[dict], scope: dict, selected_option: dict,
-                        authority: dict, *, plan_depth: int = 2, initial_hypotheses: int = 4) -> dict:
+                        authority: dict, *, plan_depth: int = 2, initial_hypotheses: int = 4,
+                        execution_package_version: int | None = None) -> dict:
     """Input: existing paths, lane resources/scope/option/authority dicts and depth/width ints.
 
     Output: paused group and pre-model source certificates. No model, live request,
@@ -47,6 +48,10 @@ def prepare_group_lanes(paths, resources: list[dict], scope: dict, selected_opti
                   preplanned_tree_version=GROUP_POLICY_VERSION, deterministic_repair=True,
                   plan_depth=plan_depth, initial_hypotheses=initial_hypotheses,
                   parallel_workflows=len(resources), seed_selection_limit=8)
+    if execution_package_version is not None:
+        from wqb.execution_package import package_enabled
+        policy['execution_package_version'] = execution_package_version
+        package_enabled(dict(research_policy=policy))
     plans = [dict(run_id='lane-' + uuid4().hex, plan_digest=_digest(item)) for item in resources]
     group = create_group(paths.run_root, plans, authority)
     certificates = []

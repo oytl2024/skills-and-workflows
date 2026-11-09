@@ -286,6 +286,13 @@ def _lane(run: Path, state=None, progress=None) -> dict:
     if persisted.get('run_id') != run.name:
         raise ValueError('run state identity mismatch')
     state = persisted if state is None else state
+    from wqb.execution_package_lifecycle import RETIRED_RECEIPT, load_retired_summary
+    if _safe(run, run / RETIRED_RECEIPT).exists():
+        view = load_retired_summary(run)['console_projection']
+        if (view.get('lane_id') != run.name or view.get('status') != state.get('status')
+                or view.get('stage') != state.get('current_stage')):
+            raise ValueError('retired Console projection differs from completed owner')
+        return view
     tree = _read(run, 'runtime/experiment_tree.json', optional=True)
     if tree is None:
         tree = _read(run, 'experiment_tree.json', optional=True)

@@ -1,6 +1,7 @@
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timezone
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -533,6 +534,38 @@ def _validate_scope_artifacts(
         )
 
 
+def _sealed_execution_readiness(run: Path, root: Path, snapshot: dict | None,
+    mode: str, batch_size: int, live_api_enabled: bool, region: str | None,
+    universe: str | None, delay: int | None, generated_at: str) -> ReadinessReport:
+    """Input: owner Path, expected snapshot/scope and permissions. Output: local readiness report; never reads global scientific resources."""
+    from wqb.execution_package import load_execution_package
+
+    issues = []
+    try:
+        if mode not in {'research', 'plan-only'}:
+            raise ValueError('execution packages do not authorize candidate submission or maintenance')
+        package = load_execution_package(run)
+        manifest = package['manifest']
+        if snapshot is None or snapshot != package['snapshot']:
+            raise ValueError('execution readiness requires the exact owning frozen snapshot')
+        origin = os.path.normcase(os.path.abspath(manifest['knowledge_root']))
+        if os.path.normcase(os.path.abspath(root)) != origin:
+            raise ValueError('execution package knowledge origin differs')
+        scope = dict(region=region, universe=universe, delay=delay)
+        if any(type(manifest['selected_scope'].get(key)) is not type(value)
+               or manifest['selected_scope'][key] != value for key, value in scope.items()):
+            raise ValueError('execution package scope differs')
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        issues.append(_issue('block', 'invalid_execution_package', str(error), run,
+                             'Restore the original script-sealed execution package.'))
+    if type(batch_size) is not int or batch_size < 1:
+        issues.append(_issue('block', 'batch_size_too_small', 'Research batch cap must be a positive integer.'))
+    if mode == 'research' and not live_api_enabled:
+        issues.append(_issue('block', 'live_api_disabled', 'Research mode requires explicit live API enablement.'))
+    blocked = any(issue.level == 'block' for issue in issues)
+    return ReadinessReport(mode, generated_at, not blocked, blocked, issues)
+
+
 def evaluate_run_readiness(
     knowledge_root: str | Path,
     mode: str,
@@ -544,6 +577,7 @@ def evaluate_run_readiness(
     universe: str | None = None,
     delay: int | None = None,
     start_snapshot: dict | None = None,
+    execution_run_dir: str | Path | None = None,
 ) -> ReadinessReport:
     """Input: root, mode, safety flags. Output: report. Check whether a run may start."""
     if mode not in READINESS_MODES:
@@ -551,6 +585,9 @@ def evaluate_run_readiness(
     root = Path(knowledge_root)
     current = date.fromisoformat(today_value) if today_value else date.today()
     generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    if execution_run_dir is not None:
+        return _sealed_execution_readiness(Path(execution_run_dir), root, start_snapshot,
+            mode, batch_size, live_api_enabled, region, universe, delay, generated_at)
     issues: list[ReadinessIssue] = []
     catalog_mode = False
     if start_snapshot is not None:

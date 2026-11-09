@@ -9,6 +9,7 @@ import os
 import hashlib
 from pathlib import Path
 import re
+import time
 from contextlib import ExitStack
 
 from wqb.full_semantic_compile import _bytes, _digest, _hash, _json, inventory_reference_base
@@ -16,12 +17,13 @@ from wqb.knowledge_clean_compile import _safe_local_path
 
 
 MAX_AUDIT_BYTES = 16 * 1024 * 1024
+MAX_HISTORICAL_REPORT_BYTES = 128 * 1024 * 1024
 MAX_INVENTORY_LINE_BYTES = 16 * 1024 * 1024
 MAX_INVENTORY_TARGETS = 1_000_000
 MAX_JOB_CHECKS = 4096
 MAX_OWNER_ENTRIES = 8
 RETIREMENT_SCAN_BYTES = 2 * 1024**3
-RETIREMENT_SCAN_SECONDS = 180.0
+RETIREMENT_SCAN_SECONDS = 900.0
 LIFECYCLE_LOCK_SECONDS = 1.0
 LIFECYCLE_VERSION = 1
 PLAN_PATH = re.compile(r'machine/semantic_jobs/[a-f0-9]{64}/plan\.json\Z')
@@ -29,6 +31,8 @@ RETIREMENT_MARKER = 'retirement.json'
 HASH = re.compile(r'[a-f0-9]{64}\Z')
 INTENT_KEYS = {'schema_version', 'kind', 'root', 'plan_ref', 'inventory_ref',
                'replacement_ref', 'archive_ref', 'inventory_counts', 'coverage_proof', 'source_digest'}
+ARCHIVE_CONTRACT = 'lossless_inventory_archive_v1'
+ARCHIVE_INTENT_KEYS = (INTENT_KEYS - {'replacement_ref', 'coverage_proof'}) | {'retention_contract'}
 
 
 def _stamp(path: Path) -> tuple:
@@ -401,21 +405,68 @@ def _replacement(root: Path, plan: dict, replacement_path: str, *, archive_ref=N
     return counts, dict(path=replacement_path, sha256=metadata['plan_sha256']), proof
 
 
-def _references(root: Path, plan: dict) -> dict:
-    """Input: target plan. Output: consumed owner digests; only authenticated self/history views are excluded."""
+def _references(root: Path, plan: dict, *, diagnostics=None) -> dict:
+    """Input: target plan/optional progress dict. Output: consumed owner digests; no new exemptions."""
     from wqb.knowledge_clean_compile import _reference_refusal
     base = str(Path(plan['plan_path']).parent).replace('\\', '/')
-    ignored = {plan['plan_path'], base + '/' + RETIREMENT_MARKER, base + '/retirement_completed.json',
-        'machine/reports/full_semantic_coverage_' + plan['content_key'] + '.json'}
+    ignored = {plan['plan_path'], base + '/' + RETIREMENT_MARKER, base + '/retirement_completed.json'}
     snapshots = {}
+    report = 'machine/reports/full_semantic_coverage_' + plan['content_key'] + '.json'
+    if _path(root, report).exists():
+        snapshots[str(_path(root, report))] = _documentary_report(root, plan, report)
+        ignored.add(report)
     target = _path(root, plan['inventory_ref']['path'])
     reason = _reference_refusal(root, target, plan['inventory_ref']['sha256'],
         ignored_owners=ignored, snapshots=snapshots, historical_reports=True,
         max_file_bytes=RETIREMENT_SCAN_BYTES, max_total_bytes=RETIREMENT_SCAN_BYTES,
-        max_seconds=RETIREMENT_SCAN_SECONDS)
+        max_seconds=RETIREMENT_SCAN_SECONDS, diagnostics=diagnostics)
     if reason:
         raise ValueError('retirement reference protection: ' + reason)
     return snapshots
+
+
+def _documentary_report(root: Path, plan: dict, relative: str) -> str:
+    """Input: vault/plan and exact coverage-report path. Output: SHA of checked documentary bytes.
+
+    Only the existing coverage contract's inventory_ref is a historical selector.
+    All other fields are still checked for dependencies; names/status labels alone
+    cannot exempt a worker, run, arbitrary report or additional nested reference.
+    """
+    from wqb.knowledge_clean_compile import _reference_value_refusal
+    from wqb.semantic_inventory_archive import _open, _identity, _unchanged
+    path = _path(root, relative)
+    with _open(root, path) as stream:
+        identity = _identity(os.fstat(stream.fileno()))
+        if identity[2] > MAX_HISTORICAL_REPORT_BYTES:
+            raise ValueError('documentary report exceeds byte bound')
+        raw = stream.read(MAX_HISTORICAL_REPORT_BYTES + 1)
+        if len(raw) > MAX_HISTORICAL_REPORT_BYTES:
+            raise ValueError('documentary report exceeds byte bound')
+        _unchanged(root, path, stream, identity)
+    before = _hash(raw)
+    value = _json(raw.decode('utf-8'))
+    keys = {'schema_version', 'kind', 'plan_key', 'generated_at', 'report_paths', 'inventory_ref',
+            'inventory', 'explanations', 'compiler_binder', 'start_consumption',
+            'diagnostics', 'model_calls', 'platform_calls', 'publication_authorized',
+            'research_authorized', 'research_ready'}
+    if not isinstance(value, dict):
+        raise ValueError('unverified documentary coverage reference')
+    version = value.get('schema_version')
+    target_key = 'targets' if version == 1 else 'targets_ref'
+    if (set(value) != keys | {target_key} or type(version) is not int or version not in (1, 2)
+            or value['kind'] != 'full_semantic_coverage' or value['plan_key'] != plan['content_key']
+            or value['inventory_ref'] != plan['inventory_ref']
+            or value['report_paths'] != dict(json=relative, markdown=relative[:-5] + '.md')
+            or any(value[key] is not False for key in ('publication_authorized', 'research_authorized', 'research_ready'))
+            or any(type(value[key]) is not int or value[key] != 0 for key in ('model_calls', 'platform_calls'))):
+        raise ValueError('unverified documentary coverage reference')
+    remaining = {key: item for key, item in value.items() if key != 'inventory_ref'}
+    if _reference_value_refusal(remaining, root, _path(root, plan['inventory_ref']['path']), path,
+            plan['inventory_ref']['sha256'], time.monotonic() + RETIREMENT_SCAN_SECONDS):
+        raise ValueError('documentary report contains another inventory reference')
+    if _safe_local_path(root, path) or _file_digest(path) != before:
+        raise ValueError('documentary reference changed')
+    return before
 
 
 def _check_snapshots(root: Path, snapshots: dict) -> None:
@@ -447,18 +498,41 @@ def _retired_context(root: Path, plan_path: str) -> tuple:
     plan, metadata = _manifest(root, plan_path)
     relative = str(Path(plan_path).parent / RETIREMENT_MARKER).replace('\\', '/')
     intent = _record(root, relative)
-    if (set(intent) != INTENT_KEYS or type(intent['schema_version']) is not int
-            or intent['schema_version'] != LIFECYCLE_VERSION or intent['kind'] != 'semantic_plan_retirement'
+    archival = (set(intent) == ARCHIVE_INTENT_KEYS and type(intent['schema_version']) is int
+                and intent['schema_version'] == 2 and intent['retention_contract'] == ARCHIVE_CONTRACT)
+    replacement = (set(intent) == INTENT_KEYS and type(intent['schema_version']) is int
+                   and intent['schema_version'] == LIFECYCLE_VERSION)
+    if (not (archival or replacement) or intent['kind'] != 'semantic_plan_retirement'
             or intent['root'] != str(root) or intent['plan_ref'] != dict(path=plan_path, sha256=metadata['plan_sha256'])
             or intent['inventory_ref'] != plan['inventory_ref']
             or intent['archive_ref'].get('uncompressed_sha256') != plan['inventory_ref']['sha256']
             or intent['source_digest'] != _digest(plan['identity'].get('sources', []))):
         raise ValueError('retirement intent differs from original evidence')
+    if archival:
+        _owner_unexecuted(root, plan, retired=True)
+        counts = _inventory(root, plan, archive_ref=intent['archive_ref'])
+        if counts != intent['inventory_counts']:
+            raise ValueError('retirement archived counts differ from original evidence')
+        return plan, intent, counts
     replacement_path = intent['replacement_ref']['path']
     counts, reference, proof = _replacement(root, plan, replacement_path, archive_ref=intent['archive_ref'])
     if (counts != intent['inventory_counts'] or reference != intent['replacement_ref'] or proof != intent['coverage_proof']):
         raise ValueError('retirement coverage or replacement evidence differs')
     return plan, intent, counts
+
+
+def open_retired_semantic_inventory(root: str | Path, plan_path: str):
+    """Input: vault Path/str and exact retired plan str. Output: owned verified binary historical reader.
+
+    The original inventory selector remains immutable. This explicit read bridge
+    never restores execution inputs or substitutes current source/semantic facts.
+    The caller must close the returned reader (normally via a with statement).
+    """
+    from wqb.semantic_inventory_archive import open_verified_inventory_archive
+    root = _root(root)
+    with plan_guard(root, plan_path):
+        _, intent, _ = _retired_context(root, plan_path)
+        return open_verified_inventory_archive(root, intent['archive_ref'])
 
 
 def read_retired_semantic_plan(root: str | Path, plan_path: str) -> dict:
@@ -479,35 +553,77 @@ def _retired_summary(plan: dict, intent: dict, counts: dict) -> dict:
 
 def prepare_semantic_retirement(root: str | Path, plan_path: str, *, replacement_plan_path: str) -> dict:
     """Input: explicit old/current plans. Output: durable read-only intent; original expanded bytes are not removed."""
-    from wqb.semantic_inventory_archive import prepare_inventory_archive
+    if replacement_plan_path is None:
+        raise ValueError('replacement required; archival retirement uses a separate explicit API')
+    return _prepare_retirement(root, plan_path, replacement_plan_path)
+
+
+def audit_semantic_archive_retirement(root: str | Path, plan_path: str) -> dict:
+    """Input: explicit vault/legacy selector. Output: read-only archive feasibility, not collection authority."""
+    result = dict(mode='audit_only', disposition='protected', validated=False,
+                  plan_path=plan_path, retention_contract=ARCHIVE_CONTRACT, reasons=[], scan_diagnostics={})
+    try:
+        root = _root(root)
+        plan, summary = _read_plan(root, plan_path)
+        _owner_unexecuted(root, plan)
+        snapshots = _references(root, plan, diagnostics=result['scan_diagnostics'])
+        _check_snapshots(root, snapshots)
+        result.update(inventory_counts=summary['inventory_counts'], inventory_ref=plan['inventory_ref'],
+                      plan_sha256=summary['plan_sha256'], validated=True, disposition='archive_candidate')
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, UnicodeError, RecursionError) as exc:
+        result['reasons'].append(type(exc).__name__ + ':' + str(exc)[:160])
+    return result
+
+
+def prepare_semantic_archive_retirement(root: str | Path, plan_path: str) -> dict:
+    """Input: explicit vault/legacy selector. Output: lossless read-only intent, never semantic replacement.
+
+    Only authenticated, unexecuted zero-budget plan-local inventories qualify.
+    Original plans, jobs, authority and accounting files are never rewritten.
+    """
+    return _prepare_retirement(root, plan_path, None)
+
+
+def _prepare_retirement(root: str | Path, plan_path: str, replacement_plan_path: str | None) -> dict:
+    """Input: explicit selector and replacement or archive contract. Output: verified durable intent dict."""
+    from wqb.semantic_inventory_archive import prepare_inventory_archive, verify_inventory_archive
     from wqb.knowledge_contracts import _write_immutable_source
     root = _root(root)
     with plan_guard(root, plan_path):
         marker = _plan_path(root, plan_path).parent / RETIREMENT_MARKER
         if marker.exists():
             _, intent, _ = _retired_context(root, plan_path)
-            if intent['replacement_ref']['path'] != replacement_plan_path:
+            if intent.get('replacement_ref', {}).get('path') != replacement_plan_path:
                 raise ValueError('saved retirement replacement cannot change')
             return dict(status='prepared', archive_ref=intent['archive_ref'], removed_count=0)
         plan, metadata = _manifest(root, plan_path)
         _owner_unexecuted(root, plan)
-        counts, replacement, proof = _replacement(root, plan, replacement_plan_path)
+        if replacement_plan_path is None:
+            counts = _inventory(root, plan)
+        else:
+            counts, replacement, proof = _replacement(root, plan, replacement_plan_path)
         with _commit_guards(root, plan):
             _owner_unexecuted(root, plan)
             _references(root, plan)
         archive = prepare_inventory_archive(root, plan['inventory_ref']['path'], plan['inventory_ref']['sha256'])
         intent = dict(schema_version=LIFECYCLE_VERSION, kind='semantic_plan_retirement', root=str(root),
             plan_ref=dict(path=plan_path, sha256=metadata['plan_sha256']), inventory_ref=plan['inventory_ref'],
-            replacement_ref=replacement, archive_ref=archive, inventory_counts=counts,
-            coverage_proof=proof, source_digest=_digest(plan['identity'].get('sources', [])))
+            archive_ref=archive, inventory_counts=counts,
+            source_digest=_digest(plan['identity'].get('sources', [])))
+        if replacement_plan_path is None:
+            intent.update(schema_version=2, retention_contract=ARCHIVE_CONTRACT)
+        else:
+            intent.update(replacement_ref=replacement, coverage_proof=proof)
         with _commit_guards(root, plan):
             _owner_unexecuted(root, plan)
             snapshots = _references(root, plan)
             if (_manifest(root, plan_path)[1] != metadata
-                    or _manifest(root, replacement_plan_path)[1]['plan_sha256'] != replacement['sha256']
+                    or (replacement_plan_path is not None
+                        and _manifest(root, replacement_plan_path)[1]['plan_sha256'] != replacement['sha256'])
                     or _file_digest(_path(root, plan['inventory_ref']['path'])) != plan['inventory_ref']['sha256']):
                 raise ValueError('retirement inputs changed before intent')
             _check_snapshots(root, snapshots)
+            verify_inventory_archive(root, archive)
             _write_immutable_source(_path(root, marker.relative_to(root).as_posix()), _bytes(intent))
         return dict(status='prepared', archive_ref=archive, removed_count=0)
 
@@ -552,12 +668,19 @@ def apply_semantic_retirement(root: str | Path, plan_path: str, *,
         plan, intent, _ = _retired_context(root, plan_path)
         if approved_inventory_paths != [plan['inventory_ref']['path']]:
             raise ValueError('collection approval does not match original inventory')
-        if replacement_plan_path is not None and replacement_plan_path != intent['replacement_ref']['path']:
+        if replacement_plan_path is not None and replacement_plan_path != intent.get('replacement_ref', {}).get('path'):
             raise ValueError('saved retirement replacement cannot change')
         completion = str(Path(plan_path).parent / 'retirement_completed.json').replace('\\', '/')
         with _commit_guards(root, plan):
             _owner_unexecuted(root, plan, retired=True)
             snapshots = _references(root, plan)
+            _check_snapshots(root, snapshots)
+            from wqb.semantic_inventory_archive import verify_inventory_archive
+            verify_inventory_archive(root, intent['archive_ref'])
+            marker = str(Path(plan_path).parent / RETIREMENT_MARKER).replace('\\', '/')
+            if (_manifest(root, plan_path)[1]['plan_sha256'] != intent['plan_ref']['sha256']
+                    or _record(root, marker) != intent):
+                raise ValueError('retirement inputs changed before collection')
             if _path(root, completion).exists():
                 row = _record(root, completion)
                 if (set(row) != {'kind', 'schema_version', 'intent_sha256', 'approval_reference', 'inventory_removed'}
@@ -569,9 +692,6 @@ def apply_semantic_retirement(root: str | Path, plan_path: str, *,
                 if _path(root, plan['inventory_ref']['path']).exists():
                     raise ValueError('completed legacy inventory reappeared; maintenance required')
                 return dict(status='collected', removed_count=0, archive_ref=intent['archive_ref'])
-            from wqb.semantic_inventory_archive import verify_inventory_archive
-            verify_inventory_archive(root, intent['archive_ref'])
-            _check_snapshots(root, snapshots)
             removed = _remove_expanded_inventory(root, plan)
             _complete_retirement(root, plan, intent, approval_reference)
         return dict(status='collected', removed_count=removed, archive_ref=intent['archive_ref'])

@@ -397,8 +397,9 @@ class RepairRuntimeExecutor:
                 if attempts >= REPAIR_CHECK_MAX_ATTEMPTS:
                     raise RepairRecoveryPending('Existing Alpha checks remain pending after bounded recovery; no resubmission')
                 raise _record_progress_wait(subrun, variant, RuntimeError('checks_pending'), 'check')
+            from wqb.repair_policy import benchmark_resource_run
             row.update(cli.benchmark_fields_for_record(row, knowledge_root=self.config.get("knowledge_root", cli.default_knowledge_root()),
-                                                       run_dir=subrun, consumer="triage"))
+                                                       run_dir=benchmark_resource_run(Path(root), subrun), consumer="triage"))
             recorder.append_jsonl("all_alphas.jsonl", row)
             recorder.append_jsonl("simulation_events.jsonl", {"event": "CHECKED", "alpha_id": alpha_id, **variant})
             checked[identity] = row

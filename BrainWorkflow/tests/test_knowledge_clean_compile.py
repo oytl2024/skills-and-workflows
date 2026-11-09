@@ -18,6 +18,175 @@ from wqb.knowledge_clean_compile import (
 
 
 class ReferenceScannerTests(unittest.TestCase):
+    def test_successful_scan_reuses_only_exact_hash_verified_reference_results(self):
+        """Input: unchanged then mutated owner bytes. Output: skip repeated parsing only for a complete identical proof."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            owner = self._owner(root, 'machine/data_ledger.jsonl', b'{"value":"unrelated"}\n')
+            target = root / 'old'
+            self.assertEqual(clean_compile._reference_refusal(root, target, ''), '')
+            with patch.object(clean_compile, '_reference_value_refusal', side_effect=AssertionError('cached bytes parsed')):
+                self.assertEqual(clean_compile._reference_refusal(root, target, ''), '')
+            owner.write_bytes(json.dumps({'reference': str(target)}).encode())
+            self.assertEqual(clean_compile._reference_refusal(root, target, ''), 'referenced evidence path')
+
+    def test_scan_cache_never_hides_new_owners_or_a_different_target(self):
+        """Input: new reference and different target. Output: fresh parsing protects both dependencies."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first, second = root / 'old', root / 'other'
+            self._owner(root, 'machine/data_ledger.jsonl', json.dumps({'reference': str(second)}).encode())
+            self.assertEqual(clean_compile._reference_refusal(root, first, ''), '')
+            self.assertEqual(clean_compile._reference_refusal(root, second, ''), 'referenced evidence path')
+            self._owner(root, 'machine/semantic_release.json', json.dumps({'reference': str(first)}).encode())
+            self.assertEqual(clean_compile._reference_refusal(root, first, ''), 'referenced evidence path')
+
+    def test_cached_clean_owner_skips_parser_but_hashes_bytes(self):
+        """Input: identical safe owner bytes. Output: reused parsing proof and freshly hashed snapshots."""
+        from wqb import semantic_publication
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            owner = self._owner(root, 'runs/owner.jsonl', b'{}\n')
+            self.assertEqual(clean_compile._reference_refusal(root, root / 'old', ''), '')
+            snapshots = {}
+            with patch.object(semantic_publication, '_load', side_effect=AssertionError('cached parse')):
+                self.assertEqual(clean_compile._reference_refusal(root, root / 'old', '', snapshots=snapshots), '')
+            self.assertEqual(snapshots[str(owner)], hashlib.sha256(owner.read_bytes()).hexdigest())
+
+    def test_cache_changed_new_alias_and_target_are_not_exempt(self):
+        """Input: warmed proof then changed/new owners or target. Output: references remain protected."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            owner = self._owner(root, 'runs/owner.json', b'{}')
+            target = root / 'old'
+            self.assertEqual(clean_compile._reference_refusal(root, target, ''), '')
+            owner.write_bytes(b'{"path":"runs/../old"}')
+            self.assertEqual(clean_compile._reference_refusal(root, target, ''), 'referenced evidence path')
+            owner.write_bytes(b'{}')
+            self._owner(root, 'runs/new.json', b'{"sha":"pin"}')
+            self.assertEqual(clean_compile._reference_refusal(root, target, 'pin'), 'referenced evidence digest')
+            owner.write_bytes(b'{"path":"."}')
+            self.assertEqual(clean_compile._reference_refusal(root, root / 'runs', ''), 'referenced evidence path')
+
+    def test_partial_timeout_does_not_cache_clean_owners(self):
+        """Input: timeout after one clean owner. Output: subsequent scan parses every owner again."""
+        from wqb import semantic_publication
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = self._owner(root, 'runs/a.json', b'{}')
+            second = self._owner(root, 'runs/b.json', b'{}')
+            with patch.object(clean_compile, '_walk_local', return_value=iter((first, second))), \
+                    patch.object(clean_compile, '_reference_value_refusal', side_effect=['', 'evidence reference scan limit']):
+                self.assertEqual(clean_compile._reference_refusal(root, root / 'old', ''), 'evidence reference scan limit')
+            with patch.object(semantic_publication, '_load', wraps=semantic_publication._load) as parser:
+                self.assertEqual(clean_compile._reference_refusal(root, root / 'old', ''), '')
+            self.assertEqual(parser.call_count, 2)
+
+    def test_reference_proof_cache_is_bounded(self):
+        """Input: more successful target contexts than capacity. Output: bounded process-local proofs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for index in range(3):
+                self._owner(root, f'runs/{index}.json', b'{}')
+            with patch.object(clean_compile, 'REFERENCE_PROOF_CACHE_CONTEXTS', 2), \
+                    patch.object(clean_compile, '_REFERENCE_PROOF_CACHE', clean_compile.OrderedDict()):
+                for target in ('old-a', 'old-b', 'old-c'):
+                    self.assertEqual(clean_compile._reference_refusal(root, root / target, ''), '')
+                self.assertEqual(len(clean_compile._REFERENCE_PROOF_CACHE), 2)
+
+    def test_scan_diagnostics_distinguish_limits_without_changing_refusals(self):
+        """Input: isolated bounded scans. Output: compact diagnostics and unchanged refusal strings."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            owner = self._owner(root, 'runs/owner.jsonl', b'{"note":"private payload"}\n')
+            cases = (
+                ({'max_file_bytes': 1}, {}, 'file_bytes', 'evidence reference scan limit'),
+                ({'max_total_bytes': 1}, {}, 'total_bytes', 'evidence reference scan limit'),
+                ({}, {'REFERENCE_LINE_LIMIT': 8}, 'line_bytes', 'evidence reference scan limit'),
+                ({}, {'REFERENCE_ENTRY_LIMIT': 0}, 'entries', 'uncertain evidence references'),
+            )
+            for options, constants, bound, expected in cases:
+                with self.subTest(bound=bound), patch.dict(clean_compile.__dict__, constants):
+                    diagnostics = {'stale': 'must be cleared'}
+                    result = clean_compile._reference_refusal(
+                        root, root / 'old', '', diagnostics=diagnostics, **options)
+                    self.assertEqual(result, expected)
+                    self.assertEqual(result, clean_compile._reference_refusal(root, root / 'old', '', **options))
+                    self.assertEqual(set(diagnostics), {'phase', 'current_owner', 'elapsed', 'bytes',
+                                                       'entries', 'limiting_bound'})
+                    self.assertEqual(diagnostics['current_owner'], str(owner))
+                    self.assertEqual(diagnostics['limiting_bound'], bound)
+                    self.assertEqual(diagnostics['entries'], 1)
+                    self.assertGreaterEqual(diagnostics['elapsed'], 0)
+                    self.assertNotIn('private payload', json.dumps(diagnostics))
+
+    def test_scan_diagnostics_capture_value_scan_timeout(self):
+        """Input: deterministic clock expiry while matching values. Output: time, not byte, diagnosis."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            payload = b'{}\n'
+            owner = self._owner(root, 'runs/owner.jsonl', payload)
+            clock = [0.0]
+            original = clean_compile._reference_value_refusal
+
+            def expire(*args, **kwargs):
+                """Input: reference matcher arguments. Output: original timed-out matcher result."""
+                clock[0] = 2.0
+                return original(*args, **kwargs)
+
+            diagnostics = {}
+            with patch.object(clean_compile.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(clean_compile, '_reference_value_refusal', side_effect=expire):
+                result = clean_compile._reference_refusal(
+                    root, root / 'old', '', max_seconds=1, diagnostics=diagnostics)
+            self.assertEqual(result, 'evidence reference scan limit')
+            self.assertEqual(diagnostics, dict(phase='reference_values', current_owner=str(owner),
+                elapsed=2.0, bytes=len(payload), entries=1, limiting_bound='time_seconds'))
+
+    def test_scan_diagnostics_preserve_success_reference_and_invalid_limit(self):
+        """Input: successful, pinned and invalid scans. Output: reset diagnostics without payload leakage."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            owner = self._owner(root, 'runs/owner.json', b'{}')
+            diagnostics = {}
+            self.assertEqual(clean_compile._reference_refusal(root, root / 'old', '', diagnostics=diagnostics), '')
+            self.assertEqual(diagnostics['phase'], 'complete')
+            self.assertEqual(diagnostics['bytes'], 2)
+            self.assertEqual(diagnostics['limiting_bound'], '')
+            owner.write_bytes(b'{"sha256":"protected"}')
+            self.assertEqual(clean_compile._reference_refusal(
+                root, root / 'old', 'protected', diagnostics=diagnostics), 'referenced evidence digest')
+            self.assertEqual(diagnostics['limiting_bound'], '')
+            self.assertEqual(clean_compile._reference_refusal(
+                root, root / 'old', '', max_seconds=0, diagnostics=diagnostics), 'evidence reference scan limit')
+            self.assertEqual(diagnostics['limiting_bound'], 'time_seconds')
+            self.assertEqual(diagnostics['phase'], 'validate_limits')
+            self.assertEqual(diagnostics['current_owner'], '')
+            self.assertEqual(diagnostics['bytes'], 0)
+
+    def test_scan_diagnostics_capture_traversal_timeout_before_owner_read(self):
+        """Input: clock expiry inside directory traversal. Output: exact pending owner and zero consumed bytes."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            owner = self._owner(root, 'runs/owner.json', b'{}')
+            clock = [0.0]
+            original = clean_compile._safe_local_path
+
+            def expire_at_directory(boundary, path):
+                """Input: boundary/path Paths. Output: original safety result after simulated clock expiry."""
+                if path == owner.parent:
+                    clock[0] = 2.0
+                return original(boundary, path)
+
+            diagnostics = {}
+            with patch.object(clean_compile.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(clean_compile, '_safe_local_path', side_effect=expire_at_directory):
+                result = clean_compile._reference_refusal(
+                    root, root / 'old', '', max_seconds=1, diagnostics=diagnostics)
+            self.assertEqual(result, 'evidence reference scan limit')
+            self.assertEqual(diagnostics, dict(phase='traversal', current_owner=str(owner),
+                elapsed=2.0, bytes=0, entries=0, limiting_bound='time_seconds'))
+
     def test_explicit_maintenance_scan_deadline_is_finite_and_validated(self):
         """Input: maintenance time allowance. Output: bounded scan or refusal; reject invalid limits."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -45,6 +214,16 @@ class ReferenceScannerTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(clean_compile._reference_value_refusal(
                     {'path': value}, root, target, owner, '', float('inf')), 'referenced evidence path')
+
+    def test_unrelated_source_paths_need_no_owner_relative_resolution(self):
+        """Input: source URLs/files with impossible terminal components. Output: no refusal or expensive origin expansion."""
+        root = Path(os.path.abspath('vault'))
+        target = root / 'machine/semantic_jobs/old/inventory.jsonl'
+        owner = root / 'machine/semantic_jobs/job/input.json'
+        value = {'source_paths': ['raw/platform/data_fields/official.md',
+            'raw/../raw/platform/operators.json', 'https://example.invalid/docs/operator']}
+        with patch.object(clean_compile.os.path, 'abspath', side_effect=AssertionError('unneeded origin expansion')):
+            self.assertEqual(clean_compile._reference_value_refusal(value, root, target, owner, '', float('inf')), '')
 
     def _owner(self, root, name, payload):
         """Input: root (Path), name (str), payload (bytes). Output: Path; write isolated owner fixture."""

@@ -275,6 +275,14 @@ def schedule_run_checkpoint(
 ) -> dict[str, Any] | None:
     """Input: run, stage result, time and worker argv. Output: checkpoint or None. Schedule selected judgments once per run."""
     run = Path(run_dir)
+    from wqb.execution_package import package_enabled
+    from wqb.semantic_compilation import _safe
+    manifest_path = _safe(run.absolute(), 'run_manifest.json')
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+        if package_enabled(manifest.get('start_snapshot', {})):
+            # This only denies extra model work; runtime authority is checked elsewhere.
+            return None
     stage = str(result.get("current_stage", ""))
     status = str(result.get("status", ""))
     specs = {

@@ -349,6 +349,15 @@ def validate_operational_exploration(run: Path, knowledge_root: Path, snapshot: 
     Pure selector fixtures cannot authorize source execution. Recheck pre-model
     certificates, original raw bytes and owning policy at the planning boundary.
     """
+    from wqb.execution_package import package_enabled, load_execution_context, SEAL_PATH
+    if package_enabled(snapshot) and (_safe(Path(run), SEAL_PATH).exists()
+            or _safe(Path(run), 'runtime/experiment_tree.json').exists()):
+        return load_execution_context(run, snapshot)
+    return _validate_operational_exploration_sources(run, knowledge_root, snapshot)
+
+
+def _validate_operational_exploration_sources(run: Path, knowledge_root: Path, snapshot: dict) -> dict:
+    """Input: owner/vault Paths and snapshot. Output: original source-certified context for script-owned freeze or legacy execution."""
     context = validate_exploration_snapshot(snapshot)
     frozen = snapshot['exploration_context']
     certificates = frozen.get('resource_certificates')

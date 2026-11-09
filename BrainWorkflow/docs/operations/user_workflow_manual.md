@@ -404,3 +404,25 @@ A potential single remeasurement is a separately authorized new attempt, not
 Resume/replay of the original POST; it remains disabled in routine research.
 Maintenance of this case uses the existing recorded404 and local original-identity
 records, not a fresh platform-success claim or broad online search.
+
+### Script-Owned Execution Packages
+
+New missions with frozen `execution_package_version=1` use a script-sealed local
+tree, source certificates and resolved data characteristics. The model supplies
+the initial experiment tree and references only; it does not create packages or
+make additional execution-time Repair decisions. Stop, accounting, deduplication,
+pending POST recovery and check validity remain independent dynamic controls.
+
+Routine controls remain Option Card selection and Start/Stop. There is no new
+package-approval button. Existing unmarked missions retain their original mode.
+Once tree execution, Seed/Repair and research recording genuinely finish, scripts
+verify terminal evidence, retain scientific summaries and lossless local history,
+then collect only sealed disposable inputs. Pause, exhausted budget, uncertain
+POSTs, required pending checks or candidate approval do not count as completion.
+
+Retired history is readable but cannot Resume. Qualified unsubmitted Alpha IDs,
+raw check evidence and original authority/accounting remain retained; retirement
+does not renew checks or authorize submission. A collection fault preserves the
+completed research and routes maintenance evidence rather than rerunning it.
+Historical knowledge-copy and inventory cleanup is separately audited local
+maintenance, never a side effect of opening Console or updating knowledge.

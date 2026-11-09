@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from collections import OrderedDict
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -9,6 +10,7 @@ import os
 from pathlib import Path
 import stat
 import time
+from threading import Lock
 from typing import Any
 
 from wqb.knowledge_paths import (
@@ -51,6 +53,10 @@ REFERENCE_ENTRY_LIMIT = 10000
 REFERENCE_LINE_LIMIT = 16 * 1024 * 1024
 REFERENCE_TIME_LIMIT = 30.0
 REFERENCE_VALUE_CACHE_LIMIT = 10000
+REFERENCE_PROOF_CACHE_CONTEXTS = 4
+REFERENCE_HASH_CHUNK_BYTES = 1024 * 1024
+_REFERENCE_PROOF_CACHE = OrderedDict()
+_REFERENCE_PROOF_CACHE_LOCK = Lock()
 RAW_REFERENCE_MANIFESTS = {'manifest.json', 'capture_manifest.json', 'learn_capture_manifest.json'}
 
 
@@ -106,8 +112,10 @@ def _safe_local_path(root: Path, path: Path) -> str:
     return ''
 
 
-def _walk_local(root: Path, base: Path, *, deadline: float | None = None):
-    """Input: Paths, optional monotonic deadline float. Output: Path iterator; reject unsafe/timed-out traversal."""
+def _walk_local(root: Path, base: Path, *, deadline: float | None = None, diagnostics=None):
+    """Input: Paths, deadline float, optional diagnostic dict. Output: safe bounded Path iterator."""
+    if diagnostics is not None:
+        diagnostics.update(phase='traversal', current_owner=str(base))
     if deadline is not None and time.monotonic() > deadline:
         raise TimeoutError('evidence reference scan limit')
     if not os.path.lexists(base):
@@ -117,10 +125,12 @@ def _walk_local(root: Path, base: Path, *, deadline: float | None = None):
         return
     paths = sorted(base.iterdir()) if deadline is None else base.iterdir()
     for path in paths:
+        if diagnostics is not None:
+            diagnostics.update(phase='traversal', current_owner=str(path))
         if deadline is not None and time.monotonic() > deadline:
             raise TimeoutError('evidence reference scan limit')
         if not _safe_local_path(root, path) and path.is_dir():
-            yield from _walk_local(root, path, deadline=deadline)
+            yield from _walk_local(root, path, deadline=deadline, diagnostics=diagnostics)
         else:
             yield path
 
@@ -163,6 +173,13 @@ def _reference_value_refusal(value: object, root: Path, target: Path, owner: Pat
                 if len(cache) < REFERENCE_VALUE_CACHE_LIMIT:
                     cache[cache_key] = False
                 continue
+            # Joining an origin cannot change a normalized terminal component
+            # except '.'/'..', which remain in simple_names and take the full path.
+            terminal = os.path.basename(os.path.normcase(os.path.normpath(name)))
+            if terminal not in simple_names:
+                if len(cache) < REFERENCE_VALUE_CACHE_LIMIT:
+                    cache[cache_key] = False
+                continue
             refs = [os.path.normcase(os.path.abspath(os.path.join(origin, name))) for origin in origins]
             # Only known routing fields at the vault/workspace boundary are metadata.
             if routing and any(ref in routing_roots for ref in refs):
@@ -178,58 +195,88 @@ def _reference_value_refusal(value: object, root: Path, target: Path, owner: Pat
 
 def _reference_refusal(root: Path, target: Path, digest: str, *, ignored_owners=(),
                        snapshots=None, max_file_bytes=None, max_total_bytes=None,
-                       historical_reports: bool = False, max_seconds=None) -> str:
+                       historical_reports: bool = False, max_seconds=None, diagnostics=None) -> str:
     """Input: Paths, digest str, exact owner paths, optional dict/byte limits/bool. Output: refusal str.
 
     Populate snapshots (dict[str, str]) with absolute owner names and SHA-256 of
     fully consumed, validated bytes. Callers must revalidate these before mutation.
     Exclusions are exact files inside the vault or its supported sibling runs.
+    Optional diagnostics dict records only progress/limits, never owner payloads.
     """
     from wqb.semantic_publication import _load
 
     root = Path(os.path.abspath(root))
     target = Path(os.path.abspath(target))
+    started = time.monotonic()
+    total = entries = 0
+    scan_key, verified, pending = None, {}, {}
+    state = diagnostics if diagnostics is not None else {}
+    state.clear()
+    state.update(phase='validate_limits', current_owner='', elapsed=0.0,
+                 bytes=0, entries=0, limiting_bound='')
+
+    def finish(reason: str, bound: str = '') -> str:
+        """Input: refusal/bound strings. Output: unchanged refusal; finalize compact diagnostic dict."""
+        if diagnostics is not None:
+            state.update(elapsed=max(0.0, time.monotonic() - started), bytes=total,
+                         entries=entries, limiting_bound=bound)
+        if scan_key is not None:
+            with _REFERENCE_PROOF_CACHE_LOCK:
+                _REFERENCE_PROOF_CACHE.pop(scan_key, None)
+                if not reason and len(pending) <= REFERENCE_ENTRY_LIMIT:
+                    _REFERENCE_PROOF_CACHE[scan_key] = dict(pending)
+                    while len(_REFERENCE_PROOF_CACHE) > REFERENCE_PROOF_CACHE_CONTEXTS:
+                        _REFERENCE_PROOF_CACHE.popitem(last=False)
+        return reason
+
     file_limit = REFERENCE_FILE_LIMIT if max_file_bytes is None else max_file_bytes
     total_limit = REFERENCE_TOTAL_LIMIT if max_total_bytes is None else max_total_bytes
     if any(type(limit) is not int or limit <= 0 for limit in (file_limit, total_limit)):
-        return 'evidence reference scan limit'
+        bound = 'file_bytes' if type(file_limit) is not int or file_limit <= 0 else 'total_bytes'
+        return finish('evidence reference scan limit', bound)
     seconds = REFERENCE_TIME_LIMIT if max_seconds is None else max_seconds
     if type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds <= 0:
-        return 'evidence reference scan limit'
+        return finish('evidence reference scan limit', 'time_seconds')
     deadline = time.monotonic() + seconds
     roots = [root / 'raw', root / 'machine', root / 'runs']
     if root.name == 'knowledge':
         roots.append(root.parent / 'runs')
     ignored = set()
+    state['phase'] = 'validate_exclusions'
     try:
         for item in ignored_owners:
             path = Path(item)
             if any(char in str(path) for char in '*?[]'):
-                return 'unsafe reference owner exclusion'
+                return finish('unsafe reference owner exclusion')
             path = Path(os.path.abspath(root / path))
             boundary = root
             if root.name == 'knowledge' and path.is_relative_to(root.parent / 'runs'):
                 boundary = root.parent
             if (_safe_local_path(boundary, path) or path == root
                     or (path.exists() and not path.is_file())):
-                return 'unsafe reference owner exclusion'
+                return finish('unsafe reference owner exclusion')
             ignored.add(path)
     except (OSError, TypeError, ValueError):
-        return 'unsafe reference owner exclusion'
-    total = entries = 0
+        return finish('unsafe reference owner exclusion')
+    scan_key = (str(root), str(target), digest, historical_reports,
+                tuple(sorted(str(path) for path in ignored)), REFERENCE_LINE_LIMIT, REFERENCE_ENTRY_LIMIT)
+    with _REFERENCE_PROOF_CACHE_LOCK:
+        verified = dict(_REFERENCE_PROOF_CACHE.get(scan_key, {}))
     try:
         for base in roots:
             boundary = root.parent if base == root.parent / 'runs' else root
-            for owner in _walk_local(boundary, base, deadline=deadline):
+            state.update(phase='traversal', current_owner=str(base))
+            for owner in _walk_local(boundary, base, deadline=deadline, diagnostics=diagnostics):
+                state.update(phase='traversal', current_owner=str(owner))
                 if time.monotonic() > deadline:
-                    return 'evidence reference scan limit'
+                    return finish('evidence reference scan limit', 'time_seconds')
                 if _safe_local_path(boundary, owner):
-                    return 'uncertain evidence references'
+                    return finish('uncertain evidence references')
                 if owner in ignored or not _is_reference_owner(root, owner, historical_reports=historical_reports):
                     continue
                 entries += 1
                 if entries > REFERENCE_ENTRY_LIMIT:
-                    return 'uncertain evidence references'
+                    return finish('uncertain evidence references', 'entries')
                 if owner.suffix.lower() not in {'.json', '.jsonl'} or not owner.is_file():
                     continue
                 if any(owner.is_relative_to(root / 'raw/maintenance' / name)
@@ -237,25 +284,59 @@ def _reference_refusal(root: Path, target: Path, digest: str, *, ignored_owners=
                     continue
                 if snapshots is not None:
                     snapshots.pop(str(owner), None)
+                state['phase'] = 'owner_metadata'
                 before = owner.stat()
                 if before.st_size > file_limit or total + before.st_size > total_limit:
-                    return 'evidence reference scan limit'
+                    bound = 'file_bytes' if before.st_size > file_limit else 'total_bytes'
+                    return finish('evidence reference scan limit', bound)
                 consumed = 0
                 sha = hashlib.sha256()
                 refusal = ''
                 path_context = _reference_path_context(root, target, owner)
+                state['phase'] = 'read_owner'
                 with owner.open('rb') as handle:
+                    if str(owner) in verified:
+                        while data := handle.read(REFERENCE_HASH_CHUNK_BYTES):
+                            consumed += len(data)
+                            total += len(data)
+                            bound = ('file_bytes' if consumed > file_limit else
+                                     'total_bytes' if total > total_limit else
+                                     'time_seconds' if time.monotonic() > deadline else '')
+                            if bound:
+                                return finish('evidence reference scan limit', bound)
+                            sha.update(data)
+                        after = owner.stat()
+                        if (consumed != before.st_size or _safe_local_path(boundary, owner)
+                                or any(getattr(before, field) != getattr(after, field) for field in
+                                       ('st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_ino', 'st_dev'))):
+                            return finish('evidence changed during scan')
+                        if sha.hexdigest() == verified[str(owner)]:
+                            pending[str(owner)] = sha.hexdigest()
+                            if snapshots is not None:
+                                snapshots[str(owner)] = sha.hexdigest()
+                            continue
+                        # Changed bytes receive the original full scan. Count
+                        # both reads against the same time/total-byte limits.
+                        handle.seek(0)
+                        consumed, sha = 0, hashlib.sha256()
                     rows = (iter(lambda: handle.readline(REFERENCE_LINE_LIMIT + 1), b'')
                             if owner.suffix.lower() == '.jsonl' else (handle.read(file_limit + 1),))
                     for data in rows:
+                        state['phase'] = 'read_owner'
                         consumed += len(data)
                         total += len(data)
-                        if (consumed > file_limit or total > total_limit or time.monotonic() > deadline
-                                or (owner.suffix.lower() == '.jsonl' and len(data) > REFERENCE_LINE_LIMIT)):
-                            return 'evidence reference scan limit'
+                        bound = ('file_bytes' if consumed > file_limit else
+                                 'total_bytes' if total > total_limit else
+                                 'time_seconds' if time.monotonic() > deadline else
+                                 'line_bytes' if owner.suffix.lower() == '.jsonl'
+                                 and len(data) > REFERENCE_LINE_LIMIT else '')
+                        if bound:
+                            return finish('evidence reference scan limit', bound)
                         sha.update(data)
                         if data.strip() or owner.suffix.lower() == '.json':
+                            state['phase'] = 'parse_owner'
                             value = _load(data)
+                            state['phase'] = 'reference_values'
                             reason = _reference_value_refusal(value, root, target, owner, digest, deadline,
                                                               path_context=path_context)
                             refusal = refusal or reason
@@ -263,16 +344,18 @@ def _reference_refusal(root: Path, target: Path, digest: str, *, ignored_owners=
                 if (consumed != before.st_size or _safe_local_path(boundary, owner)
                         or any(getattr(before, field) != getattr(after, field)
                                for field in ('st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_ino', 'st_dev'))):
-                    return 'evidence changed during scan'
+                    return finish('evidence changed during scan')
                 if snapshots is not None:
                     snapshots[str(owner)] = sha.hexdigest()
                 if refusal:
-                    return refusal
+                    return finish(refusal, 'time_seconds' if refusal == 'evidence reference scan limit' else '')
+                pending[str(owner)] = sha.hexdigest()
     except TimeoutError:
-        return 'evidence reference scan limit'
+        return finish('evidence reference scan limit', 'time_seconds')
     except (OSError, ValueError, RecursionError):
-        return 'uncertain evidence references'
-    return ''
+        return finish('uncertain evidence references')
+    state['phase'] = 'complete'
+    return finish('')
 
 
 def _is_reference_owner(root: Path, path: Path, *, historical_reports: bool = False) -> bool:
