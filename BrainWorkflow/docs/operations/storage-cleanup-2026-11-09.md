@@ -7,9 +7,9 @@ First collect reproducible desktop payloads, not raw knowledge, research state,
 profiles or unretired inventories. This is a file-maintenance operation, not a
 workflow/code migration, research resume or model/platform authorization.
 
-Future design requirement recorded separately: each self-contained tree execution
-package must retire after completion, retaining compact results and necessary
-audit/recovery evidence. No execution-package redesign is implemented here.
+Initial Batch A was file-only maintenance. The subsequently accepted execution
+package implementation and final outcomes are recorded below; historical batch
+statements describe their own checkpoint, not current deployment status.
 
 ## Exact Scope
 
@@ -122,7 +122,7 @@ uploaded with session contents. Do not rerun the one-shot deletion script.
 Combined Batch A+B net reclamation is **1,728,088,035 bytes** (~1.73 GB decimal).
 Old inventories and run-local knowledge recovery copies are still protected.
 
-## Batch C: Recovery Copy Scope (Pending Verification)
+## Batch C: Recovery Copy Scope (Completed)
 
 User named approval on Nov9 permits removal after verified lossless local archival
 of precisely these two expanded copies, including their contained `.obsidian`:
@@ -183,3 +183,59 @@ Keep installed payload, final compatible build `20261109-220044-3881`, and both
 previous protected Nov8/Nov6 releases. No profile, configuration or research path
 is included. Native collection must bind exact file hashes and reject links,
 live owners or source/target drift; outcome is recorded separately.
+
+Batch D completed under source commit `cfc356b6d328884b50019f992a1feff43ac9e05a`:
+four exact directories removed, **146,501,252 bytes** reclaimed. Staged source and
+proofs remain. Receipt: `superseded-builds-collected-20261109.json`.
+
+## Final Inventory Collection And Delivery (Nov10)
+
+After source commit `bdbb35b8701924819ba4815e9816a835441e2742` matched the
+remote branch, all three complete owner preaudits passed. The one-shot controller
+used the explicitly bounded1800-second local processing allowance, then repeated
+owner/hash/archive and source/Git checks through the official lifecycle API.
+These exact plan-local `inventory.jsonl` files were collected:
+
+- `machine/semantic_jobs/0d4647b571b22371f8bacaec701965f916282ef534dfc1d9e2caad34609b9c97/inventory.jsonl`
+- `machine/semantic_jobs/23d66f9281475febb505dc1e36dfae9e40b81bcac5db264421ab305d931aaab3/inventory.jsonl`
+- `machine/semantic_jobs/92557c1ddb62f0bdee6ae730bda5a34d9c885eb0045fa4b9f91ed7ce97333d4a/inventory.jsonl`
+
+Originals total2,085,907,593 bytes; verified lossless archives179,879,201 bytes;
+net reclamation **1,906,028,392 bytes**. The plans are read-only historical
+evidence with authenticated archive readers, not resumable research authority.
+Private receipt: `old-inventories-retired-20261109-archive-view-bounded.json`.
+Earlier protected/time-limited diagnostics remain unchanged, not erased.
+
+Across A/B/C/D and these inventories, net audited reclamation is
+**4,905,479,780 bytes** (4.91 GB decimal). This is the sum of scoped receipts,
+not a claim that total workspace size fell by exactly that amount: accepted new
+application/source/proofs and necessary archives also occupy space.
+
+After collection, all229 protected source/configuration/state/accounting files
+matched their pre-collection hashes (`protected-cleanup-verification-20261109.json`).
+Current raw, canonical `.obsidian`, original research/check/POST/accounting
+evidence, dependencies, installed application and verified rollback remain.
+No recurring age sweep or blanket deletion of `runs/` is authorized.
+
+Native build `20261109-230304-5482` is installed and opened. Loaded code revision
+`6835d7b83fd37f3441a95f47115b986f86d9bd999c047267ae4110afa9a9740f`
+matches the verified package; four options, Start/Stop available, no blocker.
+The new-only preplanned/package flags are1. No Start was pressed and mission
+state hashes stayed unchanged. No model/platform/research/submission calls.
+
+New tree packages are script-sealed and automatically retired only after proven
+tree/Seed/Repair/record completion; Pause, budget wait and unresolved work never
+qualify. Necessary compact scientific/check/identity evidence remains. Automatic
+general desktop-build garbage collection is **not implemented**: build payload
+collection in this audit was explicit one-shot maintenance, not a new scheduler.
+Source acceptance uses the separately labeled code-plus-document composite
+described in the historical-storage plan; it does not relabel a failed full-suite
+receipt as passing or claim a full rerun after document compaction.
+
+Post-collection storage/recovery/entry regressions:226 tests passed in66.609s,
+2 skipped; after final entry-document edits another24 checks passed in0.101s.
+The no-content, no-link-following long-path audit completed without errors:
+workspace2,894,873,335 logical bytes, including knowledge1,470,266,038,
+runs146,581,062 and shared repository/product1,263,956,408. These are a point-in-
+time size observation, not deletion candidates; browser/application logs may grow.
+Private audit: `storage-totals-20261110.json` under desktop-validation.

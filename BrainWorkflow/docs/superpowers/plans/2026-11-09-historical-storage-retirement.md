@@ -25,11 +25,11 @@ Owners: existing `knowledge_derivative_lifecycle.py`, `semantic_inventory_archiv
 `full_semantic_execution.py`/coverage readers only where archive fallback is needed;
 tests for archive/read/retire contracts. Central CLI/maintenance wiring belongs to main.
 
-- [ ] Reproduce the actual three legacy plans' audit barriers in bounded offline fixtures. Inventory actual consumer paths; do not label generic audit-only reasons as proven live dependencies.
-- [ ] Distinguish verified historical/read-only plans from active tasks and retain original plan/job/accounting bytes.
-- [ ] Reuse lossless archive support and authenticated retired read bridge; classify references by their declared role, not a substring match alone.
-- [ ] RED/GREEN replacement/archival coverage, active worker refusal, altered raw/job/archive detection, concurrency/crash/idempotent recovery.
-- [ ] Expose plan/audit/collect through explicit maintenance API; script-bound exact path approval remains mandatory.
+- [x] Reproduce the actual three legacy plans' audit barriers in bounded offline fixtures. Inventory actual consumer paths; do not label generic audit-only reasons as proven live dependencies.
+- [x] Distinguish verified historical/read-only plans from active tasks and retain original plan/job/accounting bytes.
+- [x] Reuse lossless archive support and authenticated retired read bridge; classify references by their declared role, not a substring match alone.
+- [x] RED/GREEN replacement/archival coverage, active worker refusal, altered raw/job/archive detection, concurrency/crash/idempotent recovery.
+- [x] Expose plan/audit/collect through explicit maintenance API; script-bound exact path approval remains mandatory.
 
 ## Task 2: Run-Local Recovery Copy Lifecycle
 
@@ -54,17 +54,29 @@ collection remain Task4, not implied by these completed implementation items.
 
 Owners: existing build/maintenance completion interfaces and a focused lifecycle helper if required; no new scheduler/agent.
 
-- [ ] Define current/installed/verified-rollback plus compact proof/source retention, with visible byte estimates and refusal reasons.
-- [ ] Reuse Batch A's containment/hashes/metadata preservation approach; never sweep profile/session files.
+- [x] Define current/installed/verified-rollback plus compact proof/source retention, with visible byte estimates and refusal reasons.
+- [x] Reuse Batch A's containment/hashes/metadata preservation approach; never sweep profile/session files.
 - [ ] Integrate approved collection after successful publication/build verification, not on every arbitrary status GET.
-- [ ] Enumerate precise browser/cache/profile paths for separate human deletion approval; continue independent safe work while waiting.
+- [x] Enumerate precise browser/cache/profile paths for separate human deletion approval; continue independent safe work while waiting.
+
+General automatic build-payload collection remains deferred: this maintenance
+used exact one-shot approved scopes. Tree-package completion retirement is
+implemented independently; no recurring cleanup process was introduced.
 
 ## Task 4: Actual Migration And Guarded Collection
 
-- [ ] Offline tests/review and immutable source proof; commit/push and verify local/remote equality.
-- [ ] Audit actual vault and run owners, freeze exact path/digest manifests, retain lossless necessary evidence.
-- [ ] Apply only proven safe ordinary-file candidates. Sensitive candidates require named approval; unresolved owners remain explicit blockers.
-- [ ] Verify sources/authority/app/next legal action, report actual reclaimed and residual bytes, sync outcome and update root handoff.
+- [x] Offline tests/review and immutable source proof; commit/push and verify local/remote equality.
+- [x] Audit actual vault and run owners, freeze exact path/digest manifests, retain lossless necessary evidence.
+- [x] Apply only proven safe ordinary-file candidates. Sensitive candidates require named approval; unresolved owners remain explicit blockers.
+- [x] Verify sources/authority/app/next legal action, report actual reclaimed and residual bytes, sync outcome and update root handoff.
+
+Nov10 outcome: all three exact inventories collected through authenticated
+retirement after complete preaudits, preserving179,879,201 archive bytes;
+229 protected files unchanged. Native230304 installed/loaded6835d7b8,
+four options, Start/Stop available, no blocker and no Start pressed.
+Total scoped net reclamation4,905,479,780 bytes. Exact scopes/private receipts
+and retained exclusions are in the storage-cleanup audit. No platform/model/
+research/submission or old-run proof/authority changes were made.
 
 Historical cleanup and execution-package implementation can progress independently;
 do not conflate deleting a large file with removing runtime knowledge dependency.

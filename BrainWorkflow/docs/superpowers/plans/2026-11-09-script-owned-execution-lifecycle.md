@@ -89,8 +89,8 @@ candidate. Full-suite/native release acceptance remains Task4, not inferred here
 - [x] Offline acceptance compares original versus package-backed branch/Seed/Repair results; candidate cache does not repeat SELF/PROD after retirement.
 - [x] Review full branch, close important findings, freeze source and run full offline suite.
 - [x] Update canonical architecture/rules/handoff and operator docs with changed/unchanged boundaries.
-- [ ] Build/test installed native application; Git sync before guarded collection/deployment; loaded-version check without Start.
-- [ ] Integrate historical storage plan, report actual reclaimed bytes and protected exclusions; sync cleanup outcome.
+- [x] Build/test installed native application; Git sync before guarded collection/deployment; loaded-version check without Start.
+- [x] Integrate historical storage plan, report actual reclaimed bytes and protected exclusions; sync cleanup outcome.
 
 Approved scope is the Nov9 user-confirmed design and script-owned clarification.
 Task status/evidence and exact interrupted next command belong in root todo.md.
@@ -103,4 +103,9 @@ independent review passed. Native build `20261109-220044-3881` and isolated
 GUI/backend/worker smoke passed, revision
 `74d3265be46304e55b8ae6e7baaa821037e44f9600aea47b7a4aa609ce80a77f`.
 Private proofs remain in desktop-validation; no platform/model/research calls.
-Installation, new-only policy activation and actual collection remain pending.
+This initial proof was superseded by the reviewed namespace-closure code/document
+composite in the historical-storage plan. Nov10 delivery installed build230304,
+verified loaded revision6835d7b8, enabled new-only package/preplanned flags and
+opened the app without Start. All229 protected files remained unchanged after
+actual collection. Audited net reclamation4,905,479,780 bytes; exact receipts and
+retained exclusions: `docs/operations/storage-cleanup-2026-11-09.md`.
