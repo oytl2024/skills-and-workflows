@@ -55,6 +55,9 @@ REFERENCE_TIME_LIMIT = 30.0
 REFERENCE_VALUE_CACHE_LIMIT = 10000
 REFERENCE_PROOF_CACHE_CONTEXTS = 4
 REFERENCE_HASH_CHUNK_BYTES = 1024 * 1024
+REFERENCE_PATH_MAP_FIELDS = {'evidence_refs', 'dependencies', 'file_hashes', 'snapshots'}
+REFERENCE_COMMAND_FIELDS = {'command', 'argv'}
+REFERENCE_SOURCE_LABELS = {'knowledge', 'cache', 'live'}
 _REFERENCE_PROOF_CACHE = OrderedDict()
 _REFERENCE_PROOF_CACHE_LOCK = Lock()
 RAW_REFERENCE_MANIFESTS = {'manifest.json', 'capture_manifest.json', 'learn_capture_manifest.json'}
@@ -148,17 +151,23 @@ def _reference_value_refusal(value: object, root: Path, target: Path, owner: Pat
                              digest: str, deadline: float, *, path_context=None) -> str:
     """Input: parsed object, Paths, digest str, deadline float. Output: str; inspect non-routing references."""
     origins, ancestors, routing_roots, simple_names, cache = path_context or _reference_path_context(root, target, owner)
-    values = [(value, False)]
+    values = [(value, False, '')]
     while values:
         if time.monotonic() > deadline:
             return 'evidence reference scan limit'
-        value, routing = values.pop()
+        value, routing, field = values.pop()
         if isinstance(value, dict):
-            values.extend((key, False) for key in value)
-            values.extend((item, key in {'root', 'knowledge_root'}) for key, item in value.items())
+            # Category names are symbols; explicit path maps and path-shaped keys are references.
+            values.extend((key, False, '') for key in value if isinstance(key, str)
+                          and (key == digest or field in REFERENCE_PATH_MAP_FIELDS
+                               or any(mark in key for mark in '/\\:.')))
+            values.extend((item, key in {'root', 'knowledge_root'}, key) for key, item in value.items())
         elif isinstance(value, list):
-            values.extend((item, False) for item in value)
+            values.extend((item, field in REFERENCE_COMMAND_FIELDS and index > 0
+                           and value[index - 1] == '--knowledge-root', '') for index, item in enumerate(value))
         elif isinstance(value, str):
+            if field == 'field_source' and value in REFERENCE_SOURCE_LABELS:
+                continue
             if digest and value == digest:
                 return 'referenced evidence digest'
             cache_key = (value, routing)
@@ -193,6 +202,16 @@ def _reference_value_refusal(value: object, root: Path, target: Path, owner: Pat
     return ''
 
 
+def _recovery_archive_owner(root: Path, owner: Path) -> tuple | None:
+    """Input: vault/record Paths. Output: exact historical run/copy selector or None; no filename-only exemptions."""
+    if root.name != 'knowledge' or not owner.is_relative_to(root.parent / 'runs'):
+        return None
+    parts = owner.relative_to(root.parent / 'runs').parts
+    if len(parts) != 5 or parts[1:3] != ('runtime', 'knowledge_recovery') or parts[4] != 'copy_retirement.json':
+        return None
+    return root.parent / 'runs' / parts[0], '/'.join(parts[1:4]) + '/knowledge'
+
+
 def _reference_refusal(root: Path, target: Path, digest: str, *, ignored_owners=(),
                        snapshots=None, max_file_bytes=None, max_total_bytes=None,
                        historical_reports: bool = False, max_seconds=None, diagnostics=None) -> str:
@@ -210,6 +229,7 @@ def _reference_refusal(root: Path, target: Path, digest: str, *, ignored_owners=
     started = time.monotonic()
     total = entries = 0
     scan_key, verified, pending = None, {}, {}
+    dependency_proofs = {}
     state = diagnostics if diagnostics is not None else {}
     state.clear()
     state.update(phase='validate_limits', current_owner='', elapsed=0.0,
@@ -293,9 +313,10 @@ def _reference_refusal(root: Path, target: Path, digest: str, *, ignored_owners=
                 sha = hashlib.sha256()
                 refusal = ''
                 path_context = _reference_path_context(root, target, owner)
+                recovery_owner = _recovery_archive_owner(root, owner)
                 state['phase'] = 'read_owner'
                 with owner.open('rb') as handle:
-                    if str(owner) in verified:
+                    if str(owner) in verified and recovery_owner is None:
                         while data := handle.read(REFERENCE_HASH_CHUNK_BYTES):
                             consumed += len(data)
                             total += len(data)
@@ -336,6 +357,13 @@ def _reference_refusal(root: Path, target: Path, digest: str, *, ignored_owners=
                         if data.strip() or owner.suffix.lower() == '.json':
                             state['phase'] = 'parse_owner'
                             value = _load(data)
+                            if recovery_owner is not None:
+                                from wqb.knowledge_recovery_retirement import retired_recovery_reference_view
+                                value, dependencies = retired_recovery_reference_view(*recovery_owner, value, deadline)
+                                for name, expected in dependencies.items():
+                                    if dependency_proofs.get(name, expected) != expected:
+                                        return finish('evidence changed during scan')
+                                    dependency_proofs[name] = expected
                             state['phase'] = 'reference_values'
                             reason = _reference_value_refusal(value, root, target, owner, digest, deadline,
                                                               path_context=path_context)
@@ -354,6 +382,11 @@ def _reference_refusal(root: Path, target: Path, digest: str, *, ignored_owners=
         return finish('evidence reference scan limit', 'time_seconds')
     except (OSError, ValueError, RecursionError):
         return finish('uncertain evidence references')
+    if snapshots is not None:
+        for name, expected in dependency_proofs.items():
+            if snapshots.get(name, expected) != expected:
+                return finish('evidence changed during scan')
+            snapshots[name] = expected
     state['phase'] = 'complete'
     return finish('')
 

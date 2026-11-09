@@ -163,6 +163,15 @@ Native literal-path preflight validates each remaining member hash and rejects
 unexpected files, links or named live consumers. This is preparation only; the
 expanded directories remain until the final collection outcome is recorded.
 
+Batch C collected after source commit `cfc356b6d328884b50019f992a1feff43ac9e05a`
+matched the remote branch and3315 offline tests passed (9 skips). The two exact
+expanded directories, including their approved `.obsidian`, were removed under
+the recovery/intent fences after another complete archive/reference audit and
+native member-hash check. Both archives and original receipts/sources remain.
+Removed1,148,689,378 bytes; retained23,827,277 archive bytes; net reclamation
+**1,124,862,101 bytes**. Private result: `collected-recovery-history-20261109.json`.
+Current canonical knowledge configuration was not a deletion target.
+
 ## Batch D: Superseded Nov9 Build Payloads
 
 After the compatible release passes full verification and Git sync, collect only

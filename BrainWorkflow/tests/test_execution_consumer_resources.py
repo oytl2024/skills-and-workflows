@@ -145,4 +145,3 @@ class ExecutionConsumerResourcesTests(unittest.TestCase):
         self.assertEqual(len(after['variants']), 1)
         self.assertNotEqual(after['variants'][0]['expression_hash'],
                             before['variants'][0]['expression_hash'])
-

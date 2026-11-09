@@ -660,6 +660,19 @@ def _read_history(run: Path, copy_path: str, deadline: float) -> dict:
     return marker
 
 
+def retired_recovery_reference_view(run_dir: Path, copy_path: str, record: dict, deadline: float) -> tuple:
+    """Input: owner/copy Paths, parsed marker and deadline. Output: live-reference view plus consumed dependency SHA map."""
+    run = Path(os.path.abspath(run_dir))
+    marker = _history(run, copy_path, min(deadline, time.monotonic() + MAX_SECONDS))
+    if record != marker:
+        raise ValueError('recovery archive marker changed during reference inspection')
+    dependencies = {str(run.parent.parent / name): digest for name, digest in marker['evidence_refs'].items()}
+    dependencies[str(run / marker['archive_ref']['path'])] = marker['archive_ref']['sha256']
+    # Members are relative to the verified ZIP, never to the current global vault.
+    view = {name: value for name, value in marker.items() if name != 'manifest'}
+    return view, dependencies
+
+
 def prepare_recovery_copy_retirement(run_dir: Path, copy_path: str) -> dict:
     """Input: exact closed copy selector. Output: immutable lossless-history marker; never removes expanded bytes."""
     run, copy, job = _paths(run_dir, copy_path)

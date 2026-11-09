@@ -68,3 +68,52 @@ Owners: existing build/maintenance completion interfaces and a focused lifecycle
 
 Historical cleanup and execution-package implementation can progress independently;
 do not conflate deleting a large file with removing runtime knowledge dependency.
+
+## Reference Namespace Closure
+
+Actual collection exposed a cross-lifecycle mismatch: authenticated recovery
+archive manifests list members relative to the ZIP, not to the current vault.
+The owning recovery module now exports a read-only reference view only after
+verifying closed ownership, canonical marker and complete lossless archive. Its
+closure/ZIP hashes join the inventory collector's consumed dependency snapshots;
+contextual records never qualify for a marker-only warm-cache skip.
+
+Reference roles are independent of scientific resource admission. Symbolic JSON
+category keys, the explicit `field_source` enum and canonical `--knowledge-root`
+command routing do not select every file under a vault. Explicit paths, path-map
+keys, exact content digests (including digest-keyed maps), unknown input arguments
+and noncanonical subdirectory selectors remain protected. New cross-lifecycle
+tests cover corrupt archives, dependency drift, warm-cache validation and real
+input controls. AST/type/tree/Seed/Repair, Stop and accounting are unchanged.
+The2647-small-record diagnostic found no remaining positives after this change;
+13 large records were skipped, so it is not collection authorization. A full
+bounded owner scan and a fresh code proof/Git equality remain required.
+
+Local-workload ruling: the first complete-owner attempt reached900s/457MB and
+stopped before finishing, with no collection. The one-shot maintenance controller
+therefore supplies1800s via the existing lifecycle processing constant, recorded
+in its local audit and explicit release barrier. Product defaults remain900s
+(generic scans30s); source predicates,2GB byte bound, archive/owner validation and
+research budgets/time/Stop are unchanged. This is not acceptance of a timed-out
+scan: every owner must still finish and bind its current bytes before collection.
+
+Verification ruling: the262a8a22 code/test version completed3317 cases with9 skips
+and only the outer todo-length check failing (25022 versus25000 characters).
+No Python/test inputs changed. `scripts/verify_document_only_release.ps1` permits
+only that registered document failure, verifies current full discovery count and
+unchanged source, reruns both document modules, and emits separately labeled
+composite evidence. It preserves the original failure/log and never waives code
+failures or claims the full suite was rerun. The standalone maintenance verifier
+has independent predicate/filesystem selftests; its hash is recorded in the
+composite proof. This keeps mutable handoffs orthogonal to scientific regression.
+
+Accepted source/doc evidence: unchanged Python/test digest
+`262a8a221a185deb713d05495c6ac68f9335c3d9f513287862005cbde8278281`;
+the3317-case full run had9 skips and only the registered document-length failure.
+After handoff compaction the24 document checks passed. The verifier's14 predicate
+and filesystem checks passed, including no-replace output and consumed-byte hash
+binding; focused review closed both evidence-race findings. The separate
+`console-delivery-composite-release-20261109-archive-view-final.json` retains the
+original failed receipt/log hashes and explicitly records that the full suite
+was not rerun and no code failures were waived. Native230304 build/smoke passed,
+revision `6835d7b83fd37f3441a95f47115b986f86d9bd999c047267ae4110afa9a9740f`.

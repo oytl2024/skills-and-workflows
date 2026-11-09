@@ -14,6 +14,61 @@ from wqb import knowledge_recovery
 
 
 class RecoveryCopyRetirementTests(unittest.TestCase):
+    def test_reference_roles_separate_labels_routes_and_explicit_inputs(self):
+        """Input: categorical keys, catalog source labels and CLI roots. Output: only real input selectors protect."""
+        import time
+        from wqb.knowledge_clean_compile import _reference_value_refusal
+        root = self.workspace / 'knowledge'
+        target = root / 'machine/semantic_jobs' / ('d' * 64) / 'inventory.jsonl'
+        owner = self.run / 'metadata.json'
+        harmless = (
+            dict(field_source='knowledge'),
+            dict(resources=dict(knowledge=dict(status='unknown'))),
+            dict(command=['python', '--knowledge-root', str(root)]),
+        )
+        for value in harmless:
+            with self.subTest(value=value):
+                self.assertEqual(_reference_value_refusal(value, root, target, owner, '', time.monotonic() + 5), '')
+        real_inputs = (
+            dict(evidence_path='machine'),
+            dict(evidence_refs=dict(machine='file_digest')),
+            dict(command=['python', '--knowledge-root', str(root), '--input-dir', str(root)]),
+            dict(command=['python', '--knowledge-root', str(root / 'machine')]),
+            dict(untyped_list=['--knowledge-root', str(root)]),
+        )
+        for value in real_inputs:
+            with self.subTest(value=value):
+                self.assertEqual(_reference_value_refusal(value, root, target, owner, '', time.monotonic() + 5),
+                                 'referenced evidence path')
+        digest = 'e' * 64
+        self.assertEqual(_reference_value_refusal(dict(by_sha256={digest: dict(status='retained')}),
+            root, target, owner, digest, time.monotonic() + 5), 'referenced evidence digest')
+
+    def test_inventory_scan_uses_the_authenticated_archive_member_namespace(self):
+        """Input: verified copied machine/ members. Output: no live inventory dependency, with all archive proofs retained."""
+        from wqb.knowledge_clean_compile import _reference_refusal
+        from wqb.knowledge_derivative_lifecycle import _check_snapshots
+        retirement = self.module()
+        root = self.workspace / 'knowledge'
+        target = root / 'machine/semantic_jobs' / ('d' * 64) / 'inventory.jsonl'
+        self.write(target, b'global inventory bytes\n')
+        marker = retirement.prepare_recovery_copy_retirement(self.run, self.copy_path)
+        snapshots = {}
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        self.assertEqual(_reference_refusal(root, target, digest, snapshots=snapshots), '')
+        archive = self.run / marker['archive_ref']['path']
+        self.assertEqual(snapshots[str(archive)], marker['archive_ref']['sha256'])
+        _check_snapshots(root, snapshots)
+        before = archive.read_bytes()
+        self.write(archive, before + b'tampered')
+        with self.assertRaises(ValueError):
+            _check_snapshots(root, snapshots)
+        # A previous successful reference scan cannot hide changed archive dependencies.
+        self.assertTrue(_reference_refusal(root, target, digest, snapshots={}))
+        self.write(archive, before)
+        self.record(self.run / 'real_input.json', dict(evidence_path=str(target)))
+        self.assertEqual(_reference_refusal(root, target, digest), 'referenced evidence path')
+
     def test_external_jsonl_scan_buffers_the_pinned_raw_stream(self):
         """Input: real pinned raw handles. Output: JSONL parsing never uses byte-wise raw readline."""
         retirement = self.module()
