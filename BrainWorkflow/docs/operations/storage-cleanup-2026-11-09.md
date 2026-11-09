@@ -109,3 +109,15 @@ credentials elsewhere, research evidence, inventory or application binaries.
 Commit/push this audit and verify branch equality before literal-path deletion;
 run affected desktop/entry regressions and sync the resulting receipt afterward.
 Lifecycle implementation remains an independent uncommitted maintenance change.
+
+Batch B completed after audit commit `2c16e792bb64cb5a823c6f4583e1045ea0fefc8e`
+matched the remote branch. Both exact directories were removed, reclaiming
+**595,134,023 logical bytes**. No process owned either target and no links were
+found on the final pre-removal pass. Current WebView2 remains present; installed
+EXE SHA256 stayed `3423119e618a2978143562af8292f37f1ab71c3f9921d9c055a20bc48ff864fd`.
+Pre/post affected desktop/entry suites both passed 67 tests (13.995s/10.903s).
+Private receipt: `output/desktop-validation/named-profile-cleanup-result-20261109.json`;
+private audited script: `remove-named-profiles-20261109.ps1` beside it. Neither is
+uploaded with session contents. Do not rerun the one-shot deletion script.
+Combined Batch A+B net reclamation is **1,728,088,035 bytes** (~1.73 GB decimal).
+Old inventories and run-local knowledge recovery copies are still protected.
