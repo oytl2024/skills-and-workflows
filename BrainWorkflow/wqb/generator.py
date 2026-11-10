@@ -1,11 +1,20 @@
 from typing import Any
+import ast
 
 from wqb.models import AlphaCandidate
 from wqb.semantics import select_semantic_field_pairs
+from wqb.template_binding import bind_template, TemplateBindingError
 
 
 LOOKBACKS = [5, 10, 20, 60, 120]
 BACKFILLS = [20, 60]
+SCHEDULED_DECAYS = [0, 4, 8, 12, 20]
+SCHEDULED_NEUTRALIZATIONS = ['SUBINDUSTRY', 'INDUSTRY', 'SECTOR']
+LEGACY_HORIZON_PARAMETERS = {
+    'ts_mean': (1, 'd'), 'ts_zscore': (1, 'd'), 'ts_delta': (1, 'd'),
+    'ts_rank': (1, 'd'), 'ts_sum': (1, 'd'), 'ts_std_dev': (1, 'd'),
+    'ts_backfill': (1, 'lookback'),
+}
 FAST_D1_SUFFIX = "_fast_d1"
 BASE_TEMPLATES = [
     "rank({field})",
@@ -142,9 +151,158 @@ def build_settings(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _legacy_horizons(expression: str) -> list[str]:
+    """Input: bound expression str. Output: list[str]. Vary known legacy horizon positions, never arbitrary literals."""
+    variants = []
+    for window in LOOKBACKS:
+        node = ast.parse(expression, mode='eval')
+        changed = False
+        for call in ast.walk(node):
+            if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+                continue
+            position = LEGACY_HORIZON_PARAMETERS.get(call.func.id)
+            if position is None:
+                continue
+            index, name = position
+            values = ([call.args[index]] if len(call.args) > index else [])
+            values.extend(kw.value for kw in call.keywords if kw.arg == name)
+            for value in values:
+                if isinstance(value, ast.Constant) and type(value.value) is int and value.value in LOOKBACKS:
+                    value.value = window
+                    changed = True
+        variants.append(ast.unparse(node) if changed else expression)
+    return list(dict.fromkeys(variants))
+
+
+def generate_scheduled_candidates(fields: list[dict], settings: dict, template: dict,
+                                  maximum: int, *, operator_rows: list[dict] | None = None,
+                                  scope: dict | None = None) -> list[AlphaCandidate]:
+    """Input: field metadata, settings, validated template dict and cap. Output: candidates preserving the scheduled kernel."""
+    skeleton = template.get('skeleton', '')
+    if not template.get('template_id') or not template.get('hypothesis') or not isinstance(skeleton, str):
+        raise ValueError('scheduled template requires identity, hypothesis and skeleton')
+    if maximum <= 0:
+        return []
+    version = template.get('binding_version', 1)
+    if type(version) is not int or version not in (1, 2):
+        raise TemplateBindingError('unsupported binding_version')
+    if version == 2:
+        for setting_key, scope_key in [('region', 'region'), ('delay', 'delay'), ('universe', 'universe'),
+                                       ('instrumentType', 'instrument_type'), ('instrument_type', 'instrument_type')]:
+            if setting_key in settings and (scope_key not in (scope or {}) or
+                    type(settings[setting_key]) is not type(scope[scope_key]) or settings[setting_key] != scope[scope_key]):
+                raise TemplateBindingError(f'settings.{setting_key} contradicts binding scope.{scope_key}')
+    rows, seen = [], set()
+    snapshots = [fields] if version == 2 else [[field] for field in fields]
+    for snapshot in snapshots:
+        binding = bind_template(template, snapshot, operator_rows or [], scope or {})
+        base = binding['bound_expression']
+        if version == 2:
+            # v2 only varies explicit window placeholders; all literal weights/thresholds are fixed.
+            horizons = [base]
+            if '{window}' in skeleton:
+                horizons.extend(bind_template(template, snapshot, operator_rows or [],
+                                              {**(scope or {}), 'window': window})['bound_expression']
+                                for window in LOOKBACKS)
+            horizons = list(dict.fromkeys(horizons))
+            from wqb.research_workflow import precheck_expression
+            for expression in horizons:
+                precheck = precheck_expression(expression, 'scout')
+                if not precheck.ok:
+                    raise TemplateBindingError('; '.join(precheck.reasons))
+        else:
+            horizons = _legacy_horizons(base)
+        directions = [1] if version == 2 or len(horizons) > 1 else [1, -1]
+        preferred = template.get('preferred_decay', SCHEDULED_DECAYS[0])
+        if type(preferred) is not int or preferred not in SCHEDULED_DECAYS:
+            raise ValueError('preferred decay outside bounded research plan')
+        decays = [preferred, *[value for value in SCHEDULED_DECAYS if value != preferred]]
+        for decay in decays:
+            for expression in horizons:
+                for neutralization in SCHEDULED_NEUTRALIZATIONS:
+                    for direction in directions:
+                        variant = expression if direction == 1 else f'-({expression})'
+                        selected = {**settings, 'decay': decay, 'neutralization': neutralization}
+                        identity = (variant, decay, neutralization)
+                        if identity in seen:
+                            continue
+                        seen.add(identity)
+                        rows.append(AlphaCandidate(variant, selected, 0,
+                                                  tags=['scheduled', str(template['template_id'])]))
+                        if len(rows) >= maximum:
+                            return rows
+    return rows
+
+
 def simulation_payload(settings: dict[str, Any], expression: str) -> dict[str, Any]:
     """Input: settings and expression. Output: WQB regular simulation payload."""
     return {"type": "REGULAR", "settings": settings, "regular": expression}
+
+
+def generate_hypothesis_candidates(snapshot: dict, scheduled_hypotheses: list[dict], maximum: int) -> list[AlphaCandidate]:
+    """Input: frozen snapshot dict, persisted selected bindings list[dict], cap int. Output: actual AlphaCandidate list.
+
+    No fresh field discovery or new variants: consume the planner's exact
+    expression/settings and verified typed bindings. Invalid/duplicate plans
+    block rather than silently submit a partial different plan.
+    """
+    from wqb.hypothesis_selection import select_hypothesis_batch
+    result = select_hypothesis_batch(snapshot, scheduled_hypotheses, maximum)
+    if snapshot.get('research_policy', {}).get('paired_scout') and len(result['selected']) != len(scheduled_hypotheses):
+        raise TemplateBindingError('paired plan cannot be truncated into an unfunded half-pair')
+    if any(row['code'] not in ('selected', 'batch_limit') for row in result['reasons']):
+        raise TemplateBindingError('scheduled hypothesis binding invalid: ' + str(result['reasons']))
+    return [AlphaCandidate(row['bound_expression'], dict(row['settings']), 0,
+                           tags=['scheduled', 'hypothesis_v2', row['hypothesis_id'], row['candidate_id']])
+            for row in result['selected']]
+
+
+def hypothesis_candidate_metadata(snapshot: dict, binding: dict, plan_receipt: str) -> dict:
+    """Input: frozen snapshot/candidate binding dicts, receipt path str. Output: per-candidate lineage dict. Never label a batch by its first field."""
+    import copy
+    import json
+    from pathlib import Path
+    from wqb.hypothesis_selection import select_hypothesis_batch, binding_field_rows, binding_group_id
+    result = select_hypothesis_batch(snapshot, [binding], 1)
+    if len(result['selected']) != 1:
+        raise TemplateBindingError('cannot audit invalid hypothesis candidate')
+    template = next(row for row in snapshot['template_rows'] if row['template_id'] == binding['template_id']
+                    and row['hypothesis_id'] == binding['hypothesis_id'] and row['hypothesis_version'] == binding['hypothesis_version'])
+    audit = dict(hypothesis_binding_version=2, hypothesis_binding=binding,
+        template_id=binding['template_id'], hypothesis_id=binding['hypothesis_id'],
+        hypothesis_version=binding['hypothesis_version'], binding_id=binding_group_id(binding),
+        bindings=binding['bindings'], operator_provenance=binding['operator_provenance'],
+        template_provenance=template, source_provenance=binding_field_rows(snapshot, binding),
+        semantic_release=snapshot.get('semantic_release'), ai_plan_receipt=plan_receipt)
+    if snapshot.get('research_policy', {}).get('paired_scout'):
+        saved = json.loads(Path(plan_receipt).read_text(encoding='utf-8'))
+        if saved['config_patch'].get('hypothesis_execution_kind') == 'paired_scout':
+            from wqb.cli import simulation_identity_hash
+            sidecar = read_experiment_sidecar(plan_receipt, snapshot)
+            identity = simulation_identity_hash(binding['bound_expression'], binding['settings'])
+            audit['experiment_arms'] = [row for row in sidecar['arms'] if row['expression_hash'] == identity]
+    return copy.deepcopy(audit)
+
+
+def read_experiment_sidecar(plan_receipt: str, snapshot: dict) -> dict:
+    """Input: durable receipt path str/frozen snapshot dict. Output: verified sidecar dict. No executor or identity changes."""
+    import hashlib
+    import json
+    from pathlib import Path
+    receipt_path = Path(plan_receipt)
+    saved = json.loads(receipt_path.read_text(encoding='utf-8'))
+    patch = saved['config_patch']
+    path = Path(patch['experiment_sidecar_path'])
+    if path != receipt_path.with_suffix('.experiments.json') or patch['hypothesis_snapshot'] != snapshot:
+        raise TemplateBindingError('paired sidecar path or frozen snapshot mismatch')
+    raw = path.read_bytes()
+    sidecar = json.loads(raw)
+    if (saved.get('status') != 'ready' or hashlib.sha256(raw).hexdigest() != patch['experiment_sidecar_sha256']
+            or sidecar.get('manifest_sha256') != saved['identity']['manifest_sha256']
+            or sidecar.get('arms') != saved['selection']['sidecars']
+            or sidecar.get('experiments') != saved['selection']['experiments']):
+        raise TemplateBindingError('paired sidecar digest or complete arm linkage mismatch')
+    return sidecar
 
 
 def regular_field_id(field_id: str) -> str | None:

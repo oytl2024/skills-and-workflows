@@ -1,7 +1,9 @@
 import unittest
 from unittest.mock import patch
 
+from wqb.client import WQBClient
 from wqb.simulator import (
+    SimulationPollTimeout,
     extract_alpha_id,
     extract_alpha_ids,
     poll_simulation,
@@ -39,7 +41,30 @@ class FakeClient:
         return self.responses.pop(0)
 
 
+class FakeClientSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.headers = {}
+        self.requests = []
+
+    def request(self, method, url, **kwargs):
+        self.requests.append((method, url, kwargs))
+        return self.responses.pop(0)
+
+
+class FakeClientResponse(FakeResponse):
+    def __init__(self, headers=None, payload=None, status_code=200):
+        super().__init__(headers=headers, payload=payload)
+        self.status_code = status_code
+
+
 class SimulatorTests(unittest.TestCase):
+    def test_zero_retry_after_is_paced_not_busy_looped(self):
+        client = FakeClient([FakeResponse(headers={"Retry-After": "0"}), FakeResponse(payload={"alpha": "a"})])
+        with patch("wqb.simulator.cooperative_sleep") as sleep:
+            self.assertEqual(poll_simulation(client, "/simulations/a"), {"alpha": "a"})
+        sleep.assert_called_once_with(1.0)
+
     def test_submit_simulation_returns_location_header(self):
         client = FakeClient([FakeResponse(headers={"Location": "/simulations/abc"})])
 
@@ -82,6 +107,67 @@ class SimulatorTests(unittest.TestCase):
         self.assertEqual(progress, {"alpha": "alpha123"})
         self.assertEqual(client.requested, [("GET", "/simulations/abc"), ("GET", "/simulations/abc")])
         sleep_mock.assert_called_once_with(1.0)
+
+    def test_poll_simulation_stops_after_retry_after_poll_limit(self):
+        client = FakeClient(
+            [
+                FakeResponse(headers={"Retry-After": "1"}),
+                FakeResponse(headers={"Retry-After": "1"}),
+                FakeResponse(headers={"Retry-After": "1"}),
+            ]
+        )
+
+        with patch("wqb.simulator.time.sleep") as sleep_mock:
+            with self.assertRaisesRegex(SimulationPollTimeout, "exceeded Retry-After limit"):
+                poll_simulation(
+                    client,
+                    "/simulations/stuck",
+                    max_retry_after_polls=2,
+                    max_retry_after_wait_seconds=60,
+                )
+
+        self.assertEqual(
+            client.requested,
+            [
+                ("GET", "/simulations/stuck"),
+                ("GET", "/simulations/stuck"),
+                ("GET", "/simulations/stuck"),
+            ],
+        )
+        self.assertEqual(sleep_mock.call_count, 2)
+
+    def test_poll_simulation_stops_before_sleep_when_wait_budget_exceeded(self):
+        client = FakeClient([FakeResponse(headers={"Retry-After": "11"})])
+
+        with patch("wqb.simulator.time.sleep") as sleep_mock:
+            with self.assertRaisesRegex(SimulationPollTimeout, "wait_seconds=11.0"):
+                poll_simulation(
+                    client,
+                    "/simulations/slow",
+                    max_retry_after_polls=10,
+                    max_retry_after_wait_seconds=10,
+                )
+
+        sleep_mock.assert_not_called()
+
+    def test_poll_simulation_prevents_client_layer_retry_after_sleep(self):
+        session = FakeClientSession([FakeClientResponse(headers={"Retry-After": "3"}, status_code=429)])
+        client = WQBClient(max_retries=4, session=session)
+        client.authenticated = True
+
+        with patch("wqb.client.time.sleep") as client_sleep:
+            with patch("wqb.simulator.time.sleep") as poll_sleep:
+                with self.assertRaisesRegex(SimulationPollTimeout, "polls=1"):
+                    poll_simulation(
+                        client,
+                        "/simulations/stuck",
+                        max_retry_after_polls=0,
+                        max_retry_after_wait_seconds=60,
+                    )
+
+        self.assertEqual(len(session.requests), 1)
+        client_sleep.assert_not_called()
+        poll_sleep.assert_not_called()
 
     def test_extract_alpha_id_accepts_string(self):
         self.assertEqual(extract_alpha_id({"alpha": "alpha123"}), "alpha123")

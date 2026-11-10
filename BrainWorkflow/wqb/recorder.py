@@ -15,6 +15,18 @@ class RunRecorder:
         with path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
+    def publish_plan(self, rows: list[dict[str, Any]]) -> None:
+        """Input: complete candidate list. Output: None. Atomically publish a whole immutable queue before any POST."""
+        path = self.run_dir / 'planned_candidates.jsonl'
+        if path.exists():
+            if self.read_jsonl(path.name) != rows:
+                raise ValueError('existing candidate plan differs; reconcile instead of replacing')
+            return
+        temporary = path.with_suffix('.jsonl.tmp')
+        temporary.write_text(''.join(json.dumps(row, ensure_ascii=False, sort_keys=True) + '\n'
+                                     for row in rows), encoding='utf-8', newline='')
+        temporary.replace(path)
+
     def read_jsonl(self, filename: str) -> list[dict[str, Any]]:
         """Input: filename. Output: list of records. Read a run JSONL artifact."""
         path = self.run_dir / filename
