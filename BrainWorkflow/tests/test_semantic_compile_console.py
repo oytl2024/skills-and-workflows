@@ -14,6 +14,42 @@ from wqb.semantic_publication import read_semantic_release
 
 
 class SemanticCompileConsoleTests(unittest.TestCase):
+    def test_cancel_retries_transient_windows_result_sharing_violation(self):
+        """Input: committed publication and one sharing violation. Output: completed acknowledgement, not cancellation."""
+        from wqb.console_jobs import cancel_semantic_job
+        result = self.invoke()
+        self.assertEqual(result['status'], 'completed', result)
+        original = Path.read_text
+        attempts = []
+        def read(path, *args, **kwargs):
+            """Input: path/read args. Output: source text after one deterministic transient access failure."""
+            if path.name == 'command_result.json':
+                attempts.append(path)
+                if len(attempts) == 1:
+                    raise PermissionError('Windows sharing violation')
+            return original(path, *args, **kwargs)
+        with patch.object(Path, 'read_text', read):
+            ack = cancel_semantic_job(self.root, 'test')
+        self.assertFalse(ack['cancelled'])
+        self.assertEqual(len(attempts), 2)
+
+    def test_cancel_persistent_result_access_failure_is_bounded_and_does_not_cancel(self):
+        """Input: unreadable commit evidence. Output: bounded error, never an invented Stop acknowledgement."""
+        from wqb.console_jobs import cancel_semantic_job, JOB_REPLACE_ATTEMPTS
+        self.invoke()
+        original = Path.read_text
+        attempts = []
+        def read(path, *args, **kwargs):
+            """Input: path/read args. Output: fail every authoritative result read without corrupting evidence."""
+            if path.name == 'command_result.json':
+                attempts.append(path)
+                raise PermissionError('persistent sharing violation')
+            return original(path, *args, **kwargs)
+        with patch.object(Path, 'read_text', read), self.assertRaises(PermissionError):
+            cancel_semantic_job(self.root, 'test')
+        self.assertEqual(len(attempts), JOB_REPLACE_ATTEMPTS)
+        self.assertFalse((self.root / 'machine/semantic_jobs/test/control.json').exists())
+
     def test_active_version_change_during_model_is_rechecked_before_merge(self):
         from wqb.semantic_publication import stage_semantic_release, publish_semantic_release
         active_pointer = []

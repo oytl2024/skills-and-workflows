@@ -1,6 +1,7 @@
 """Durable local Start preparation, separate from live workflow execution."""
 
 import argparse
+import hashlib
 from copy import deepcopy
 from datetime import datetime, timezone
 import json
@@ -31,7 +32,7 @@ START_CONFIG_FIELDS = (
 )
 START_POLICY_FIELDS = ('preplanned_tree_version', 'paired_scout', 'exploration_scout',
     'exploration_policy_version', 'parallel_workflows', 'plan_depth', 'initial_hypotheses',
-    'execution_package_version')
+    'execution_package_version', 'multiplier_scope_version')
 
 
 def load_start_config(paths) -> dict:
@@ -62,6 +63,11 @@ def load_start_config(paths) -> dict:
         raise ValueError('Console Start policy settings must be boolean or integer values')
     from wqb.execution_package import package_enabled
     package_enabled(clean)
+    from wqb.multiplier_scope import multiplier_enabled
+    multiplier_enabled(clean)
+    if 'multiplier_preparation_policy' in config:
+        from wqb.multiplier_preparation import validated_preparation_policy
+        clean['multiplier_preparation_policy'] = validated_preparation_policy(config['multiplier_preparation_policy'])
     if 'repair_search_policy' in config:
         from wqb.repair_search import _policy
         clean['repair_search_policy'] = _policy(config['repair_search_policy'])
@@ -118,6 +124,14 @@ def application_option(paths, option: dict, *, config: dict | None = None) -> di
     result = dict(option_id=option['option_id'], title=option.get('title', option.get('name', '')),
                   startable=False, scope=None, scope_source='', reason='')
     try:
+        if option.get('primary_incentive') == 'theme':
+            from wqb.multiplier_scope import multiplier_enabled, scope_selection_contract
+            supplied = config if config is not None else load_start_config(paths)
+            if multiplier_enabled(supplied):
+                result.update(startable=True, title='Multiplier · 自选范围', selection_mode='manual_multiplier',
+                    scope_source='user', scope_selection=scope_selection_contract(paths.knowledge_root, supplied),
+                    configuration_digest=_start_config_digest(supplied))
+                return result
         needs_config = (option.get('primary_incentive') in CONFIGURED_SCOPE_INCENTIVES
                         and 'execution_scope' not in option
                         and not re.fullmatch(EXACT_SCOPE_PATTERN, str(option.get('candidate_scope', '')).strip().upper()))
@@ -135,11 +149,24 @@ def application_option(paths, option: dict, *, config: dict | None = None) -> di
     return result
 
 
-def application_start_form(paths, selected_option_id: str) -> dict:
+def _start_config_digest(config: dict) -> str:
+    """Input: sanitized non-secret config dict. Output: digest binding displayed scope/defaults/limits."""
+    return hashlib.sha256(json.dumps(config, sort_keys=True, allow_nan=False).encode()).hexdigest()
+
+
+def application_start_form(paths, selected_option_id: str, *, selected_scope: dict | None = None) -> dict:
     """Input: ConsolePaths/persisted option ID str. Output: ordinary Start form using saved scope and permission only."""
     config = load_start_config(paths)
     from wqb.console_server import _selected_option
     option = _selected_option(paths, selected_option_id)
+    from wqb.multiplier_scope import multiplier_enabled, read_scope_catalog, select_multiplier_scope
+    if option.get('primary_incentive') == 'theme' and multiplier_enabled(config):
+        scope = select_multiplier_scope(read_scope_catalog(paths.knowledge_root), config, selected_scope)
+        return dict(selected_option_id=selected_option_id, selected_region=scope['region'],
+            selected_delay=scope['delay'], selected_universe=scope['universe'], enable_live_api=True,
+            expected_start_config_digest=_start_config_digest(config))
+    if selected_scope is not None:
+        raise ValueError('scope selection is allowed only for manual Multiplier Start')
     scope, _ = _application_scope(option, config)
     return dict(selected_option_id=selected_option_id,
         selected_region=scope.get('region', ''), selected_delay=scope.get('delay', ''),
@@ -223,6 +250,8 @@ def register_start(paths, form: dict, job_id: str) -> dict:
     policy = read_research_policy(paths.configuration_root / 'configs/workflow_defaults.example.json',
                                   paths.configuration_root / 'configs/workflow_local.json')
     config = load_start_config(paths)
+    if form.get('expected_start_config_digest') and form['expected_start_config_digest'] != _start_config_digest(config):
+        raise ValueError('Start configuration changed; refresh before starting')
     preplanned = config['research_policy'].get('preplanned_tree_version') == 1
     with start_request_guard(paths.runs_root):
         previous = read_start_request(paths.runs_root)
@@ -247,6 +276,17 @@ def register_start(paths, form: dict, job_id: str) -> dict:
             config['selected_scope'].setdefault('as_of', datetime.now(timezone.utc).isoformat())
             config.update(selection['scope'])
             extra = dict(preplanned_config=config, preplanned_option=_selected_option(paths, selection['selected_option_id']))
+            from wqb.multiplier_scope import multiplier_enabled, read_scope_catalog, select_multiplier_scope
+            if extra['preplanned_option'].get('primary_incentive') == 'theme' and multiplier_enabled(config):
+                select_multiplier_scope(read_scope_catalog(paths.knowledge_root), config, selection['scope'])
+                from wqb.multiplier_preparation import validated_preparation_policy
+                config['multiplier_preparation_policy'] = validated_preparation_policy(config.get('multiplier_preparation_policy'))
+                extra['preplanned_option'] = {**extra['preplanned_option'],
+                    'title': 'Multiplier · user-selected scope',
+                    'candidate_scope': f"{selection['scope']['region']} D{selection['scope']['delay']} {selection['scope']['universe']}",
+                    'manual_multiplier': dict(schema_version=1, eligibility='user_assessed', scope=selection['scope'])}
+                extra['multiplier_preparation'] = dict(status='pending', stage='checking_fields', requests_used=0,
+                    request_limit=config['multiplier_preparation_policy']['request_limit'])
         return _write_request(paths.runs_root, {
             "request_id": uuid4().hex, "job_id": job_id, "status": "preparing", "passed": False,
             "selection": selection, "source_intent": _source_intent(paths.runs_root),
@@ -317,6 +357,10 @@ def execute_start(paths, form: dict, request_id: str) -> dict:
         if row.get("status") not in PREPARING_STATUSES:
             return row
     if 'preplanned_config' in row:
+        if 'multiplier_preparation' in row and row['multiplier_preparation'].get('status') != 'completed':
+            row = _prepare_multiplier_start(paths, row)
+            if row.get('status') not in PREPARING_STATUSES:
+                return row
         return _execute_preplanned_start(paths, row)
     scope = selection["scope"]
     policy = row.get('research_policy')
@@ -374,6 +418,54 @@ def execute_start(paths, form: dict, request_id: str) -> dict:
                     "issues": [{"code": "start_validation_failed", "level": "block",
                                 "path": str(paths.knowledge_root), "message": str(error)}]}, str(error))
     return _notify_blocked_request(paths, row)
+
+
+def _prepare_multiplier_start(paths, original: dict) -> dict:
+    """Input: paths/original Start intent. Output: same intent with prepared fields or durable cancellation/blocker."""
+    from wqb.multiplier_supervision import prepare_multiplier_fields_supervised
+    from wqb.console_api import _safe
+
+    def check_cancelled():
+        """Input: none. Output: None or InterruptedError; never permit preparation after Stop or replaced intent."""
+        with start_request_guard(paths.runs_root):
+            row = read_start_request(paths.runs_root)
+            if row.get('request_id') != original['request_id'] or row.get('status') not in PREPARING_STATUSES:
+                raise InterruptedError('Multiplier preparation stopped or superseded')
+            if row.get('source_intent') != _source_intent(paths.runs_root):
+                _write_request(paths.runs_root, {**row, 'status': 'cancelled', 'passed': False,
+                    'error': 'Source intent changed during Multiplier preparation'})
+                raise InterruptedError('Source intent changed')
+
+    def progress(update: dict):
+        """Input: bounded progress dict. Output: None; publish only under the original Start CAS."""
+        check_cancelled()
+        with start_request_guard(paths.runs_root):
+            row = read_start_request(paths.runs_root)
+            if row.get('request_id') != original['request_id'] or row.get('status') not in PREPARING_STATUSES:
+                raise InterruptedError('Multiplier preparation stopped or superseded')
+            _write_request(paths.runs_root, {**row, 'multiplier_preparation': {**row['multiplier_preparation'], **update}})
+
+    try:
+        check_cancelled()
+        directory = _safe(paths.runs_root, paths.runs_root / 'start_preflight/multiplier' / original['request_id'])
+        result = prepare_multiplier_fields_supervised(paths.knowledge_root, directory, original['selection']['scope'],
+            check_cancelled=check_cancelled, progress=progress,
+            policy=original['preplanned_config']['multiplier_preparation_policy'],
+            allow_network=original['selection']['enable_live_api'])
+        check_cancelled()
+        if result.get('status') != 'completed':
+            raise ValueError(result.get('reason', 'Multiplier field preparation did not complete'))
+        progress({**result, 'stage': 'planning', 'status': 'completed'})
+        return read_start_request(paths.runs_root)
+    except Exception as error:
+        with start_request_guard(paths.runs_root):
+            row = read_start_request(paths.runs_root)
+            if row.get('request_id') != original['request_id'] or row.get('status') not in PREPARING_STATUSES:
+                return row
+            row = {**row, 'multiplier_preparation': {**row['multiplier_preparation'],
+                'status': 'blocked', 'stage': 'failed', 'reason': str(error)}}
+            row = _blocked_request(paths, row, {}, str(error))
+        return _notify_blocked_request(paths, row)
 
 
 def _execute_preplanned_start(paths, original: dict) -> dict:

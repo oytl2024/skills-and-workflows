@@ -1,4 +1,4 @@
-import type { Action, ApplicationSnapshot, ApplicationState, CommandReply, ExperimentNode, TrackedCommand } from './types';
+import type { Action, ApplicationSnapshot, ApplicationState, CommandReply, ExperimentNode, ResearchScope, ScopeSelection, Preparation, TrackedCommand } from './types';
 
 const SNAPSHOT_URL = '/api/application/snapshot';
 const EVENTS_URL = '/api/application/events';
@@ -14,6 +14,30 @@ interface ClientOptions {
   fetcher?: Fetcher;
   eventSource?: ((url: string) => EventSource) | null;
   storage?: Storage | null;
+}
+
+// Input: unknown JSON. Output: boolean type guard for an explicit technical scope.
+function validScope(value: unknown): value is ResearchScope {
+  const s = value as ResearchScope | null;
+  return !!s && typeof s === 'object' && !Array.isArray(s) && typeof s.region === 'string' && !!s.region.trim() &&
+    Number.isSafeInteger(s.delay) && s.delay >= 0 && typeof s.universe === 'string' && !!s.universe.trim();
+}
+
+// Input: unknown JSON. Output: boolean; validates catalog metadata without inventing choices or dates.
+function validScopeSelection(value: unknown): value is ScopeSelection {
+  const s = value as ScopeSelection | null;
+  return !!s && Array.isArray(s.choices) && s.choices.every(validScope) &&
+    (s.configured_scope === null || validScope(s.configured_scope)) &&
+    typeof s.captured_at === 'string' && Number.isFinite(Date.parse(s.captured_at)) && typeof s.stale === 'boolean';
+}
+
+// Input: unknown JSON. Output: boolean; validates optional preparation facts without synthesizing progress.
+function validPreparation(value: unknown): value is Preparation {
+  const p = value as Preparation | null;
+  return !!p && typeof p.stage === 'string' && typeof p.status === 'string' &&
+    Number.isSafeInteger(p.requests_used) && p.requests_used >= 0 && Number.isSafeInteger(p.request_limit) && p.request_limit >= 0 &&
+    (p.scope === undefined || validScope(p.scope)) && (p.field_count === undefined || (Number.isSafeInteger(p.field_count) && p.field_count >= 0)) &&
+    (p.reason === undefined || typeof p.reason === 'string');
 }
 
 // Input: unknown node JSON and depth. Output: bool; unknown layer is null, never a fabricated zero.
@@ -39,9 +63,13 @@ export function parseSnapshot(value: unknown): ApplicationSnapshot {
     !s.group || typeof s.group.group_id !== 'string' || typeof s.group.status !== 'string' || typeof s.group.desired_state !== 'string' ||
     typeof s.allowed_actions?.start !== 'boolean' || typeof s.allowed_actions.stop !== 'boolean' ||
     (s.start_mode !== undefined && !['new', 'resume'].includes(s.start_mode)) ||
+    (s.preparation !== undefined && !validPreparation(s.preparation)) ||
     !Array.isArray(s.options) || !s.options.every(o => o && typeof o.option_id === 'string' && typeof o.title === 'string' &&
       (o.startable === undefined || typeof o.startable === 'boolean') &&
       (o.reason === undefined || typeof o.reason === 'string') &&
+      (o.selection_mode === undefined || o.selection_mode === 'manual_multiplier') &&
+      (o.scope_selection === undefined || validScopeSelection(o.scope_selection)) &&
+      (o.selection_mode !== 'manual_multiplier' || validScopeSelection(o.scope_selection)) &&
       (o.scope === undefined || o.scope === null || (typeof o.scope.region === 'string' && Number.isSafeInteger(o.scope.delay) && typeof o.scope.universe === 'string'))) ||
     typeof s.blocker !== 'string' || !Array.isArray(s.lanes) || !s.lanes.every(l =>
       l && typeof l.lane_id === 'string' && typeof l.name === 'string' && typeof l.status === 'string' && typeof l.stage === 'string' &&
@@ -249,14 +277,19 @@ export class ApplicationClient {
     this.reconnectTimer = setTimeout(() => this.connect(), RECONNECT_MS);
   }
 
-  // Input: authorized action and optional option ID (strings). Output: Promise<void>; sends exactly once, tracks uncertain delivery.
-  async command(action: Action, optionId?: string): Promise<void> {
+  // Input: action, optional option ID and ResearchScope. Output: Promise<void>; sends once, scopes only new manual Starts.
+  async command(action: Action, optionId?: string, selectedScope?: ResearchScope): Promise<void> {
     const snapshot = this.state.snapshot;
     if (!snapshot || this.fixtureMode || !snapshot.allowed_actions[action]) return;
     const blocked = this.state.commands.some(c => c.group_id === snapshot.group.group_id &&
       (action === 'start' || c.action === 'stop') && (['pending', 'unknown'].includes(c.status) ||
         (['accepted', 'queued', 'running'].includes(c.status) && c.expected_revision === snapshot.request_revision)));
     if (blocked || (action === 'start' && !['live', 'polling'].includes(this.state.connection))) return;
+    const newResearch = snapshot.start_mode ? snapshot.start_mode === 'new' : snapshot.group.group_id === 'none' || snapshot.group.status === 'retired';
+    const option = snapshot.options.find(o => o.option_id === optionId);
+    const manualStart = action === 'start' && newResearch && option?.selection_mode === 'manual_multiplier';
+    if (manualStart && (!validScope(selectedScope) || !option.scope_selection?.choices.some(c =>
+      c.region === selectedScope.region && c.delay === selectedScope.delay && c.universe === selectedScope.universe))) return;
     const command_id = crypto.randomUUID();
     const tracked: TrackedCommand = { command_id, action, status: 'pending', expected_revision: snapshot.request_revision, group_id: snapshot.group.group_id };
     this.update({ commands: [...this.state.commands.slice(-19), tracked] });
@@ -266,7 +299,9 @@ export class ApplicationClient {
       const response = await this.fetcher(COMMAND_URL, {
         method: 'POST', signal: controller.signal, credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command_id, action, expected_revision: snapshot.request_revision, ...(action === 'start' && optionId ? { selected_option_id: optionId } : {}) }),
+        body: JSON.stringify({ command_id, action, expected_revision: snapshot.request_revision,
+          ...(action === 'start' && newResearch && optionId ? { selected_option_id: optionId } : {}),
+          ...(manualStart && selectedScope ? { selected_scope: { region: selectedScope.region, delay: selectedScope.delay, universe: selectedScope.universe } } : {}) }),
       });
       const reply = parseReply(await response.json(), command_id);
       this.update({ commands: this.state.commands.map(c => c.command_id === command_id && c.status === 'pending' ? { ...c, ...reply } : c) });

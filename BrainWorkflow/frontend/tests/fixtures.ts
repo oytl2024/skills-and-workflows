@@ -1,5 +1,24 @@
 import type { ApplicationSnapshot, Lane } from '../src/types';
 
+// Input: none. Output: fictional new Multiplier snapshot with catalog choices, independent of fields.
+export function multiplierSnapshot() {
+  return {
+    ...fixtureSnapshot(0), start_mode: 'new' as const,
+    options: [{ option_id: 'multiplier', title: 'Multiplier', startable: true,
+      selection_mode: 'manual_multiplier' as const, scope: null,
+      scope_selection: {
+        choices: [
+          { region: 'USA', delay: 0, universe: 'TOP3000' },
+          { region: 'USA', delay: 1, universe: 'TOP3000' },
+          { region: 'USA', delay: 1, universe: 'TOP1000' },
+          { region: 'KOR', delay: 1, universe: 'TOP600' },
+        ],
+        configured_scope: { region: 'USA', delay: 0, universe: 'TOP3000' },
+        captured_at: '2026-11-10T00:00:00Z', stale: false,
+      } }],
+  };
+}
+
 // Input: lane count (number). Output: explicitly fictional offline snapshot (ApplicationSnapshot).
 export function fixtureSnapshot(count = 2): ApplicationSnapshot {
   return {

@@ -1425,7 +1425,8 @@ def _run_application_command(server: Any, paths: ConsolePaths, command: dict, st
             # Unknown/missing selection remains an ordinary refusal, never maintenance spam.
             _selected_option(paths, option_id)
             try:
-                form.update(application_start_form(paths, option_id))
+                form.update(application_start_form(paths, option_id,
+                    **({'selected_scope': command['selected_scope']} if 'selected_scope' in command else {})))
             except ValueError as error:
                 from wqb.preflight_notifications import record_start_contract_failure, dispatch_start_contract_notice
                 notice = record_start_contract_failure(paths, command, str(error))
@@ -1434,7 +1435,14 @@ def _run_application_command(server: Any, paths: ConsolePaths, command: dict, st
                     name='start-contract-notice', daemon=True).start()
                 return {'status': 'refused', 'message': str(error) + '; maintenance evidence: ' + notice['receipt_path']}
             displayed = next((item for item in current['options'] if item['option_id'] == option_id), {})
-            if not displayed.get('startable') or _selected_scope(form) != displayed.get('scope'):
+            expected_scope = displayed.get('scope')
+            if displayed.get('selection_mode') == 'manual_multiplier':
+                from wqb.multiplier_scope import select_multiplier_scope
+                expected_scope = select_multiplier_scope({'scopes': displayed['scope_selection']['choices']},
+                    {'selected_scope': displayed['scope_selection']['configured_scope']}, command.get('selected_scope'))
+                if form.get('expected_start_config_digest') != displayed.get('configuration_digest'):
+                    return {'status': 'refused', 'message': 'Start configuration changed; resnapshot required'}
+            if not displayed.get('startable') or _selected_scope(form) != expected_scope:
                 return {'status': 'refused', 'message': 'Option scope changed before dispatch; resnapshot required'}
         assert_workflow_action_current(form, fresh)
     except ValueError as error:

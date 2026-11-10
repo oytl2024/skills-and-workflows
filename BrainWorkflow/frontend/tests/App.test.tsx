@@ -3,11 +3,88 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import { ApplicationClient } from '../src/api';
-import { fixtureSnapshot } from './fixtures';
+import { fixtureSnapshot, multiplierSnapshot } from './fixtures';
 
 afterEach(cleanup);
 
 describe('research workspace (explicit offline fixtures)', () => {
+  it('requires explicit Region/Delay without fields and reuses a valid saved Universe across delays', async () => {
+    const snapshot = multiplierSnapshot();
+    const client = new ApplicationClient({ fetcher: vi.fn().mockResolvedValue({ ok: true, json: async () => snapshot }), eventSource: null, storage: null });
+    const command = vi.spyOn(client, 'command').mockResolvedValue();
+    render(<App client={client} />);
+    const region = await screen.findByRole('combobox', { name: 'Region' });
+    const delay = screen.getByRole('combobox', { name: 'Delay' });
+    const start = screen.getByRole('button', { name: 'Start' }) as HTMLButtonElement;
+    expect((region as HTMLSelectElement).value).toBe('');
+    expect((delay as HTMLSelectElement).value).toBe('');
+    expect(start.disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Stop' }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.change(region, { target: { value: 'USA' } });
+    expect(start.disabled).toBe(true);
+    fireEvent.change(delay, { target: { value: '1' } });
+    expect(screen.queryByRole('combobox', { name: 'Universe' })).toBeNull();
+    expect(screen.getByLabelText('Universe').textContent).toContain('TOP3000');
+    expect(screen.getByText('倍率条件由你判断，系统按所选范围研究')).toBeTruthy();
+    expect(start.disabled).toBe(false);
+    fireEvent.click(start);
+    expect(command).toHaveBeenCalledWith('start', 'multiplier', { region: 'USA', delay: 1, universe: 'TOP3000' });
+  });
+
+  it('requires an allowed Universe fallback and resets dependent choices on region, delay, option and catalog changes', () => {
+    const snapshot = multiplierSnapshot();
+    const client = ApplicationClient.fixture(snapshot);
+    render(<App client={client} />);
+    fireEvent.change(screen.getByLabelText('Region'), { target: { value: 'KOR' } });
+    fireEvent.change(screen.getByLabelText('Delay'), { target: { value: '1' } });
+    const universe = screen.getByRole('combobox', { name: 'Universe' }) as HTMLSelectElement;
+    expect(universe.value).toBe('');
+    expect(within(universe).queryByRole('option', { name: 'TOP3000' })).toBeNull();
+    fireEvent.change(universe, { target: { value: 'TOP600' } });
+    fireEvent.change(screen.getByLabelText('Delay'), { target: { value: '' } });
+    expect((screen.getByLabelText('Universe') as HTMLSelectElement).value).toBe('');
+    fireEvent.change(screen.getByLabelText('Delay'), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText('Universe'), { target: { value: 'TOP600' } });
+    fireEvent.change(screen.getByLabelText('Region'), { target: { value: 'USA' } });
+    expect((screen.getByLabelText('Delay') as HTMLSelectElement).value).toBe('');
+    act(() => client.setFixture({ ...snapshot, sequence: 2, options: snapshot.options.map(o => ({ ...o, scope_selection: { ...o.scope_selection, choices: [{ region: 'KOR', delay: 1, universe: 'TOP600' }] } })) }));
+    expect((screen.getByLabelText('Region') as HTMLSelectElement).value).toBe('');
+    act(() => client.setFixture({ ...snapshot, sequence: 3, options: [snapshot.options[0], { ...snapshot.options[0], option_id: 'second', title: 'Second' }] }));
+    fireEvent.change(screen.getByLabelText('Region'), { target: { value: 'USA' } });
+    fireEvent.change(screen.getByLabelText('研究目标'), { target: { value: 'second' } });
+    expect((screen.getByLabelText('Region') as HTMLSelectElement).value).toBe('');
+    fireEvent.change(screen.getByLabelText('研究目标'), { target: { value: 'multiplier' } });
+    expect((screen.getByLabelText('Region') as HTMLSelectElement).value).toBe('');
+  });
+
+  it('requires explicit fallback when the saved universe is invalid even in the same region', async () => {
+    const snapshot = multiplierSnapshot();
+    snapshot.options[0].scope_selection.configured_scope.universe = 'REMOVED';
+    const client = new ApplicationClient({ fetcher: vi.fn().mockResolvedValue({ ok: true, json: async () => snapshot }), eventSource: null, storage: null });
+    render(<App client={client} />);
+    fireEvent.change(await screen.findByLabelText('Region'), { target: { value: 'USA' } });
+    fireEvent.change(screen.getByLabelText('Delay'), { target: { value: '1' } });
+    expect((screen.getByLabelText('Universe') as HTMLSelectElement).value).toBe('');
+    expect((screen.getByRole('button', { name: 'Start' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Universe'), { target: { value: 'TOP1000' } });
+    expect((screen.getByRole('button', { name: 'Start' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('shows preparation progress and failures without scope controls on Resume and keeps Stop available', async () => {
+    const snapshot = { ...multiplierSnapshot(), start_mode: 'resume' as const,
+      preparation: { stage: 'capture', status: 'failed', requests_used: 3, request_limit: 24, field_count: 10, reason: 'Capture unavailable' } };
+    const client = new ApplicationClient({ fetcher: vi.fn().mockResolvedValue({ ok: true, json: async () => snapshot }), eventSource: null, storage: null });
+    const command = vi.spyOn(client, 'command').mockResolvedValue();
+    render(<App client={client} />);
+    await screen.findByText(/Capture unavailable/);
+    expect(screen.getByText(/3 \/ 24/)).toBeTruthy();
+    expect(screen.getByText(/字段 10/)).toBeTruthy();
+    expect(screen.queryByLabelText('Region')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    expect(command).toHaveBeenCalledWith('start', undefined);
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    expect(command).toHaveBeenCalledWith('stop');
+  });
   it('disables maintenance-only goals and shows the exact configured scope', () => {
     const snapshot = fixtureSnapshot();
     snapshot.group.group_id = 'none';

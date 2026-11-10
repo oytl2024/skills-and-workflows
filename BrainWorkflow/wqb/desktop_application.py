@@ -19,7 +19,8 @@ from wqb.desktop import DesktopConfig, DesktopError, ProcessLock
 from wqb.runtime_revision import LOADED_CODE_REVISION
 
 
-WORKER_MODULES = frozenset({"wqb.cli", "wqb.console_start", "wqb.codex_ai_worker", "wqb.research_group_driver"})
+WORKER_MODULES = frozenset({"wqb.cli", "wqb.console_start", "wqb.codex_ai_worker", "wqb.research_group_driver",
+                          "wqb.multiplier_supervision"})
 WINDOW_SIZE = (1280, 840)
 MIN_WINDOW_SIZE = (760, 540)
 

@@ -26,6 +26,22 @@ JOB_REPLACE_RETRY_SECONDS = 0.02
 TERMINAL_JOB_STATUSES = {"completed", "failed", "refused", "timed_out", "blocked", "paused", "waiting_for_user", 'cancelled'}
 
 
+def _read_semantic_cancel_evidence(path: Path) -> dict:
+    """Input: optional result/intent Path. Output: JSON dict; bounded sharing retries, never skip unreadable commit evidence."""
+    for attempt in range(JOB_REPLACE_ATTEMPTS):
+        try:
+            result = json.loads(path.read_text(encoding='utf-8'))
+            if not isinstance(result, dict):
+                raise ValueError('semantic cancellation evidence must be an object')
+            return result
+        except FileNotFoundError:
+            return {}
+        except PermissionError:
+            if attempt + 1 == JOB_REPLACE_ATTEMPTS:
+                raise
+            time.sleep(JOB_REPLACE_RETRY_SECONDS)
+
+
 def cancel_semantic_job(knowledge_root: Path, job_id: str) -> dict:
     """Input: vault Path/knowledge job ID str. Output: cancellation dict. Persist Stop without changing research intent."""
     from wqb.runtime_control import _write
@@ -38,12 +54,12 @@ def cancel_semantic_job(knowledge_root: Path, job_id: str) -> dict:
         raise ValueError('unknown semantic job')
     with json_lock_transition_guard(job/'publication_guard', 2.0, 0.02, 'semantic publication busy'):
         path = job/'command_result.json'
-        result = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+        result = _read_semantic_cancel_evidence(path)
         if result.get('status') == 'completed':
             return dict(cancelled=False, status='completed', reason='publication already completed')
         intent = job/'publication_intent.json'
         if intent.exists():
-            result = json.loads(intent.read_text(encoding='utf-8'))
+            result = _read_semantic_cancel_evidence(intent)
         if result.get('status') == 'publishing':
             active = read_semantic_release(knowledge_root)
             if active['release_id'] == (result.get('release') or {}).get('release_id'):

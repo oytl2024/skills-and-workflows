@@ -21,6 +21,39 @@ def save(path, value):
 
 
 class ConsoleApplicationServerTests(unittest.TestCase):
+    def test_manual_multiplier_native_scope_is_validated_and_forwarded(self):
+        """Input: native user-selected KOR scope without captured fields. Output: exact accepted Start form."""
+        from datetime import datetime, timezone
+        from tests.test_console_server import valid_option
+        from tests.test_multiplier_scope import settings_fixture
+        from wqb.multiplier_scope import publish_scope_catalog
+        option = valid_option(option_id='multiplier', primary_incentive='theme')
+        self.state = dict(active_workflow={}, runtime_control={}, option_cards=[option])
+        path = server_module.existing_decision_artifact_path(self.paths.knowledge_root, 'research_option_cards.jsonl')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(option) + '\n', encoding='utf-8')
+        save(self.paths.workflow_root / 'configs/workflow_local.json', dict(region='USA', delay=1, universe='TOP3000',
+            research_policy=dict(preplanned_tree_version=1, multiplier_scope_version=1)))
+        publish_scope_catalog(self.paths.knowledge_root, settings_fixture(), datetime.now(timezone.utc).isoformat())
+        command = self.command(selected_option_id='multiplier', selected_scope=dict(region='KOR', delay=1, universe='TOP600'))
+        with patch.object(server_module, 'run_console_action', return_value=SimpleNamespace(status='queued', job_id='manual-job')) as run:
+            result = json.loads(self.post(command)[2])
+            self.assertEqual(result['status'], 'accepted', result)
+            self.assertEqual(server_module._selected_scope(run.call_args.args[1]), command['selected_scope'])
+            self.assertEqual(json.loads(self.post(command)[2]), result)
+            run.assert_called_once()
+        with patch.object(server_module, 'run_console_action') as run:
+            invalid = {**command, 'command_id': 'invalid-universe', 'selected_scope': dict(region='KOR', delay=1, universe='TOP3000')}
+            self.assertEqual(json.loads(self.post(invalid)[2])['status'], 'refused')
+            run.assert_not_called()
+        with patch.object(server_module, '_run_application_command') as dispatch:
+            missing = {key: value for key, value in command.items() if key != 'selected_scope'}
+            missing['command_id'] = 'missing-manual-scope'
+            reply = json.loads(self.post(missing)[2])
+            self.assertEqual(reply['status'], 'refused')
+            self.assertIn('Select', reply['message'])
+            dispatch.assert_not_called()
+
     def setUp(self):
         """Input: none. Output: None; start an offline local HTTP fixture."""
         self.temp = tempfile.TemporaryDirectory()
