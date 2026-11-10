@@ -262,3 +262,11 @@ Canonical knowledge, research/accounting/check/recovery evidence, user settings,
 credentials, profiles and rollback builds are excluded. Acceptance/results are
 recorded in root todo.md and the local install proof; this audit alone does not
 claim collection has happened.
+
+Collection completed after implementation b192684 was synchronized and the
+fresh3393-test full suite passed. Both exact obsolete assets were removed;
+all366 installed application files matched the new exact-hash audit. The app
+loaded revision1829888f and opened with manual Multiplier enabled; original
+mission state/control hashes stayed unchanged. No source knowledge, profiles,
+rollback builds, research evidence, budget or final-submit authority was removed
+or changed. The prior failed candidate and regression evidence remain local.

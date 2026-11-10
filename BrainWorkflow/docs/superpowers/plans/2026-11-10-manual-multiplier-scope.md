@@ -52,8 +52,8 @@ by the software. No maintenance-session live calls or research starts.
 ## Task4: Integrated Verification And Delivery
 
 - [x] Native HTTP -> actual saved card -> selection -> local preparation -> fake initial-model/coordinator test; no real requests.
-- [ ] Independent review and full offline suite after frozen source; frontend/browser desktop/mobile and native packaged smoke.
-- [ ] Commit/push before audited installation/ordinary cleanup, loaded-version check without Start; private knowledge/runs/config/binaries excluded.
+- [x] Independent review and full offline suite after frozen source; frontend/browser desktop/mobile and native packaged smoke.
+- [x] Commit/push before audited installation/ordinary cleanup, loaded-version check without Start; private knowledge/runs/config/binaries excluded.
 - [x] Record remaining PowerPool/Competition activity adapters separately; do not call those complete from this narrowed iteration.
 
 ## Implementation Checkpoint
@@ -92,3 +92,20 @@ publication guard, and persistent unreadability still fails closed. Two injected
 regressions,93 related tests and20 repetitions of the original concurrency case
 pass; independent medium review found no issue. Fresh full source b313f953 and
 build155619-1023 supersede the candidate153106, whose failed proof remains local.
+
+## Accepted Delivery
+
+Fresh full3393 tests pass (9skips,1366.849s), before/after source-test identity
+`b313f953b3dcae36106a436f0bbed6b235cb7c06969c8ccc3f98dfe4cedb4d25`.
+Implementation b192684 was pushed and remote equality verified before audited
+installation/collection. Build `20261110-155619-1023`,366 files, is installed:
+loaded revision `1829888fd793256b68b114892a56656538a1c1682f0c8ea0eeab83b43665d4fe`,
+EXE SHA256 `099c5214fd5fd1ddeda92982e14096f8a287839fdd90a7464eddf9d0fe0003ed`.
+The local new-only flag is1. The actual app snapshot exposes a startable manual
+Multiplier card and45 exact official scope choices; local catalog publication
+preserves the previously authorized Nov10 source capture date. Opening the app
+left mission state/control hashes unchanged, with no workflow POST or platform
+request. Source/config/knowledge separation remains intact; private resources,
+proofs, browser fixtures and binaries are not committed. Post-install185 related
+regressions pass (43.900s); final entry-document24 checks pass. Final Git
+synchronization is tracked in the root task ledger.
