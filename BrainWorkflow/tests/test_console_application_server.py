@@ -254,6 +254,7 @@ class ConsoleApplicationServerTests(unittest.TestCase):
         self.state = dict(active_workflow={}, runtime_control={}, option_cards=[dict(option_id='kor', title='KOR')])
         option = valid_option(option_id='kor')
         option['candidate_scope'] = 'KOR D0 TOP600'
+        self.state['option_cards'] = [option]
         path = server_module.existing_decision_artifact_path(self.paths.knowledge_root, 'research_option_cards.jsonl')
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(option) + '\n', encoding='utf-8')
@@ -282,6 +283,94 @@ class ConsoleApplicationServerTests(unittest.TestCase):
         self.assertEqual(reply['status'], 'refused', reply)
         self.assertIn('scope', reply['message'])
         run.assert_not_called()
+
+    def test_native_planner_prose_start_binds_saved_scope_before_local_preparation(self):
+        """Input: real planner's generic goal shape. Output: native job receives the displayed exact saved scope."""
+        from tests.test_console_server import valid_option
+        option = valid_option(option_id='generic', primary_incentive='genius_osmosis',
+            candidate_scope='Generate a later concrete plan across multiple region-delay scopes after user selection.')
+        self.state = dict(active_workflow={}, runtime_control={}, option_cards=[option])
+        path = server_module.existing_decision_artifact_path(self.paths.knowledge_root, 'research_option_cards.jsonl')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(option) + '\n', encoding='utf-8')
+        save(self.paths.workflow_root / 'configs/workflow_local.json',
+             dict(region='KOR', delay=0, universe='TOP600', live_api_enabled=False))
+        command = self.command(command_id='generic-start', selected_option_id='generic')
+        snapshot = self.snapshot()
+        self.assertEqual(snapshot['options'][0]['scope'], dict(region='KOR', delay=0, universe='TOP600'))
+        with patch.object(server_module, 'run_console_action', return_value=SimpleNamespace(status='running', job_id='local-job')) as run:
+            reply = json.loads(self.post(command)[2])
+        self.assertEqual(reply['status'], 'accepted', reply)
+        self.assertEqual(server_module._selected_scope(run.call_args.args[1]), snapshot['options'][0]['scope'])
+        self.assertFalse(run.call_args.args[1]['enable_live_api'])
+
+    def test_pre_job_scope_failure_queues_one_maintenance_event_without_mission(self):
+        """Input: valid feasibility card and duplicate command. Output: refusal, durable evidence and one notification."""
+        from tests.test_console_server import valid_option
+        from wqb import preflight_notifications as notices
+        option = valid_option(option_id='theme', primary_incentive='theme', candidate_scope='Refresh active theme announcements before choosing data or templates.')
+        self.state = dict(active_workflow={}, runtime_control={}, option_cards=[option])
+        path = server_module.existing_decision_artifact_path(self.paths.knowledge_root, 'research_option_cards.jsonl')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(option) + '\n', encoding='utf-8')
+        save(self.paths.workflow_root / 'configs/workflow_local.json', dict(region='USA', delay=1, universe='TOP3000'))
+        command = self.command(command_id='theme-start', selected_option_id='theme')
+        delivered = threading.Event()
+
+        def notify(*args):
+            """Input: fictional outbox args. Output: queued result; no subprocess or platform calls."""
+            delivered.set()
+            return dict(status='queued')
+
+        with patch.object(notices, 'notify_preflight_blocker', side_effect=notify) as notification, patch.object(server_module, 'run_console_action') as run:
+            reply = json.loads(self.post(command)[2])
+            self.assertEqual(reply['status'], 'refused')
+            self.assertIn('maintenance evidence:', reply['message'])
+            self.assertTrue(delivered.wait(2))
+            self.assertEqual(json.loads(self.post(command)[2]), reply)
+            notification.assert_called_once()
+            run.assert_not_called()
+        self.assertFalse((self.paths.runs_root / 'console_start/request.json').exists())
+        self.assertEqual(len(list((self.paths.runs_root / 'start_preflight/contract_failures').glob('*.json'))), 1)
+
+    def test_configured_scope_change_invalidates_displayed_start_revision(self):
+        """Input: saved-scope mutation after snapshot. Output: CAS refusal, no job or fallback scope."""
+        from tests.test_console_server import valid_option
+        option = valid_option(option_id='generic', primary_incentive='genius_osmosis', candidate_scope='Plan across region-delay scopes after selection.')
+        self.state = dict(active_workflow={}, runtime_control={}, option_cards=[option])
+        path = server_module.existing_decision_artifact_path(self.paths.knowledge_root, 'research_option_cards.jsonl')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(option) + '\n', encoding='utf-8')
+        config = self.paths.workflow_root / 'configs/workflow_local.json'
+        save(config, dict(region='USA', delay=1, universe='TOP3000'))
+        command = self.command(command_id='scope-cas', selected_option_id='generic')
+        save(config, dict(region='KOR', delay=0, universe='TOP600'))
+        with patch.object(server_module, 'run_console_action') as run:
+            self.assertEqual(json.loads(self.post(command)[2])['status'], 'refused')
+            run.assert_not_called()
+
+    def test_scope_change_after_revision_check_cannot_dispatch_different_scope(self):
+        """Input: configuration race inside form construction. Output: refusal before job, not a different market."""
+        from tests.test_console_server import valid_option
+        from wqb import console_start
+        option = valid_option(option_id='generic', primary_incentive='genius_osmosis', candidate_scope='Plan across region-delay scopes after selection.')
+        self.state = dict(active_workflow={}, runtime_control={}, option_cards=[option])
+        path = server_module.existing_decision_artifact_path(self.paths.knowledge_root, 'research_option_cards.jsonl')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(option) + '\n', encoding='utf-8')
+        config = self.paths.workflow_root / 'configs/workflow_local.json'
+        save(config, dict(region='USA', delay=1, universe='TOP3000'))
+        command = self.command(command_id='late-scope-cas', selected_option_id='generic')
+        original = console_start.application_start_form
+
+        def race(*args):
+            """Input: native form args. Output: changed form, mimicking an external local configuration writer."""
+            save(config, dict(region='KOR', delay=0, universe='TOP600'))
+            return original(*args)
+
+        with patch.object(console_start, 'application_start_form', side_effect=race), patch.object(server_module, 'run_console_action') as run:
+            self.assertEqual(json.loads(self.post(command)[2])['status'], 'refused')
+            run.assert_not_called()
 
     def test_group_lost_dispatch_ack_never_replays_and_stale_cas_refuses(self):
         from wqb import research_group_driver as driver
@@ -377,7 +466,9 @@ class ConsoleApplicationServerTests(unittest.TestCase):
         from tests.test_workflow_stage_adapters import valid_option
         path = server_module.existing_decision_artifact_path(self.paths.knowledge_root, 'research_option_cards.jsonl')
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(valid_option(option_id='option-a')) + '\n', encoding='utf-8')
+        option = valid_option(option_id='option-a')
+        path.write_text(json.dumps(option) + '\n', encoding='utf-8')
+        self.state['option_cards'] = [option]
         self.state['active_workflow'] = {}
         self.state['runtime_control'] = {}
         command = self.command(selected_option_id='option-a')

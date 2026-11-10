@@ -38,7 +38,11 @@ export function parseSnapshot(value: unknown): ApplicationSnapshot {
     !(s.evidence_at === null || typeof s.evidence_at === 'string') ||
     !s.group || typeof s.group.group_id !== 'string' || typeof s.group.status !== 'string' || typeof s.group.desired_state !== 'string' ||
     typeof s.allowed_actions?.start !== 'boolean' || typeof s.allowed_actions.stop !== 'boolean' ||
-    !Array.isArray(s.options) || !s.options.every(o => o && typeof o.option_id === 'string' && typeof o.title === 'string') ||
+    (s.start_mode !== undefined && !['new', 'resume'].includes(s.start_mode)) ||
+    !Array.isArray(s.options) || !s.options.every(o => o && typeof o.option_id === 'string' && typeof o.title === 'string' &&
+      (o.startable === undefined || typeof o.startable === 'boolean') &&
+      (o.reason === undefined || typeof o.reason === 'string') &&
+      (o.scope === undefined || o.scope === null || (typeof o.scope.region === 'string' && Number.isSafeInteger(o.scope.delay) && typeof o.scope.universe === 'string'))) ||
     typeof s.blocker !== 'string' || !Array.isArray(s.lanes) || !s.lanes.every(l =>
       l && typeof l.lane_id === 'string' && typeof l.name === 'string' && typeof l.status === 'string' && typeof l.stage === 'string' &&
       [l.nodes, l.seeds, l.repair].every(items => Array.isArray(items) && items.every(n => validNode(n))))) {

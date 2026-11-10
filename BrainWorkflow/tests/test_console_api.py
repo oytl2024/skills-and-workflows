@@ -211,7 +211,8 @@ class ConsoleApiTests(unittest.TestCase):
         self.runs = Path(self.temp.name) / 'runs'
         self.run = self.runs / 'legacy-run'
         self.run.mkdir(parents=True)
-        self.paths = SimpleNamespace(runs_root=self.runs, job_root=self.runs / 'console_jobs')
+        self.paths = SimpleNamespace(runs_root=self.runs, job_root=self.runs / 'console_jobs',
+                                     knowledge_root=Path(self.temp.name) / 'knowledge')
         self.state = {'active_workflow': {'exists': True, 'run_id': self.run.name,
             'run_dir': str(self.run), 'status': 'paused', 'current_stage': 'scout_seed'},
             'runtime_control': {'desired_state': 'paused', 'request_revision': 'r1'},

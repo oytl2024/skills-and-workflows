@@ -55,7 +55,8 @@ export interface ApplicationSnapshot {
   };
   lanes: Lane[];
   allowed_actions: { start: boolean; stop: boolean };
-  options: { option_id: string; title: string }[];
+  start_mode?: 'new' | 'resume';
+  options: { option_id: string; title: string; startable?: boolean; scope?: { region: string; delay: number; universe: string } | null; scope_source?: string; reason?: string; maintenance_status?: string }[];
   blocker: string;
   command_statuses?: CommandReply[] | Record<string, Omit<CommandReply, 'command_id'>>;
 }

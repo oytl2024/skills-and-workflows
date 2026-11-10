@@ -417,6 +417,7 @@ def project_application(paths, state: dict, server_epoch: str, sequence: int) ->
         allowed = _workflow_action_state(state)
         result['allowed_actions'] = {'start': bool(allowed['start_workflow'] or allowed['continue_workflow']),
                                      'stop': bool(allowed['stop_workflow'])}
+        result['start_mode'] = 'new' if allowed['start_workflow'] else 'resume'
         pointer = _read(root, 'active_research_group.json', optional=True)
         group_revision = ''
         if pointer is not None:
@@ -431,6 +432,7 @@ def project_application(paths, state: dict, server_epoch: str, sequence: int) ->
             group_revision = projected['request_revision']
             result['group_request_revision'] = group_revision
             result['allowed_actions'] = projected['allowed_actions']
+            result['start_mode'] = 'resume'
             result['blocker'] = projected['blocker']
         elif active.get('exists'):
             run_id = active.get('run_id')
@@ -451,11 +453,13 @@ def project_application(paths, state: dict, server_epoch: str, sequence: int) ->
                 result['group'][key] = 'unknown'
         if not group_revision and isinstance(control.get('daily_simulation_budget'), dict):
             result['group']['daily_budget'] = control['daily_simulation_budget']
+        from wqb.console_start import application_option
+        result['options'] = [application_option(paths, row)
+                             for row in _rows(state.get('option_cards', [])) if row.get('option_id')]
         result['request_revision'] = hashlib.sha256(_canonical([
             _workflow_action_hash(state), group_revision,
-            result['group']['group_id'] if result['group'] else None]).encode()).hexdigest()
-        result['options'] = [{'option_id': row['option_id'], 'title': row.get('title', row.get('name', ''))}
-                             for row in _rows(state.get('option_cards', [])) if row.get('option_id')]
+            result['group']['group_id'] if result['group'] else None,
+            [{k: v for k, v in option.items() if k != 'maintenance_status'} for option in result['options']]]).encode()).hexdigest()
         if not result['blocker'] and not group_revision:
             result['blocker'] = str((state.get('current_work') or {}).get('blocker') or control.get('reason') or '')
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError) as exc:

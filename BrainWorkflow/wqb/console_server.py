@@ -1421,7 +1421,21 @@ def _run_application_command(server: Any, paths: ConsolePaths, command: dict, st
     try:
         if action == 'workflow-start-from-option':
             from wqb.console_start import application_start_form
-            form.update(application_start_form(paths, str(command.get('selected_option_id', ''))))
+            option_id = str(command.get('selected_option_id', ''))
+            # Unknown/missing selection remains an ordinary refusal, never maintenance spam.
+            _selected_option(paths, option_id)
+            try:
+                form.update(application_start_form(paths, option_id))
+            except ValueError as error:
+                from wqb.preflight_notifications import record_start_contract_failure, dispatch_start_contract_notice
+                notice = record_start_contract_failure(paths, command, str(error))
+                threading.Thread(target=dispatch_start_contract_notice,
+                    args=(paths.runs_root, Path(notice['receipt_path'])),
+                    name='start-contract-notice', daemon=True).start()
+                return {'status': 'refused', 'message': str(error) + '; maintenance evidence: ' + notice['receipt_path']}
+            displayed = next((item for item in current['options'] if item['option_id'] == option_id), {})
+            if not displayed.get('startable') or _selected_scope(form) != displayed.get('scope'):
+                return {'status': 'refused', 'message': 'Option scope changed before dispatch; resnapshot required'}
         assert_workflow_action_current(form, fresh)
     except ValueError as error:
         return {'status': 'refused', 'message': str(error)}
@@ -1727,6 +1741,9 @@ def run_console(
     from wqb.maintenance_notifications import dispatch_startup_notifications
     threading.Thread(target=dispatch_startup_notifications, args=(paths.runs_root,),
                      name="maintenance-startup-notice", daemon=True).start()
+    from wqb.preflight_notifications import dispatch_pending_start_contract_notices
+    threading.Thread(target=dispatch_pending_start_contract_notices, args=(paths.runs_root,),
+                     name='start-contract-pending-notices', daemon=True).start()
     actual_host, actual_port = server.server_address
     url = f"http://{actual_host}:{actual_port}"
     if open_browser:

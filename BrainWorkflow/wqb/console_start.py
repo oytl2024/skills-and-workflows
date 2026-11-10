@@ -18,6 +18,9 @@ from wqb.workflow_state import discover_active_workflow
 
 START_LOCK_TIMEOUT_SECONDS = 5.0
 START_LOCK_SLEEP_SECONDS = 0.02
+EXACT_SCOPE_PATTERN = r'([A-Z][A-Z0-9_]*)\s+D(\d+)\s*([A-Z][A-Z0-9_]*)'
+CONFIGURED_SCOPE_INCENTIVES = {'genius_osmosis'}
+MAINTENANCE_INCENTIVES = {'knowledge_refresh', 'theme', 'competition'}
 PREPARING_STATUSES = {"preparing", "validating"}
 START_CONFIG_FIELDS = (
     'instrument_type', 'region', 'universe', 'delay', 'language', 'neutralization', 'decay',
@@ -75,16 +78,69 @@ def load_start_config(paths) -> dict:
     return deepcopy(clean)
 
 
+def _application_scope(option: dict, config: dict) -> tuple[dict, str]:
+    """Input: saved option/config dicts. Output: exact scope dict/source str; never infer scope from prose."""
+    incentive = option.get('primary_incentive')
+    if incentive in MAINTENANCE_INCENTIVES:
+        raise ValueError('This option requires independent maintenance or activity feasibility before research')
+    text = str(option.get('candidate_scope', '')).strip().upper()
+    match = re.fullmatch(EXACT_SCOPE_PATTERN, text)
+    explicit = option.get('execution_scope')
+    if 'execution_scope' in option:
+        scope = _exact_application_scope(explicit)
+        if match and scope != dict(region=match[1], delay=int(match[2]), universe=match[3]):
+            raise ValueError('option structured scope conflicts with displayed scope')
+        if not match and re.search(r'\bD\d+\b', text):
+            raise ValueError('option scope is ambiguous; maintenance must bind one exact scope')
+        return scope, 'option'
+    if match:
+        return dict(region=match[1], delay=int(match[2]), universe=match[3]), 'option'
+    if re.search(r'\bD\d+\b', text):
+        raise ValueError('option scope must specify one exact region, delay and universe')
+    if incentive not in CONFIGURED_SCOPE_INCENTIVES:
+        raise ValueError('This option requires maintenance to bind its activity and one exact research scope')
+    configured = config.get('selected_scope') if 'selected_scope' in config else {
+        key: config.get(key) for key in ('region', 'delay', 'universe')}
+    return _exact_application_scope(configured), 'configuration'
+
+
+def _exact_application_scope(value) -> dict:
+    """Input: scope object. Output: normalized scope dict; reject partial values, booleans and arbitrary tokens."""
+    if (not isinstance(value, dict) or type(value.get('delay')) is not int or value['delay'] < 0
+            or any(not isinstance(value.get(key), str) or not re.fullmatch(r'[A-Z][A-Z0-9_]*', value[key])
+                   for key in ('region', 'universe'))):
+        raise ValueError('configured or structured scope must specify one exact region, delay and universe')
+    return {key: value[key] for key in ('region', 'delay', 'universe')}
+
+
+def application_option(paths, option: dict, *, config: dict | None = None) -> dict:
+    """Input: paths/saved option/config dict. Output: display contract; no readiness, platform or authority effects."""
+    result = dict(option_id=option['option_id'], title=option.get('title', option.get('name', '')),
+                  startable=False, scope=None, scope_source='', reason='')
+    try:
+        needs_config = (option.get('primary_incentive') in CONFIGURED_SCOPE_INCENTIVES
+                        and 'execution_scope' not in option
+                        and not re.fullmatch(EXACT_SCOPE_PATTERN, str(option.get('candidate_scope', '')).strip().upper()))
+        resolved = config if config is not None else (load_start_config(paths) if needs_config else {})
+        scope, source = _application_scope(option, resolved)
+        result.update(startable=True, scope=scope, scope_source=source)
+    except ValueError as error:
+        result['reason'] = str(error)
+        from wqb.preflight_notifications import start_contract_path
+        from wqb.runtime_control import _read
+        receipt = _read(start_contract_path(paths, option['option_id'], str(error)))
+        notification = receipt.get('notification', {})
+        result['maintenance_status'] = (notification.get('status', 'not_requested')
+                                        if isinstance(notification, dict) else 'delivery_uncertain')
+    return result
+
+
 def application_start_form(paths, selected_option_id: str) -> dict:
     """Input: ConsolePaths/persisted option ID str. Output: ordinary Start form using saved scope and permission only."""
     config = load_start_config(paths)
     from wqb.console_server import _selected_option
     option = _selected_option(paths, selected_option_id)
-    scope_match = re.fullmatch(r'([A-Z][A-Z0-9_]*)\s+D(\d+)\s*([A-Z][A-Z0-9_]*)',
-                              str(option.get('candidate_scope', '')).strip().upper())
-    if scope_match is None:
-        raise ValueError('option scope must specify one exact region, delay and universe')
-    scope = dict(region=scope_match[1], delay=int(scope_match[2]), universe=scope_match[3])
+    scope, _ = _application_scope(option, config)
     return dict(selected_option_id=selected_option_id,
         selected_region=scope.get('region', ''), selected_delay=scope.get('delay', ''),
         selected_universe=scope.get('universe', ''), enable_live_api=config.get('live_api_enabled', False))

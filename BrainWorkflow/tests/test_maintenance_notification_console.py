@@ -10,21 +10,25 @@ from wqb.runtime_control import request_runtime_state, update_runtime_status
 
 
 class MaintenanceNotificationConsoleTests(unittest.TestCase):
-    def test_console_start_schedules_only_one_nonblocking_notification_pass(self):
-        """Input: mocked local server. Output: assertions. Startup compensates once, never by recurring model polling."""
+    def test_console_start_schedules_one_nonblocking_pass_per_outbox(self):
+        """Input: mocked server. Output: assertions; each independent outbox starts once, never recurring model polling."""
         from types import SimpleNamespace
-        from unittest.mock import Mock
+        from unittest.mock import Mock, call
         from wqb.console_server import run_console
         from wqb.maintenance_notifications import dispatch_startup_notifications
+        from wqb.preflight_notifications import dispatch_pending_start_contract_notices
         server = SimpleNamespace(server_address=("127.0.0.1", 8765), serve_forever=Mock(), server_close=Mock())
         paths = SimpleNamespace(runs_root=Path("runs"))
+        workers = [Mock(), Mock()]
         with patch("wqb.console_server.default_console_paths", return_value=paths), \
              patch("wqb.console_server.make_console_server", return_value=server), \
-             patch("wqb.console_server.threading.Thread") as worker:
+             patch("wqb.console_server.threading.Thread", side_effect=workers) as worker:
             run_console(open_browser=False)
-        worker.assert_called_once_with(target=dispatch_startup_notifications, args=(paths.runs_root,),
-                                       name="maintenance-startup-notice", daemon=True)
-        worker.return_value.start.assert_called_once()
+        self.assertEqual(worker.call_args_list, [
+            call(target=dispatch_startup_notifications, args=(paths.runs_root,), name='maintenance-startup-notice', daemon=True),
+            call(target=dispatch_pending_start_contract_notices, args=(paths.runs_root,), name='start-contract-pending-notices', daemon=True)])
+        for thread in workers:
+            thread.start.assert_called_once_with()
         server.serve_forever.assert_called_once()
         server.server_close.assert_called_once()
 

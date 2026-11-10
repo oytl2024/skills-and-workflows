@@ -101,7 +101,10 @@ export function App({ client }: { client: ApplicationClient }) {
   const [selectedOption, setSelectedOption] = useState('');
   const [views, setViews] = useState<Record<string, LaneView>>({});
   useEffect(() => { client.start(); return () => client.dispose(); }, [client]);
-  const optionId = snapshot?.options.some(o => o.option_id === selectedOption) ? selectedOption : snapshot?.options[0]?.option_id ?? '';
+  const optionId = snapshot?.options.some(o => o.option_id === selectedOption && o.startable !== false) ? selectedOption : snapshot?.options.find(o => o.startable !== false)?.option_id ?? '';
+  const option = snapshot?.options.find(o => o.option_id === optionId);
+  const newResearch = snapshot?.start_mode ? snapshot.start_mode === 'new' :
+    !snapshot || snapshot.group.group_id === 'none' || snapshot.group.status === 'retired';
   const currentLane = snapshot?.lanes.some(l => l.lane_id === selectedLane) ? selectedLane : null;
   const relevantCommands = commands.filter(c => c.group_id === snapshot?.group.group_id);
   const unresolved = relevantCommands.filter(c => ['pending', 'unknown'].includes(c.status));
@@ -113,10 +116,12 @@ export function App({ client }: { client: ApplicationClient }) {
   return <div className="application-shell">
     <header className="application-header"><div className="brand"><FlaskConical size={21} /><span>BrainWorkflow</span><span className="brand-divider">/</span><span className="workspace-label">研究工作台</span></div>
       <div className="group-actions"><label className="sr-only" htmlFor="objective">研究目标</label><select id="objective" value={optionId} disabled={!snapshot || !snapshot.allowed_actions.start || actionBlocked('start')} onChange={event => setSelectedOption(event.target.value)}>
-        {!snapshot?.options.length && <option value="">暂无可选目标</option>}{snapshot?.options.map(o => <option key={o.option_id} value={o.option_id}>{o.title}</option>)}
-      </select><button className="start-button" disabled={!snapshot?.allowed_actions.start || actionBlocked('start') || !['live', 'polling'].includes(connection) || connection === 'fixture'} onClick={() => { void client.command('start', optionId); }}><Play size={15} fill="currentColor" />Start</button>
+        {!snapshot?.options.length && <option value="">暂无可选目标</option>}{snapshot?.options.map(o => <option key={o.option_id} value={o.option_id} disabled={o.startable === false} title={o.reason}>{o.title}{o.startable === false ? ' · 需独立维护' : ''}</option>)}
+      </select><button className="start-button" disabled={!snapshot?.allowed_actions.start || (newResearch && (!optionId || option?.startable === false)) || actionBlocked('start') || !['live', 'polling'].includes(connection) || connection === 'fixture'} onClick={() => { void client.command('start', newResearch ? optionId : undefined); }}><Play size={15} fill="currentColor" />Start</button>
         <button className="stop-button" disabled={!snapshot?.allowed_actions.stop || actionBlocked('stop') || connection === 'fixture'} onClick={() => { void client.command('stop'); }}><Square size={14} fill="currentColor" />Stop</button></div>
     </header>
+    {newResearch && option?.scope && <div className="evidence-bar" role="status">研究范围：{option.scope.region} D{option.scope.delay} {option.scope.universe}{option.scope_source === 'configuration' ? ' · 已保存配置' : ' · 选项绑定'}</div>}
+    {newResearch && snapshot?.options.some(o => o.startable === false) && <div className="evidence-bar">{snapshot.options.filter(o => o.startable === false).map(o => <span key={o.option_id}>{o.title}：{o.reason}{o.maintenance_status && o.maintenance_status !== 'not_requested' ? ` · 维护通知 ${o.maintenance_status}` : ''}</span>)}</div>}
     <div className="evidence-bar"><div className="group-state">组状态 {snapshot ? <Status value={snapshot.group.status} /> : <span>未知</span>}{snapshot && <span className="desired-state">期望：{stateName(snapshot.group.desired_state)}</span>}</div>
       {snapshot?.group.daily_budget !== undefined && <span className="budget">共享日预算 <span className="mono">{typeof snapshot.group.daily_budget === 'object' && snapshot.group.daily_budget && !Array.isArray(snapshot.group.daily_budget) && 'used' in snapshot.group.daily_budget && 'limit' in snapshot.group.daily_budget ? `${fact(snapshot.group.daily_budget.used)} / ${fact(snapshot.group.daily_budget.limit)}` : fact(snapshot.group.daily_budget)}</span></span>}
       <span className="connection" data-connection={connection}><Radio size={14} />{CONNECTION_NAMES[connection]}</span>

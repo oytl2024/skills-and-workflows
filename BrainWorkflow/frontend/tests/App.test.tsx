@@ -8,6 +8,44 @@ import { fixtureSnapshot } from './fixtures';
 afterEach(cleanup);
 
 describe('research workspace (explicit offline fixtures)', () => {
+  it('disables maintenance-only goals and shows the exact configured scope', () => {
+    const snapshot = fixtureSnapshot();
+    snapshot.group.group_id = 'none';
+    snapshot.options = [
+      { option_id: 'theme', title: 'Theme feasibility', startable: false, reason: 'Requires independent maintenance' },
+      { option_id: 'research', title: 'Pool research', startable: true, scope: { region: 'KOR', delay: 0, universe: 'TOP600' } },
+    ];
+    render(<App client={ApplicationClient.fixture(snapshot)} />);
+    expect((screen.getByRole('option', { name: /Theme feasibility/ }) as HTMLOptionElement).disabled).toBe(true);
+    expect((screen.getByLabelText('研究目标') as HTMLSelectElement).value).toBe('research');
+    expect(screen.getByText(/KOR D0 TOP600/)).toBeTruthy();
+  });
+
+  it('resumes an existing group without sending a new option', async () => {
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, json: async () => fixtureSnapshot() });
+    const client = new ApplicationClient({ fetcher, eventSource: null, storage: null });
+    const command = vi.spyOn(client, 'command').mockResolvedValue();
+    render(<App client={client} />);
+    await screen.findByText('离线测试目标');
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    expect(command).toHaveBeenCalledWith('start', undefined);
+  });
+
+  it('resumes frozen legacy authority even when no research cards are available', async () => {
+    const snapshot = fixtureSnapshot();
+    snapshot.group.group_id = 'legacy:paused-run';
+    snapshot.options = [];
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, json: async () => snapshot });
+    const client = new ApplicationClient({ fetcher, eventSource: null, storage: null });
+    const command = vi.spyOn(client, 'command').mockResolvedValue();
+    render(<App client={client} />);
+    await screen.findByText('legacy:paused-run');
+    const start = screen.getByRole('button', { name: 'Start' });
+    expect((start as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(start);
+    expect(command).toHaveBeenCalledWith('start', undefined);
+  });
+
   it.each([1, 2, 4])('renders %i lanes and bounded arrow navigation without commands', count => {
     const client = ApplicationClient.fixture(fixtureSnapshot(count));
     const command = vi.spyOn(client, 'command');
