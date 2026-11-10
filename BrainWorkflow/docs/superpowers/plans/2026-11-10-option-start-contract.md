@@ -94,3 +94,26 @@ The earlier failed run remains separate; no code failures were waived. Existing
 Windows subprocess decoding warnings remain in the test log and are not claimed
 fixed by this scope. Native production revision651ec8b2 is unchanged by the
 startup-test contract update. Installation and default-branch merge follow.
+
+## Installed Outcome
+
+Implementation `c45d4889889fc21d100f549b6c2dbd80e4b79d80` was pushed and
+remote equality verified before installation. First copy encountered an old
+process file handle; no source/receipt was replaced. After the exact owned
+processes exited, the same full-hash audit passed and installation succeeded.
+All363 files match the verified staged application, obsolete JS removed; current
+profile, knowledge and research paths were not deletion targets. Rollback230304
+remains. Loaded revision651ec8b2 and EXE32a8cfd7 match native smoke.
+
+Read-only installed acceptance passed: `start_mode=new`, Start/Stop available,
+no blocker; actual option1 shows USA D1 TOP3000 and is startable, options2..4
+show independent prerequisites. Mission state hashes unchanged, zero command
+POSTs/platform/model/research calls. Receipt `option-start-installed-20261110.json`
+is private. This proves the application/control boundary, not live model/platform
+availability or successful Alpha production. Old maintenance proofs were not
+renewed. Existing draft PR2 is being reused for default-branch publication.
+
+Post-install affected desktop/notification/scope/HTTP/entry regressions:
+84 tests passed in21.991s. No tracked private resource paths were found. The
+cleanup/install outcome is committed separately before merging PR2; the source
+and reviewed3334-case proof remain unchanged.
