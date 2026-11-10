@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
+import stat
 from typing import Any
 from uuid import uuid4
 
@@ -168,6 +170,7 @@ def _write_index(
     capture_dir: Path,
     summary: dict[str, Any],
     knowledge_root: Path,
+    publish_source_index: bool = True,
 ) -> None:
     """Input: capture dir and summary. Output: none. Write the human-readable raw capture index."""
     lines = [
@@ -208,6 +211,8 @@ def _write_index(
         render_front_matter(metadata) + body,
         encoding="utf-8",
     )
+    if not publish_source_index:
+        return
     upsert_source_index_rows(
         knowledge_root,
         [
@@ -244,11 +249,35 @@ def capture_platform_data_fields(
     resume_capture: bool = False,
     capture_plan_path: str | Path | None = None,
     fields_per_scope: int = 0,
+    capture_id: str | None = None,
+    publish_source_index: bool = True,
 ) -> dict[str, Any]:
     """Input: client, vault root, scope filters, limits. Output: summary dict. Capture platform data fields into raw."""
     root = Path(knowledge_root)
+    if capture_id is not None:
+        if not isinstance(capture_id, str) or not re.fullmatch(r"[0-9a-f]{32}", capture_id):
+            raise ValueError("capture_id must be 32 lowercase hexadecimal characters")
+        generated_at = generated_at or _now()
+        date.fromisoformat(_capture_day(generated_at))
+        if not resume_capture:
+            raise ValueError("isolated capture requires resume_capture=True")
+        target = root / RAW_CAPTURE_ROOT / f"{_capture_day(generated_at)}-{capture_id}"
+        for path in (target, *target.parents):
+            if path.is_symlink() or (path.exists() and getattr(path.lstat(), 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+                raise ValueError("capture path must not contain links/reparse points")
+        if target.exists() and not target.is_dir():
+            raise ValueError("capture path is not a directory")
+        expected = {"scopes.jsonl", "data_sets.jsonl", "data_fields.jsonl", "errors.jsonl",
+                    "operators.json", "manifest.json", "index.md"}
+        if target.exists() and any(p.name not in expected or p.is_symlink() or not p.is_file()
+                or p.lstat().st_nlink != 1
+                or getattr(p.lstat(), 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                for p in target.iterdir()):
+            raise ValueError("unexpected capture contents")
+    capture_lock = (f'.data_capture_compile.{capture_id}.lock'
+                    if capture_id and not publish_source_index else DATA_CAPTURE_LOCK_NAME)
     with exclusive_json_lock(
-        root / DATA_CAPTURE_LOCK_NAME,
+        root / capture_lock,
         DATA_CAPTURE_LOCK_TIMEOUT_SECONDS,
         DATA_CAPTURE_LOCK_SLEEP_SECONDS,
         DATA_CAPTURE_LOCK_STALE_SECONDS,
@@ -258,6 +287,8 @@ def capture_platform_data_fields(
             client, knowledge_root, generated_at, instrument_types, regions, delays, universes,
             max_scopes, max_datasets_per_scope, max_fields_per_dataset, resume_capture,
             capture_plan_path, fields_per_scope,
+            capture_id,
+            publish_source_index,
         )
 
 
@@ -275,12 +306,15 @@ def _capture_platform_data_fields_locked(
     resume_capture: bool = False,
     capture_plan_path: str | Path | None = None,
     fields_per_scope: int = 0,
+    capture_id: str | None = None,
+    publish_source_index: bool = True,
 ) -> dict[str, Any]:
     """Input: capture settings while holding the shared lock. Output: summary dict. Write one non-interleaved raw generation."""
     generated = generated_at or _now()
     root = Path(knowledge_root)
     capture_generation_id = uuid4().hex
-    capture_dir = root / RAW_CAPTURE_ROOT / _capture_day(generated)
+    capture_name = _capture_day(generated) + (f"-{capture_id}" if capture_id else "")
+    capture_dir = root / RAW_CAPTURE_ROOT / capture_name
     capture_dir.mkdir(parents=True, exist_ok=True)
     if not resume_capture:
         _clear_outputs(capture_dir)
@@ -298,6 +332,8 @@ def _capture_platform_data_fields_locked(
     try:
         operators = fetch_operators(client)
         _write_json(capture_dir / "operators.json", {"generated_at": generated, "operators": operators})
+    except InterruptedError:
+        raise
     except Exception as error:
         operator_fetch_succeeded = False
         append("errors.jsonl", _error_row(None, "/operators", error, generated))
@@ -341,9 +377,12 @@ def _capture_platform_data_fields_locked(
                 int(scope.delay),
                 scope.universe,
                 limit=SAFE_PAGE_LIMIT,
+                **({'max_records': int(max_datasets_per_scope)} if capture_id and max_datasets_per_scope > 0 else {}),
             )
             if max_datasets_per_scope > 0:
                 data_sets = data_sets[: int(max_datasets_per_scope)]
+        except InterruptedError:
+            raise
         except Exception as error:
             scope_row.update({"status": "failed", "data_set_count": 0, "message": str(error), "certification_status": "partial"})
             append("scopes.jsonl", scope_row)
@@ -379,11 +418,14 @@ def _capture_platform_data_fields_locked(
                     dataset_id=dataset_id,
                     limit=SAFE_PAGE_LIMIT,
                     max_records=(
-                        min(max(remaining_scope_budget, 1), SAFE_PAGE_LIMIT)
+                        min(max(remaining_scope_budget, 1), SAFE_PAGE_LIMIT,
+                            max_fields_per_dataset if max_fields_per_dataset > 0 else SAFE_PAGE_LIMIT)
                         if budget_enabled
                         else max_fields_per_dataset if max_fields_per_dataset > 0 else 1000000
                     ),
                 )
+            except InterruptedError:
+                raise
             except Exception as error:
                 append("errors.jsonl", _error_row(scope, f"/data-fields?dataset.id={dataset_id}", error, generated))
                 field_errors.append(str(error))
@@ -454,5 +496,5 @@ def _capture_platform_data_fields_locked(
     errors_path = capture_dir / "errors.jsonl"
     if not errors_path.exists():
         errors_path.write_text("", encoding="utf-8")
-    _write_index(capture_dir, summary, root)
+    _write_index(capture_dir, summary, root, publish_source_index)
     return summary

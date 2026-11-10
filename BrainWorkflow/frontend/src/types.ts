@@ -2,6 +2,29 @@ export type JsonValue = string | number | boolean | null | JsonValue[] | { [key:
 export type Stage = 'scout' | 'seed' | 'repair';
 export type Action = 'start' | 'stop';
 
+export interface ResearchScope {
+  region: string;
+  delay: number;
+  universe: string;
+}
+
+export interface ScopeSelection {
+  choices: ResearchScope[];
+  configured_scope: ResearchScope | null;
+  captured_at: string;
+  stale: boolean;
+}
+
+export interface Preparation {
+  stage: string;
+  status: string;
+  requests_used: number;
+  request_limit: number;
+  scope?: ResearchScope;
+  field_count?: number;
+  reason?: string;
+}
+
 export interface ExperimentNode {
   node_id: string;
   parent_id?: string | null;
@@ -56,7 +79,8 @@ export interface ApplicationSnapshot {
   lanes: Lane[];
   allowed_actions: { start: boolean; stop: boolean };
   start_mode?: 'new' | 'resume';
-  options: { option_id: string; title: string; startable?: boolean; scope?: { region: string; delay: number; universe: string } | null; scope_source?: string; reason?: string; maintenance_status?: string }[];
+  options: { option_id: string; title: string; startable?: boolean; scope?: ResearchScope | null; scope_source?: string; reason?: string; maintenance_status?: string; selection_mode?: 'manual_multiplier'; scope_selection?: ScopeSelection }[];
+  preparation?: Preparation;
   blocker: string;
   command_statuses?: CommandReply[] | Record<string, Omit<CommandReply, 'command_id'>>;
 }

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Activity, ArrowUpRight, CircleAlert, FlaskConical, GitBranch, Play, Radio, Sprout, Square, Wrench } from 'lucide-react';
 import { ApplicationClient } from './api';
-import type { ApplicationState, Lane, LaneView, Stage, TrackedCommand } from './types';
+import type { ApplicationState, Lane, LaneView, ResearchScope, Stage, TrackedCommand } from './types';
 import { WorkflowNavigation } from './components/WorkflowNavigation';
 import { ExperimentTree } from './components/ExperimentTree';
 import { fact, NodeDetail, Status, stateName } from './components/NodeDetail';
@@ -99,12 +99,28 @@ export function App({ client }: { client: ApplicationClient }) {
   const { snapshot, connection, error, commands } = state;
   const [selectedLane, setSelectedLane] = useState<string | null>(null);
   const [selectedOption, setSelectedOption] = useState('');
+  const [scopeChoice, setScopeChoice] = useState({ key: '', region: '', delay: '', universe: '' });
   const [views, setViews] = useState<Record<string, LaneView>>({});
   useEffect(() => { client.start(); return () => client.dispose(); }, [client]);
   const optionId = snapshot?.options.some(o => o.option_id === selectedOption && o.startable !== false) ? selectedOption : snapshot?.options.find(o => o.startable !== false)?.option_id ?? '';
   const option = snapshot?.options.find(o => o.option_id === optionId);
   const newResearch = snapshot?.start_mode ? snapshot.start_mode === 'new' :
     !snapshot || snapshot.group.group_id === 'none' || snapshot.group.status === 'retired';
+  const manualScope = newResearch && option?.selection_mode === 'manual_multiplier';
+  const scopeKey = JSON.stringify([manualScope, optionId, option?.scope_selection]);
+  useEffect(() => { setScopeChoice({ key: scopeKey, region: '', delay: '', universe: '' }); }, [scopeKey]);
+  const choice = scopeChoice.key === scopeKey ? scopeChoice : { key: scopeKey, region: '', delay: '', universe: '' };
+  const catalog = option?.scope_selection;
+  const choices = catalog?.choices ?? [];
+  const regions = [...new Set(choices.map(c => c.region))];
+  const delays = [...new Set(choices.filter(c => c.region === choice.region).map(c => c.delay))];
+  const pair = choices.filter(c => c.region === choice.region && choice.delay !== '' && c.delay === Number(choice.delay));
+  const universes = [...new Set(pair.map(c => c.universe))];
+  const configured = catalog?.configured_scope;
+  const savedUniverse = configured?.region === choice.region && universes.includes(configured.universe) ? configured.universe : '';
+  const universe = savedUniverse || choice.universe;
+  const selectedScope: ResearchScope | undefined = choice.region && choice.delay !== '' && universes.includes(universe) ?
+    { region: choice.region, delay: Number(choice.delay), universe } : undefined;
   const currentLane = snapshot?.lanes.some(l => l.lane_id === selectedLane) ? selectedLane : null;
   const relevantCommands = commands.filter(c => c.group_id === snapshot?.group.group_id);
   const unresolved = relevantCommands.filter(c => ['pending', 'unknown'].includes(c.status));
@@ -117,9 +133,30 @@ export function App({ client }: { client: ApplicationClient }) {
     <header className="application-header"><div className="brand"><FlaskConical size={21} /><span>BrainWorkflow</span><span className="brand-divider">/</span><span className="workspace-label">研究工作台</span></div>
       <div className="group-actions"><label className="sr-only" htmlFor="objective">研究目标</label><select id="objective" value={optionId} disabled={!snapshot || !snapshot.allowed_actions.start || actionBlocked('start')} onChange={event => setSelectedOption(event.target.value)}>
         {!snapshot?.options.length && <option value="">暂无可选目标</option>}{snapshot?.options.map(o => <option key={o.option_id} value={o.option_id} disabled={o.startable === false} title={o.reason}>{o.title}{o.startable === false ? ' · 需独立维护' : ''}</option>)}
-      </select><button className="start-button" disabled={!snapshot?.allowed_actions.start || (newResearch && (!optionId || option?.startable === false)) || actionBlocked('start') || !['live', 'polling'].includes(connection) || connection === 'fixture'} onClick={() => { void client.command('start', newResearch ? optionId : undefined); }}><Play size={15} fill="currentColor" />Start</button>
+      </select><button className="start-button" disabled={!snapshot?.allowed_actions.start || (newResearch && (!optionId || option?.startable === false)) || (manualScope && !selectedScope) || actionBlocked('start') || !['live', 'polling'].includes(connection) || connection === 'fixture'} onClick={() => { if (manualScope) void client.command('start', optionId, selectedScope); else void client.command('start', newResearch ? optionId : undefined); }}><Play size={15} fill="currentColor" />Start</button>
         <button className="stop-button" disabled={!snapshot?.allowed_actions.stop || actionBlocked('stop') || connection === 'fixture'} onClick={() => { void client.command('stop'); }}><Square size={14} fill="currentColor" />Stop</button></div>
     </header>
+    {manualScope && <div className="evidence-bar scope-selection">
+      <label>Region<select aria-label="Region" value={choice.region} disabled={actionBlocked('start') || !snapshot?.allowed_actions.start} onChange={event => setScopeChoice({ key: scopeKey, region: event.target.value, delay: '', universe: '' })}>
+        <option value="">请选择 Region</option>{regions.map(region => <option key={region} value={region}>{region}</option>)}
+      </select></label>
+      <label>Delay<select aria-label="Delay" value={choice.delay} disabled={!choice.region || actionBlocked('start') || !snapshot?.allowed_actions.start} onChange={event => setScopeChoice({ ...choice, delay: event.target.value, universe: '' })}>
+        <option value="">请选择 Delay</option>{delays.map(delay => <option key={delay} value={delay}>D{delay}</option>)}
+      </select></label>
+      {savedUniverse ? <label>Universe<output aria-label="Universe">{savedUniverse} · 已保存配置</output></label> :
+        <label>Universe<select aria-label="Universe" value={choice.universe} disabled={!pair.length || actionBlocked('start') || !snapshot?.allowed_actions.start} onChange={event => setScopeChoice({ ...choice, universe: event.target.value })}>
+          <option value="">请选择 Universe</option>{universes.map(u => <option key={u} value={u}>{u}</option>)}
+        </select></label>}
+      <span>倍率条件由你判断，系统按所选范围研究</span>
+      {catalog?.stale && <span>范围目录已过期</span>}
+    </div>}
+    {snapshot?.preparation && <div className="evidence-bar" role="status">
+      <span>范围准备 · {({ capture: '采集字段', compile: '编译资源', planning: '规划研究', ready: '准备就绪', preflight: '检查资源' } as Record<string, string>)[snapshot.preparation.stage] ?? snapshot.preparation.stage} · {stateName(snapshot.preparation.status)}</span>
+      <span>请求 {snapshot.preparation.requests_used} / {snapshot.preparation.request_limit}</span>
+      {snapshot.preparation.field_count !== undefined && <span>字段 {snapshot.preparation.field_count}</span>}
+      {snapshot.preparation.scope && <span>{snapshot.preparation.scope.region} D{snapshot.preparation.scope.delay} {snapshot.preparation.scope.universe}</span>}
+      {snapshot.preparation.reason && <span>{snapshot.preparation.reason}</span>}
+    </div>}
     {newResearch && option?.scope && <div className="evidence-bar" role="status">研究范围：{option.scope.region} D{option.scope.delay} {option.scope.universe}{option.scope_source === 'configuration' ? ' · 已保存配置' : ' · 选项绑定'}</div>}
     {newResearch && snapshot?.options.some(o => o.startable === false) && <div className="evidence-bar">{snapshot.options.filter(o => o.startable === false).map(o => <span key={o.option_id}>{o.title}：{o.reason}{o.maintenance_status && o.maintenance_status !== 'not_requested' ? ` · 维护通知 ${o.maintenance_status}` : ''}</span>)}</div>}
     <div className="evidence-bar"><div className="group-state">组状态 {snapshot ? <Status value={snapshot.group.status} /> : <span>未知</span>}{snapshot && <span className="desired-state">期望：{stateName(snapshot.group.desired_state)}</span>}</div>

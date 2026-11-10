@@ -50,6 +50,9 @@ dl, dt, dd { margin: 0; }
 .stop-button { border-color: #d7dade; }
 .stop-button:not(:disabled):hover { color: var(--danger); background: #fcf0f0; border-color: #d4b4b4; }
 .evidence-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 24px; min-height: 39px; padding: 8px 28px; border-bottom: 1px solid var(--rule); color: var(--muted); font-size: 12px; flex-shrink: 0; }
+.scope-selection label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; max-width: 100%; }
+.scope-selection select { min-height: 32px; width: 160px; max-width: 100%; padding: 4px 8px; background: #fff; color: var(--ink); border: 1px solid #d7dade; border-radius: 5px; }
+.scope-selection output, .scope-selection > span { overflow-wrap: anywhere; }
 .group-state, .connection { display: inline-flex; align-items: center; gap: 9px; }
 .desired-state { color: var(--muted); }
 .budget { display: flex; align-items: center; gap: 8px; }

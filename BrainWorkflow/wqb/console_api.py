@@ -456,6 +456,11 @@ def project_application(paths, state: dict, server_epoch: str, sequence: int) ->
         from wqb.console_start import application_option
         result['options'] = [application_option(paths, row)
                              for row in _rows(state.get('option_cards', [])) if row.get('option_id')]
+        start_preparation = state.get('start_preparation')
+        preparation = start_preparation.get('multiplier_preparation') if isinstance(start_preparation, dict) else None
+        if isinstance(preparation, dict):
+            result['preparation'] = {key: preparation[key] for key in (
+                'stage', 'status', 'requests_used', 'request_limit', 'scope', 'field_count', 'reason') if key in preparation}
         result['request_revision'] = hashlib.sha256(_canonical([
             _workflow_action_hash(state), group_revision,
             result['group']['group_id'] if result['group'] else None,
@@ -510,13 +515,20 @@ def submit_command(paths, command: dict, *, action_runner, state_reader) -> dict
     try:
         if (not isinstance(command, dict) or not isinstance(command_id, str)
                 or not SAFE_ID.fullmatch(command_id)
-                or set(command) - {'command_id', 'action', 'expected_revision', 'selected_option_id', 'group_id'}
+                or set(command) - {'command_id', 'action', 'expected_revision', 'selected_option_id', 'group_id', 'selected_scope'}
                 or command.get('action') not in {'start', 'stop'}
                 or ('group_id' in command and (not isinstance(command['group_id'], str)
                     or not SAFE_ID.fullmatch(command['group_id'])))
                 or not isinstance(command.get('expected_revision'), str)
                 or not command['expected_revision']):
             raise ValueError('invalid command schema or identity')
+        if 'selected_scope' in command:
+            selected = command['selected_scope']
+            if (command['action'] != 'start' or not command.get('selected_option_id')
+                    or not isinstance(selected, dict) or set(selected) - {'region', 'delay', 'universe'}
+                    or not isinstance(selected.get('region'), str) or type(selected.get('delay')) is not int
+                    or ('universe' in selected and not isinstance(selected['universe'], str))):
+                raise ValueError('invalid selected scope schema')
         payload = _canonical(command)
         if len(payload.encode()) > MAX_COMMAND_BYTES:
             raise ValueError('command exceeds size limit')
@@ -552,6 +564,22 @@ def submit_command(paths, command: dict, *, action_runner, state_reader) -> dict
             elif 'selected_option_id' in command and (command['action'] != 'start' or
                     command['selected_option_id'] not in {r['option_id'] for r in current['options']}):
                 response = _reply(command_id, 'refused', 'Invalid selected_option_id')
+            elif (command['action'] == 'start' and current.get('start_mode') == 'new'
+                    and 'selected_scope' not in command
+                    and any(item['option_id'] == command.get('selected_option_id')
+                            and item.get('selection_mode') == 'manual_multiplier' for item in current['options'])):
+                response = _reply(command_id, 'refused', 'Select a valid region, delay and universe')
+            elif 'selected_scope' in command:
+                selected = next((item for item in current['options'] if item['option_id'] == command['selected_option_id']), {})
+                if current.get('start_mode') != 'new' or selected.get('selection_mode') != 'manual_multiplier':
+                    response = _reply(command_id, 'refused', 'Scope selection is only allowed for new Multiplier research')
+                else:
+                    from wqb.multiplier_scope import select_multiplier_scope
+                    try:
+                        select_multiplier_scope({'scopes': selected['scope_selection']['choices']},
+                            {'selected_scope': selected['scope_selection']['configured_scope']}, command['selected_scope'])
+                    except (ValueError, KeyError, TypeError):
+                        response = _reply(command_id, 'refused', 'Select a valid region, delay and universe')
             pending = response or _reply(command_id, 'unknown', 'Dispatch outcome unknown; never automatically replay')
             receipt = {'schema_version': 1, 'command': command, 'response': pending}
             _publish(root, receipt_path, receipt)

@@ -239,3 +239,26 @@ workspace2,894,873,335 logical bytes, including knowledge1,470,266,038,
 runs146,581,062 and shared repository/product1,263,956,408. These are a point-in-
 time size observation, not deletion candidates; browser/application logs may grow.
 Private audit: `storage-totals-20261110.json` under desktop-validation.
+
+## Nov10 Multiplier Deployment Collection
+
+Only after a verified push and full offline acceptance, install build
+`20261110-155619-1023`. The local exact-hash audit is
+`output/desktop-validation/multiplier-install-audit-20261110-reviewed.json`:
+363 old files ->366 new files; three sourced Multiplier modules are added.
+The only deletion targets, relative to
+`output/desktop-application/installed/BrainWorkflow/`, are:
+
+- `_internal/frontend/dist/assets/index-Vec44rGF.js`
+- `_internal/frontend/dist/assets/index-mpM9NerJ.css`
+
+The new compiled index references `index-D5TNGxgA.js` and
+`index-Cg8GQeR5.css`; both old files remain reproducible in the preserved
+`20261110-093248-7744` build. Git protects source, not private binaries;
+the exact old/new application hashes are retained locally. Collection validates
+workspace containment, every ancestor/content for reparse points and original
+file digests before literal-path removal. No broader build sweep is included.
+Canonical knowledge, research/accounting/check/recovery evidence, user settings,
+credentials, profiles and rollback builds are excluded. Acceptance/results are
+recorded in root todo.md and the local install proof; this audit alone does not
+claim collection has happened.
