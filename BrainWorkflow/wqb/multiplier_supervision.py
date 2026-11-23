@@ -16,6 +16,7 @@ from wqb.owned_network_deadline import OwnedExecutionTree
 
 POLL_SECONDS = .05
 ADMISSION_SECONDS = 10
+PERMIT_CHECK_INTERVAL_SECONDS = .25
 
 
 def supervise_command(command: list[str], *, cwd: Path, deadline: float,
@@ -108,12 +109,18 @@ def prepare_multiplier_fields_supervised(knowledge_root: Path, job_dir: Path, sc
         # Shared multi-file publication runs in the owning parent, never in the
         # forcibly terminated network worker. Stop checks bracket each phase.
         from wqb.multiplier_scope import publish_scope_catalog
+        state_path = job / 'state.json'
+        state = _load(state_path) if state_path.exists() else {}
+        def phase(stage: str):
+            """Input: local phase name. Output: owner-validated progress before shared publication begins."""
+            progress(dict(stage=stage, requests_used=state.get('requests_used', 0),
+                field_count=(state.get('capture') or {}).get('field_count', 0)))
         pending = job / 'scope_options.json'
         if pending.exists():
             check_cancelled()
+            phase('publish_scope')
             options = _load(pending)
             publish_scope_catalog(root, options['payload'], options['captured_at'])
-        state_path = job / 'state.json'
         if state_path.exists():
             state = _load(state_path)
             if state.get('capture'):
@@ -124,6 +131,7 @@ def prepare_multiplier_fields_supervised(knowledge_root: Path, job_dir: Path, sc
                 if not capture.is_relative_to(root / 'raw/platform/data_fields'):
                     raise ValueError('capture outside original raw boundary')
                 _verify_refs(capture, state['capture_refs'])
+                phase('publish_capture')
                 _write_index(capture, state['capture'], root)
         check_cancelled()
         def offline_client(**kwargs):
@@ -154,13 +162,20 @@ def main() -> None:
             raise TimeoutError('preparation admission timed out')
         time.sleep(POLL_SECONDS)
 
+    next_check = 0.0
+
     def check():
         """Input: none. Output: reject revoked admission or elapsed original deadline."""
+        nonlocal next_check
+        if time.time() >= row['deadline']:
+            raise TimeoutError('preparation deadline exhausted')
+        now = time.monotonic()
+        if now < next_check:
+            return
         current = _load(job / 'supervisor.json')
         if current.get('nonce') != args.nonce or current.get('permitted') is not True:
             raise InterruptedError('preparation permit revoked')
-        if time.time() >= row['deadline']:
-            raise TimeoutError('preparation deadline exhausted')
+        next_check = now + PERMIT_CHECK_INTERVAL_SECONDS
 
     def offline_client(**kwargs):
         """Input: client kwargs. Output: refusal; no-network starts cannot acquire missing resources."""

@@ -226,9 +226,11 @@ def run_worker(input_path: Path, output_path: Path) -> dict[str, object]:
             + '\n'.join(evidence_blocks))
     if len(prompt.encode('utf-8')) > MAX_RENDERED_INPUT_BYTES:
         raise ValueError("oversized rendered checkpoint prompt; compile concise input")
-    executable = shutil.which("codex")
+    from wqb.codex_locator import resolve_codex_executable
+    target = resolve_codex_executable({}, path_lookup=shutil.which)
+    executable = target['executable']
     if not executable:
-        raise RuntimeError("Codex CLI is not installed or not on PATH")
+        raise RuntimeError("Codex CLI unavailable: " + target['error'])
     schema = {
         "type": "object", "properties": {"summary": {"type": "string"}},
         "required": ["summary"], "additionalProperties": False,

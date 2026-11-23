@@ -38,6 +38,22 @@ def projection_fixture(legacy=False):
 
 
 class ConsoleApiTests(unittest.TestCase):
+    def test_non_multiplier_start_never_emits_an_empty_preparation_contract(self):
+        state = dict(active_workflow={}, runtime_control={}, option_cards=[], start_preparation=dict(status='preparing'))
+        result = api.project_application(self.paths, state, 'test', 1)
+        self.assertNotIn('preparation', result)
+
+    def test_blocked_start_never_projects_pending_preparation_or_empty_blocker(self):
+        """Input: historical outer failure with stale inner progress. Output: explicit terminal failure without mutation."""
+        state = dict(active_workflow={}, runtime_control={}, option_cards=[], start_preparation=dict(
+            status='blocked', error='timed out after 3600s', multiplier_preparation=dict(
+                stage='transport', status='pending', requests_used=6, request_limit=24, field_count=0)))
+        before = copy.deepcopy(state)
+        projected = api.project_application(self.paths, state, 'test', 1)
+        self.assertEqual(projected['preparation']['status'], 'blocked')
+        self.assertIn('timed out', projected['blocker'])
+        self.assertEqual(state, before)
+
     def test_tree_source_progress_visible_before_batch_returns_without_root_results(self):
         """Input: real consumed tree fixture. Output: assertions; project in-flight source without legacy binding."""
         from tests.test_research_tree import ResearchTreeTests

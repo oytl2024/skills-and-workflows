@@ -213,9 +213,7 @@ def _write_index(
     )
     if not publish_source_index:
         return
-    upsert_source_index_rows(
-        knowledge_root,
-        [
+    index_rows = [
             SourceIndexRow(
                 path=relative_path,
                 source_family="raw/platform/data_fields",
@@ -231,8 +229,29 @@ def _write_index(
                     "machine/scope_matrix.jsonl",
                 ],
             )
-        ],
-    )
+        ]
+    for filename, status, count in (
+            ('data_fields.jsonl', 'raw_jsonl', summary['field_count']),
+            ('operators.json', 'raw_json', summary['operator_count'])):
+        source = capture_dir / filename
+        if not source.is_file():
+            continue
+        if filename == 'operators.json':
+            payload = json.loads(source.read_text(encoding='utf-8'))
+            if payload.get('generated_at') != summary['generated_at']:
+                continue
+        digest = hashlib.sha256()
+        with source.open('rb') as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                digest.update(chunk)
+        index_rows.append(SourceIndexRow(path=source.relative_to(knowledge_root).as_posix(),
+            source_family='raw/platform/data_fields', source_type='platform_data_field_capture',
+            contents='Original platform field/operator payload; individual observations are not full catalog coverage.',
+            update_check='compare original capture generation, date and SHA256',
+            captured_at=summary['generated_at'], record_count=count,
+            content_hash=digest.hexdigest(), content_status=status,
+            compiled_targets=['machine/data_ledger.jsonl']))
+    upsert_source_index_rows(knowledge_root, index_rows)
 
 
 def capture_platform_data_fields(

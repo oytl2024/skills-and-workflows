@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import json
 import os
 import re
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -19,6 +20,8 @@ from wqb.workflow_state import discover_active_workflow
 
 START_LOCK_TIMEOUT_SECONDS = 5.0
 START_LOCK_SLEEP_SECONDS = 0.02
+PREPARATION_CHECK_INTERVAL_SECONDS = 0.25
+MAX_PREPARATION_STATE_BYTES = 256 * 1024
 EXACT_SCOPE_PATTERN = r'([A-Z][A-Z0-9_]*)\s+D(\d+)\s*([A-Z][A-Z0-9_]*)'
 CONFIGURED_SCOPE_INCENTIVES = {'genius_osmosis'}
 MAINTENANCE_INCENTIVES = {'knowledge_refresh', 'theme', 'competition'}
@@ -312,6 +315,44 @@ def cancel_start(runs_root: Path) -> dict:
                                          "error": "Stop requested; local Start preparation cancelled"})
 
 
+def preparation_projection(paths, row: dict) -> dict:
+    """Input: Console paths/original request. Output: bounded display facts; never grant resource or execution authority."""
+    current = row.get('multiplier_preparation')
+    if not isinstance(current, dict):
+        return {}
+    result = dict(current)
+    request_id = row.get('request_id', '')
+    if isinstance(request_id, str) and re.fullmatch(r'[0-9a-f]{32}', request_id):
+        from wqb.multiplier_preparation import _load
+        from wqb.console_api import _safe
+        try:
+            path = _safe(paths.runs_root, paths.runs_root/'start_preflight/multiplier'/request_id/'state.json')
+            if path.is_file() and path.stat().st_size <= MAX_PREPARATION_STATE_BYTES:
+                saved = _load(path)
+                selection = row.get('selection') if isinstance(row.get('selection'), dict) else {}
+                if (saved.get('scope') == selection.get('scope')
+                        and saved.get('knowledge_root') == str(paths.knowledge_root)):
+                    count = saved.get('requests_used')
+                    capture = saved.get('capture')
+                    fields = capture.get('field_count') if isinstance(capture, dict) else None
+                    if type(count) is int and 0 <= count <= result.get('request_limit', 0):
+                        result['requests_used'] = count
+                    config = row.get('preplanned_config') if isinstance(row.get('preplanned_config'), dict) else {}
+                    policy = config.get('multiplier_preparation_policy')
+                    limit = policy.get('max_fields', 100) if isinstance(policy, dict) else 100
+                    if type(fields) is int and type(limit) is int and 0 <= fields <= limit:
+                        result['field_count'] = fields
+        except (OSError, ValueError, TypeError, KeyError):
+            pass  # Missing/malformed display evidence never qualifies a field or changes authority.
+    if row.get('status') in {'blocked', 'cancelled'}:
+        result.update(status=row['status'], stage='failed' if row['status'] == 'blocked' else 'cancelled',
+                      reason=str(row.get('error') or 'Start preparation stopped'))
+        notice = row.get('notification') if isinstance(row.get('notification'), dict) else {}
+        if notice.get('status') in {'failed', 'delivery_uncertain'}:
+            result['reason'] += '; Maintenance delivery ' + notice['status'] + ': ' + str(notice.get('error', ''))
+    return result
+
+
 def _blocked_request(paths, row: dict, receipt: dict, error: str) -> dict:
     """Input: paths, request/receipt dicts, error str. Output: blocked dict. Persist local failure while caller holds intent lock."""
     receipt = {**receipt, "request_id": row["request_id"], "job_id": row["job_id"],
@@ -327,8 +368,11 @@ def _blocked_request(paths, row: dict, receipt: dict, error: str) -> dict:
     temporary = receipt_path.with_suffix(".tmp")
     temporary.write_text(json.dumps(receipt, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(temporary, receipt_path)
-    return _write_request(paths.runs_root, {**row, "status": "blocked", "passed": False,
-        "issues": receipt["issues"], "error": error, "preflight_receipt_path": str(receipt_path)})
+    blocked = {**row, "status": "blocked", "passed": False,
+        "issues": receipt["issues"], "error": error, "preflight_receipt_path": str(receipt_path)}
+    if 'multiplier_preparation' in row:
+        blocked['multiplier_preparation'] = preparation_projection(paths, blocked)
+    return _write_request(paths.runs_root, blocked)
 
 
 def _notify_blocked_request(paths, row: dict) -> dict:
@@ -425,8 +469,14 @@ def _prepare_multiplier_start(paths, original: dict) -> dict:
     from wqb.multiplier_supervision import prepare_multiplier_fields_supervised
     from wqb.console_api import _safe
 
-    def check_cancelled():
-        """Input: none. Output: None or InterruptedError; never permit preparation after Stop or replaced intent."""
+    next_check = 0.0
+
+    def check_cancelled(force: bool = False):
+        """Input: force bool. Output: bounded Stop checks; full authority always checked at phase boundaries."""
+        nonlocal next_check
+        now = time.monotonic()
+        if not force and now < next_check:
+            return
         with start_request_guard(paths.runs_root):
             row = read_start_request(paths.runs_root)
             if row.get('request_id') != original['request_id'] or row.get('status') not in PREPARING_STATUSES:
@@ -435,10 +485,11 @@ def _prepare_multiplier_start(paths, original: dict) -> dict:
                 _write_request(paths.runs_root, {**row, 'status': 'cancelled', 'passed': False,
                     'error': 'Source intent changed during Multiplier preparation'})
                 raise InterruptedError('Source intent changed')
+        next_check = time.monotonic() + PREPARATION_CHECK_INTERVAL_SECONDS
 
     def progress(update: dict):
         """Input: bounded progress dict. Output: None; publish only under the original Start CAS."""
-        check_cancelled()
+        check_cancelled(force=True)
         with start_request_guard(paths.runs_root):
             row = read_start_request(paths.runs_root)
             if row.get('request_id') != original['request_id'] or row.get('status') not in PREPARING_STATUSES:
@@ -446,13 +497,13 @@ def _prepare_multiplier_start(paths, original: dict) -> dict:
             _write_request(paths.runs_root, {**row, 'multiplier_preparation': {**row['multiplier_preparation'], **update}})
 
     try:
-        check_cancelled()
+        check_cancelled(force=True)
         directory = _safe(paths.runs_root, paths.runs_root / 'start_preflight/multiplier' / original['request_id'])
         result = prepare_multiplier_fields_supervised(paths.knowledge_root, directory, original['selection']['scope'],
             check_cancelled=check_cancelled, progress=progress,
             policy=original['preplanned_config']['multiplier_preparation_policy'],
             allow_network=original['selection']['enable_live_api'])
-        check_cancelled()
+        check_cancelled(force=True)
         if result.get('status') != 'completed':
             raise ValueError(result.get('reason', 'Multiplier field preparation did not complete'))
         progress({**result, 'stage': 'planning', 'status': 'completed'})

@@ -457,10 +457,13 @@ def project_application(paths, state: dict, server_epoch: str, sequence: int) ->
         result['options'] = [application_option(paths, row)
                              for row in _rows(state.get('option_cards', [])) if row.get('option_id')]
         start_preparation = state.get('start_preparation')
-        preparation = start_preparation.get('multiplier_preparation') if isinstance(start_preparation, dict) else None
-        if isinstance(preparation, dict):
+        from wqb.console_start import preparation_projection
+        preparation = preparation_projection(paths, start_preparation) if isinstance(start_preparation, dict) else None
+        if isinstance(preparation, dict) and preparation:
             result['preparation'] = {key: preparation[key] for key in (
                 'stage', 'status', 'requests_used', 'request_limit', 'scope', 'field_count', 'reason') if key in preparation}
+            if start_preparation.get('status') == 'blocked' and result['start_mode'] == 'new':
+                result['blocker'] = str(start_preparation.get('error') or 'Start preparation blocked')
         result['request_revision'] = hashlib.sha256(_canonical([
             _workflow_action_hash(state), group_revision,
             result['group']['group_id'] if result['group'] else None,

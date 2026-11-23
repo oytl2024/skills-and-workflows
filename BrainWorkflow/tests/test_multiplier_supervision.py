@@ -1,5 +1,6 @@
 """Offline process containment tests; no platform/client use."""
 import importlib
+import json
 import subprocess
 import sys
 import tempfile
@@ -10,6 +11,69 @@ from unittest.mock import patch
 
 
 class MultiplierSupervisionTests(unittest.TestCase):
+    def test_real_worker_scan_observes_revocation_across_multiple_intervals(self):
+        """Input: real large catalog and advancing clock. Output: permit revocation before scan finishes."""
+        from wqb import multiplier_supervision as module
+        from wqb.multiplier_preparation import _ready, validated_preparation_policy
+        with tempfile.TemporaryDirectory() as directory:
+            job = Path(directory)
+            root = job/'knowledge'
+            (root/'machine').mkdir(parents=True)
+            (root/'machine/data_ledger.jsonl').write_text((json.dumps(dict(field_type='MATRIX',
+                coverage_status='measured_raw', source_quality='platform_raw_capture', coverage=.5,
+                available_scopes=[dict(instrument_type='EQUITY',region='USA',delay=1,universe='TOP3000')]))+'\n')*153513)
+            clock, rows, reads = [0.0], [0], []
+            row = dict(nonce='test', permitted=True, deadline=time.time()+60, knowledge_root=str(root),
+                scope=dict(region='KOR', delay=1, universe='TOP600'), policy=validated_preparation_policy(), allow_network=False)
+            def load(path):
+                """Input: permit Path. Output: revoke after750ms without changing its original identity."""
+                reads.append(clock[0])
+                return dict(row, permitted=clock[0] < .75)
+            def scan(root, job, scope, **kwargs):
+                def check():
+                    rows[0] += 1
+                    clock[0] = rows[0]/50000
+                    kwargs['check_cancelled']()
+                _ready(root, scope, check)
+                raise AssertionError('revocation never observed')
+            with patch.object(sys, 'argv', ['worker','--job-dir',str(job),'--nonce','test']), \
+                 patch.object(module, '_load', side_effect=load), \
+                 patch.object(module.time, 'monotonic', side_effect=lambda: clock[0]), \
+                 patch.object(module, 'prepare_multiplier_fields', side_effect=scan), \
+                 self.assertRaisesRegex(InterruptedError, 'revoked'):
+                module.main()
+            self.assertGreater(rows[0], 30000)
+            self.assertLess(rows[0], 50005)
+            self.assertGreater(len(reads), 3)
+            self.assertLess(len(reads), 10)
+
+    def test_worker_scan_does_not_reread_admission_for_every_field(self):
+        """Input:153k worker callbacks. Output: bounded permit reads with deadline checks retained."""
+        from wqb import multiplier_supervision as module
+        from wqb.multiplier_preparation import validated_preparation_policy
+        with tempfile.TemporaryDirectory() as directory:
+            job = Path(directory)
+            row = dict(nonce='test', permitted=True, deadline=time.time()+60,
+                knowledge_root=str(job/'knowledge'), scope=dict(region='USA', delay=1, universe='TOP3000'),
+                policy=validated_preparation_policy(), allow_network=False)
+            calls = []
+            def load(path):
+                """Input: permit Path. Output: same permit, reject per-field disk reads."""
+                calls.append(path)
+                if len(calls) > 8:
+                    raise AssertionError('permit reloaded per field')
+                return row
+            def scan(*args, **kwargs):
+                """Input: worker checks. Output: no transport, simulate a large source scan."""
+                for _ in range(153513):
+                    kwargs['check_cancelled']()
+            with patch.object(sys, 'argv', ['worker', '--job-dir', str(job), '--nonce', 'test']), \
+                 patch.object(module, '_load', side_effect=load), \
+                 patch.object(module.time, 'monotonic', return_value=0), \
+                 patch.object(module, 'prepare_multiplier_fields', side_effect=scan):
+                module.main()
+            self.assertLessEqual(len(calls), 8)
+
     def supervise(self, command, *, seconds, cancel=lambda: None, permit=lambda: None):
         """Input: local child argv and callbacks. Output: owned subprocess result or bounded error."""
         module = importlib.import_module('wqb.multiplier_supervision')

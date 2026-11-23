@@ -5,7 +5,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from uuid import UUID
+from wqb.codex_locator import resolve_notification_target
 
 from wqb.lockfile import json_lock_transition_guard
 from wqb.recovery_cases import RECOVERY_LOCK_SECONDS, read_current_recovery_case, verification_notification_path
@@ -45,13 +45,9 @@ def dispatch_startup_notifications(runs_root: Path) -> dict:
                   "patch_execution_allowed": False, "runtime_renewal_authorized": False}
         _write(path, notice)
     channel = _read(Path(runs_root) / "maintenance_channel.json")
-    thread_id = str(channel.get("thread_id", ""))
-    try:
-        UUID(thread_id)
-    except ValueError:
-        thread_id = ""
-    executable = shutil.which("codex") if thread_id else None
-    status, error = "failed", "channel_not_configured_or_codex_unavailable"
+    target = resolve_notification_target(channel, path_lookup=shutil.which)
+    thread_id, executable = target['thread_id'], target['executable']
+    status, error = "failed", target['error']
     if executable:
         message = ("[BrainWorkflow verification stale; NOT repair or renewal authorization] "
                    f"run={run.name}; case={case_id}; evidence={path.resolve()}. "
@@ -63,7 +59,7 @@ def dispatch_startup_notifications(runs_root: Path) -> dict:
                    "Receipt grants no repair or renewal authority.")
         status, error = "delivery_uncertain", "queue_outcome_unknown"
         try:
-            result = subprocess.run([executable, "queue", "--thread", thread_id, "--message", message],
+            result = subprocess.run([executable, "queue", "--thread", thread_id, "--resume", "--message", message],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                     timeout=QUEUE_TIMEOUT_SECONDS, check=False, shell=False)
             if result.returncode == 0:
@@ -72,7 +68,8 @@ def dispatch_startup_notifications(runs_root: Path) -> dict:
             status, error = "failed", "queue_process_not_started"
         except subprocess.TimeoutExpired:
             pass
-    notice.update(status=status, error=error, updated_at=utc_now(), thread_id=thread_id)
+    notice.update(status=status, error=error, updated_at=utc_now(), thread_id=thread_id,
+                  executable_source=target['source'])
     with json_lock_transition_guard(path.parent / "outbox", RECOVERY_LOCK_SECONDS, .01, "verification notice busy"):
         fresh = _read(path)
         if fresh.get("status") != "claimed":
@@ -113,13 +110,9 @@ def dispatch_knowledge_notification(job_dir: Path, now: str) -> dict:
         _write(receipt, notification)
     root = job_dir.parents[3] if job_dir.parent.name == 'requests' else job_dir.parents[2]
     channel = _read(root.parent / 'runs/maintenance_channel.json')
-    thread_id = str(channel.get('thread_id', ''))
-    try:
-        UUID(thread_id)
-    except ValueError:
-        thread_id = ''
-    executable = shutil.which('codex') if thread_id else None
-    status, error = 'failed', 'channel_not_configured_or_codex_unavailable'
+    target = resolve_notification_target(channel, path_lookup=shutil.which)
+    thread_id, executable = target['thread_id'], target['executable']
+    status, error = 'failed', target['error']
     if executable:
         message = ('[BrainWorkflow knowledge error; NOT repair authorization] '
             f'Evidence: {(job_dir / "command_result.json").resolve()}. '
@@ -127,7 +120,7 @@ def dispatch_knowledge_notification(job_dir: Path, now: str) -> dict:
             'Do not edit code, call WQB, compile knowledge, resume research, change budget, submit or create automations.')
         status, error = 'delivery_uncertain', 'queue_outcome_unknown'
         try:
-            response = subprocess.run([executable, 'queue', '--thread', thread_id, '--message', message],
+            response = subprocess.run([executable, 'queue', '--thread', thread_id, '--resume', '--message', message],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=QUEUE_TIMEOUT_SECONDS, check=False, shell=False)
             if response.returncode == 0:
                 status, error = 'queued', ''
@@ -135,7 +128,7 @@ def dispatch_knowledge_notification(job_dir: Path, now: str) -> dict:
             status, error = 'failed', 'queue_process_not_started'
         except subprocess.TimeoutExpired:
             pass
-    notification.update(status=status, error=error, updated_at=now)
+    notification.update(status=status, error=error, updated_at=now, executable_source=target['source'])
     with json_lock_transition_guard(job_dir / 'notification_guard', RECOVERY_LOCK_SECONDS, 0.01, 'knowledge notification busy'):
         _write(receipt, notification)
     return notification
@@ -213,18 +206,15 @@ def dispatch_notification(run_dir: Path, case: dict, now: str) -> dict:
     root = Path(run_dir) / "runtime" / "recovery"
     path = root / (case_id + ".json")
     config = _read(Path(run_dir).parent / "maintenance_channel.json")
-    thread_id = str(config.get("thread_id", ""))
-    try:
-        UUID(thread_id)
-    except ValueError:
-        thread_id = ""
-    executable = shutil.which("codex") if thread_id else None
+    target = resolve_notification_target(config, path_lookup=shutil.which)
+    thread_id, executable = target['thread_id'], target['executable']
     if not executable:
         with json_lock_transition_guard(root / "cases", RECOVERY_LOCK_SECONDS, 0.01, "recovery cases busy"):
             fresh = _read(path)
             notification = fresh.get("notification")
             if isinstance(notification, dict) and notification.get("status") in {"pending", "failed"}:
-                notification.update(status="failed", error="channel_not_configured_or_codex_unavailable", updated_at=now)
+                notification.update(status="failed", error=target['error'], updated_at=now,
+                                    executable_source=target['source'])
                 _write(path, fresh)
             return fresh
     if not transition_notification(run_dir, case_id, "claim", now).get("changed"):
@@ -241,7 +231,7 @@ def dispatch_notification(run_dir: Path, case: dict, now: str) -> dict:
     )
     status, error = "delivery_uncertain", "queue_outcome_unknown"
     try:
-        result = subprocess.run([executable, "queue", "--thread", thread_id, "--message", message],
+        result = subprocess.run([executable, "queue", "--thread", thread_id, "--resume", "--message", message],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                 timeout=QUEUE_TIMEOUT_SECONDS, check=False, shell=False)
         if result.returncode == 0:
@@ -254,7 +244,8 @@ def dispatch_notification(run_dir: Path, case: dict, now: str) -> dict:
         fresh = _read(path)
         notification = fresh.get("notification") or {}
         if notification.get("status") == "claimed":
-            notification.update(status=status, error=error, updated_at=now, thread_id=thread_id)
+            notification.update(status=status, error=error, updated_at=now, thread_id=thread_id,
+                                executable_source=target['source'])
             _write(path, fresh)
         return fresh
 

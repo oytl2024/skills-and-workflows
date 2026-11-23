@@ -151,7 +151,7 @@ export function App({ client }: { client: ApplicationClient }) {
       {catalog?.stale && <span>范围目录已过期</span>}
     </div>}
     {snapshot?.preparation && <div className="evidence-bar" role="status">
-      <span>范围准备 · {({ capture: '采集字段', compile: '编译资源', planning: '规划研究', ready: '准备就绪', preflight: '检查资源' } as Record<string, string>)[snapshot.preparation.stage] ?? snapshot.preparation.stage} · {stateName(snapshot.preparation.status)}</span>
+      <span>范围准备 · {({ checking_fields: '检查本地字段', captured: '采集完成', publish_scope: '保存范围记录', publish_capture: '登记采集来源', failed: '准备失败', cancelled: '已停止', capture: '采集字段', compile: '编译资源', planning: '规划研究', ready: '准备就绪', preflight: '检查资源' } as Record<string, string>)[snapshot.preparation.stage] ?? snapshot.preparation.stage} · {stateName(snapshot.preparation.status)}</span>
       <span>请求 {snapshot.preparation.requests_used} / {snapshot.preparation.request_limit}</span>
       {snapshot.preparation.field_count !== undefined && <span>字段 {snapshot.preparation.field_count}</span>}
       {snapshot.preparation.scope && <span>{snapshot.preparation.scope.region} D{snapshot.preparation.scope.delay} {snapshot.preparation.scope.universe}</span>}

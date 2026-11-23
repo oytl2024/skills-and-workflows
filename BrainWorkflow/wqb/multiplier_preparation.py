@@ -338,6 +338,8 @@ def _prepare(root, job, scope, bounds, check_cancelled, progress, client_factory
             or not 1 <= completed['field_count'] <= bounds['max_fields']
             or completed.get('capture') != state.get('capture')):
         raise ValueError('completed receipt differs from original preparation identity')
+    progress(dict(stage='checking_fields', requests_used=state['requests_used'],
+                  field_count=state['capture']['field_count'] if state.get('capture') else 0))
     ready = _ready(root, scope, check_cancelled)
     try:
         catalog = read_scope_catalog(root)
@@ -399,6 +401,8 @@ def _prepare(root, job, scope, bounds, check_cancelled, progress, client_factory
             if state['capture'] is None:
                 raise RuntimeError('bounded field capture incomplete; preserve partial evidence')
         if defer_shared_publication:
+            progress(dict(stage='captured', requests_used=state['requests_used'],
+                          field_count=state['capture']['field_count'] if state.get('capture') else 0))
             return dict(status='staged', scope=scope, requests_used=state['requests_used'])
         compiled = None
         if ready is None:

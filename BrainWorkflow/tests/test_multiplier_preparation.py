@@ -58,6 +58,19 @@ class FixtureClient(WQBClient):
 
 
 class MultiplierPreparationTests(unittest.TestCase):
+    def test_capture_indexes_actual_payloads_not_only_summary(self):
+        """Input: completed capture. Output: dated/hash-bound raw field and operator index entries."""
+        import hashlib
+        result = self.prepare()
+        rows = [json.loads(line) for line in (self.root/'machine/source_index.jsonl').read_text().splitlines() if line]
+        index = {row['path']:row for row in rows}
+        capture = Path(result['capture']['capture_dir'])
+        for name in ('data_fields.jsonl', 'operators.json'):
+            path = (capture/name).relative_to(self.root).as_posix()
+            self.assertIn(path, index)
+            self.assertEqual(index[path]['content_hash'], hashlib.sha256((capture/name).read_bytes()).hexdigest())
+            self.assertEqual(index[path]['captured_at'], result['capture']['generated_at'])
+
     def test_owned_network_phase_never_publishes_shared_resources(self):
         """Input: deferred preparation. Output: staged capture only, no shared index/catalog/compiler changes."""
         self.catalog['stale'] = True

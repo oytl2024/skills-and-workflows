@@ -8,6 +8,18 @@ from wqb.preflight_notifications import notify_preflight_blocker
 
 
 class PreflightNotificationTests(unittest.TestCase):
+    def test_delivery_requests_chat_wakeup_without_granting_repair(self):
+        """Input: one new fault. Output: queued resume request carrying only report/wait authority."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root/'maintenance_channel.json').write_text(json.dumps(dict(thread_id='019ff06b-7447-7071-a13d-b2568f62bdb2')))
+            with patch('wqb.preflight_notifications.shutil.which', return_value='codex'), \
+                 patch('wqb.preflight_notifications.subprocess.run', return_value=Mock(returncode=0)) as queue:
+                result = notify_preflight_blocker(root, dict(blocked=True, issues=[]))
+            self.assertIn('--resume', queue.call_args.args[0])
+            self.assertIn('NOT capture or repair authorization', queue.call_args.args[0][-1])
+            self.assertFalse(result['patch_execution_allowed'])
+
     def test_failed_preflight_queues_once_without_authorizing_capture(self):
         """Input: blocked receipt and configured channel. Output: assertions. Duplicate requests never replay delivery."""
         with tempfile.TemporaryDirectory() as tmp:
