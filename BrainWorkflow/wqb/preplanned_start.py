@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from datetime import date, datetime, timezone
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -388,6 +389,8 @@ def _repair_policy(resource: dict, supplied: dict | None = None, *, rulebook: di
     Project setting hypotheses are separate from official data facts.
     """
     from wqb.repair_search import _policy, compile_repair_search_policy
+    if knowledge_catalog_admission(resource):
+        resource = _technical_repair_resources(resource)
     if isinstance(supplied, dict) and 'compile_version' in supplied:
         return compile_repair_search_policy(resource, supplied)
     defaults = None
@@ -426,6 +429,36 @@ def _repair_policy(resource: dict, supplied: dict | None = None, *, rulebook: di
     return policy
 
 
+def _technical_repair_resources(resource: dict) -> dict:
+    """Input: selected research resource. Output: technical Repair view, excluding unrelated economic evidence.
+
+    Independent hypotheses remain in the research package, but are never
+    relabeled as documented field/operator facts by the Repair compiler.
+    """
+    from wqb.resource_evidence import catalog_field_source_paths
+    paths = {path for row in resource['field_rows'] for path in catalog_field_source_paths(
+        row, resource['source_index'], resource['source_texts'], resource['evidence_pack']['scope'])}
+    for row in resource['operator_rows']:
+        paths.update(row.get('source_paths', []))
+        definition = row.get('definition')
+        if isinstance(definition, dict):
+            paths.update(ref['source_path'] for ref in definition.get('evidence_refs', []))
+        basis = row.get('definition_basis')
+        if isinstance(basis, dict):
+            premises = [basis['signature_premise'], *basis['type_premises']]
+            paths.update(premise['evidence_ref']['source_path'] for premise in premises)
+    if not paths <= resource['source_index'].keys():
+        raise ValueError('Repair technical evidence missing from selected resources')
+    result = deepcopy(resource)
+    result['source_index'] = {path: result['source_index'][path] for path in sorted(paths)}
+    result['source_texts'] = {path: result['source_texts'][path] for path in sorted(paths)}
+    result['evidence_pack']['source_index'] = deepcopy(result['source_index'])
+    result['evidence_pack']['source_texts'] = deepcopy(result['source_texts'])
+    result['evidence_pack']['histories'] = []
+    result['evidence_pack'].pop('mechanism_context', None)
+    return result
+
+
 def _unchanged_group(state: dict) -> dict:
     """Input: durable preparation state dict. Output: current paused group or fail closed after Stop/intent change."""
     group = read_group(Path(state['group_dir']))
@@ -434,7 +467,8 @@ def _unchanged_group(state: dict) -> dict:
     return group
 
 
-def prepare_preplanned_start(paths, selected_option: dict, authority: dict, config: dict, *, model_runner) -> dict:
+def prepare_preplanned_start(paths, selected_option: dict, authority: dict, config: dict, *, model_runner,
+                             retrieval_model_runner=None, check_cancelled=None) -> dict:
     """Input: paths with knowledge_root/run_root Paths, option/authority/config dicts, injected callable.
 
     config requires selected_scope (instrument_type/region/delay/universe/as_of)
@@ -458,6 +492,13 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
     try:
         from wqb.execution_package import package_enabled, PACKAGE_VERSION
         use_package = package_enabled(config)
+        retrieval = config.get('research_policy', {}).get('retrieval_design_version', 0)
+        if type(retrieval) is not int or retrieval not in (0, 1):
+            raise ValueError('retrieval_design_version requires integer 0 or 1')
+        if retrieval and not use_package:
+            raise ValueError('retrieval design requires the script-owned execution package')
+        check = check_cancelled or (lambda: None)
+        check()
         scope, period, policy = _parameters(config)
         result['requested_lanes'] = policy['parallel_workflows']
         if type(selected_option) is not dict or not selected_option.get('option_id'):
@@ -479,6 +520,8 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
         identity = dict(knowledge_root=str(root), selected_option=selected_option, authority=authority,
                         scope=scope, measurement_period=period, policy=policy, settings=settings,
                         repair_search_policy=supplied_repair)
+        if retrieval:
+            identity['retrieval_design_version'] = retrieval
         if knowledge_catalog_admission(config):
             identity['resource_admission_policy'] = KNOWLEDGE_CATALOG_POLICY
         if use_package:
@@ -495,25 +538,72 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
                         or state.get('identity') != identity):
                     raise ValueError('durable Start preparation integrity or input mismatch')
             else:
-                resources, receipts, diagnostics = _local_resources(root, scope, config, policy['parallel_workflows'])
+                retrieval_tasks = []
+                if retrieval:
+                    from wqb.retrieval_research_planning import prepare_retrieval_design, _generation
+                    if not callable(retrieval_model_runner):
+                        raise ValueError('retrieval design requires the owning injected model runner')
+                    generation = _generation(root, config)
+                    resources, receipts, diagnostics, excluded = [], [], [], []
+                    for lane_index in range(policy['parallel_workflows']):
+                        check()
+                        task_directory = _safe(directory, 'retrieval/lane-' + str(lane_index))
+                        task_config = dict(config, **policy, retrieval_catalog_generation=generation,
+                                           retrieval_excluded_selections=deepcopy(excluded))
+
+                        def retrieve(brief, owner=task_directory):
+                            """Input: saved compact brief. Output: original caller's one bounded design answer."""
+                            check()
+                            return retrieval_model_runner(owner, brief)
+
+                        designed = prepare_retrieval_design(task_directory, root, scope, selected_option,
+                            task_config, model_runner=retrieve, check_cancelled=check)
+                        if designed['status'] != 'completed':
+                            raise ValueError('retrieval design blocked: ' + designed.get('reason', 'unknown'))
+                        resource = designed['resources']
+                        chosen = sorted((row['dataset_id'], row['field_id']) for row in resource['field_rows'])
+                        if chosen in excluded:
+                            raise ValueError('parallel retrieval designs selected duplicate data')
+                        excluded.append(chosen)
+                        resources.append(resource)
+                        retrieval_tasks.append({key: deepcopy(designed[key]) for key in
+                            ('task_dir', 'input_sha256', 'result_sha256', 'generation', 'answer', 'selected_context')})
+                else:
+                    resources, receipts, diagnostics = _local_resources(root, scope, config, policy['parallel_workflows'])
                 result['missing_facts'] = diagnostics
                 if not resources:
                     raise ValueError('no source-backed exact-scope lane resources; local maintenance required')
                 repair_policies = [_repair_policy(resource, supplied_repair, rulebook=default_rulebook) for resource in resources]
                 prepared = prepare_group_lanes(paths, resources, scope, selected_option, authority,
                     plan_depth=policy['plan_depth'], initial_hypotheses=policy['initial_hypotheses'],
-                    **({'execution_package_version': PACKAGE_VERSION} if use_package else {}))
+                    **({'execution_package_version': PACKAGE_VERSION} if use_package else {}),
+                    **({'retrieval_design_version': retrieval} if retrieval else {}))
                 group = prepared['group']
                 state = dict(identity=identity, resources=resources, receipts=receipts,
                     diagnostics=diagnostics, group_dir=group['group_dir'], request_revision=group['request_revision'],
                     repair_policies=repair_policies, planning_results=[])
+                if retrieval:
+                    state['retrieval_tasks'] = retrieval_tasks
                 # Freeze comparison period before the initial model or its task key exists.
-                for lane, repair in zip(group['lanes'], repair_policies):
+                for lane_index, (lane, repair) in enumerate(zip(group['lanes'], repair_policies)):
                     run = runs / lane['run_id']
                     manifest = _json(run, 'run_manifest.json')
                     manifest['start_snapshot']['measurement_period'] = deepcopy(period)
                     manifest['start_snapshot']['repair_search_policy'] = repair
                     manifest['start_snapshot']['repair_search_diagnostics'] = deepcopy(REPAIR_DIAGNOSTICS)
+                    if retrieval:
+                        origin = retrieval_tasks[lane_index]
+                        manifest['start_snapshot']['initial_design_origin'] = {
+                            key: deepcopy(value) for key, value in origin.items() if key != 'answer'}
+                        from wqb.semantic_compilation import _mechanism_summary, _write as write_material
+                        for history in origin['selected_context']['groups']:
+                            supporting = _mechanism_summary(history)['supporting_ref']
+                            destination = _safe(run, supporting['path'])
+                            if destination.exists():
+                                if hashlib.sha256(destination.read_bytes()).hexdigest() != supporting['sha256']:
+                                    raise ValueError('existing selected history material changed')
+                            else:
+                                write_material(destination, history, compact=True)
                     _write(run / 'run_manifest.json', manifest)
                 _save(path, state)
             group = _unchanged_group(state)
@@ -523,9 +613,17 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
                     f"requested {policy['parallel_workflows']}, prepared {len(group['lanes'])}")
             snapshots = []
             for lane_index, (lane, resource) in enumerate(zip(group['lanes'], state['resources'])):
+                check()
                 _unchanged_group(state)
+                if retrieval:
+                    from wqb.research_query_index import read_field_rows
+                    origin = state['retrieval_tasks'][lane_index]
+                    ledger = read_field_rows(root, origin['generation'], scope,
+                        [(row['dataset_id'], row['field_id']) for row in resource['field_rows']])
+                else:
+                    ledger = list(_audit_resource_rows(machine_resource_path(root, 'data_ledger'), root))
                 _validate_resource(root, resource, scope,
-                    list(_audit_resource_rows(machine_resource_path(root, 'data_ledger'), root)),
+                    ledger,
                     {r['path']: r for r in _audit_resource_rows(machine_resource_path(root, 'source_index'), root)})
                 run = runs / lane['run_id']
                 if _repair_policy(resource, supplied_repair, rulebook=default_rulebook) != state['repair_policies'][lane_index]:
@@ -535,6 +633,14 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
                     """Input: certified planning brief dict. Output: raw injected-worker answer dict, never a launch here."""
                     from wqb.initial_research_planning import TASK_PATH
                     _unchanged_group(state)
+                    check()
+                    if retrieval:
+                        from wqb.retrieval_research_planning import read_design_task
+                        saved = read_design_task(Path(origin['task_dir']))
+                        if (saved['status'] != 'completed' or saved['input_sha256'] != origin['input_sha256']
+                                or _digest(saved['answer']) != origin['result_sha256']):
+                            raise ValueError('retrieval result lineage changed before initial freeze')
+                        return deepcopy(origin['answer'])
                     supplied = deepcopy(brief)
                     supplied['worker_context'] = dict(checkpoint_type='initial_research_planning',
                         run_dir=str(run), knowledge_root=str(root), task_path=TASK_PATH,

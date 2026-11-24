@@ -171,7 +171,7 @@ def run_ai_checkpoint(
             _append_checkpoint_event(decisions_dir, retired)
         return {**checkpoint, **retired}
     if checkpoint.get('status') in {'unknown', 'running'} or (
-            checkpoint['checkpoint_type'] in {'initial_research_plan', 'full_semantic_explanation'}
+            checkpoint['checkpoint_type'] in {'initial_research_plan', 'retrieval_research_plan', 'full_semantic_explanation'}
             and checkpoint.get('status') != 'pending'):
         return checkpoint
     if not executor_argv:
@@ -219,6 +219,12 @@ def run_ai_checkpoint(
             initial_task = _authenticated_task(run)
             if checkpoint['evidence_paths'] != [TASK_PATH]:
                 raise ValueError('initial planning checkpoint evidence mismatch')
+        if checkpoint['checkpoint_type'] == 'retrieval_research_plan':
+            from wqb.retrieval_research_planning import authenticated_design_task, TASK_PATH as RETRIEVAL_TASK_PATH
+            retrieval_run = Path(decisions_dir).resolve().parent.parent
+            retrieval_task = authenticated_design_task(retrieval_run)
+            if checkpoint['evidence_paths'] != [RETRIEVAL_TASK_PATH]:
+                raise ValueError('retrieval checkpoint evidence mismatch')
         if cancellation_check is not None:
             result = _run_cancellable(argv, timeout_seconds, cancellation_check, cancel_on_pause)
         else:
@@ -242,6 +248,12 @@ def run_ai_checkpoint(
             if task != initial_task:
                 raise ValueError('initial planning task changed during executor run')
             _check_schema(task['brief']['output_schema'], output)
+            final.update(output)
+        if checkpoint['checkpoint_type'] == 'retrieval_research_plan':
+            from wqb.semantic_compilation import _check_schema
+            if authenticated_design_task(retrieval_run) != retrieval_task:
+                raise ValueError('retrieval planning task changed during executor run')
+            _check_schema(retrieval_task['brief']['output_schema'], output)
             final.update(output)
         if checkpoint['checkpoint_type'] == 'semantic_compile':
             from wqb.semantic_compilation import validate_semantic_output

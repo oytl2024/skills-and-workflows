@@ -37,6 +37,14 @@ role must be tested by a conditioned feature somewhere in the experiment. The
 baseline may remain unconditioned. No nesting, raw formulas or implicit upgrade.
 Resource contract version (source producer) is independent of design version.
 
+Explicit design_version=3 permits a role leaf with
+reduction={operator: one of VECTOR_REDUCTIONS, parameters: {}}. Every VECTOR
+operand requires this explicit choice; MATRIX/GROUP cannot carry it. Reductions
+precede Level/Change/Relative and both conditioned operands via InputSlot, not
+formula text. Only direct unary signatures are supported initially. The caller
+opts into the schema with include_vector=True; frozen v1/v2 schemas are unchanged.
+The compiler requires sourced catalog-mode resource contract 2 for reductions.
+
 Minimal evidence_pack fixture (see tests/test_hypothesis_design.py for full JSON):
 {source_index: {path: existing SourceIndexRow dict}, scope: nonempty scalar dict,
  allowed_role_semantics: [exact_sourced_semantic_phrase],
@@ -83,12 +91,14 @@ from wqb.semantic_contracts import (SemanticPolicy, CARD_FIELDS, IDENTIFIER,
     hypothesis_card_from_dict, input_slot_from_dict, validate_semantic_record)
 from wqb.semantic_compilation import _check_schema
 from wqb.knowledge_contracts import parse_markdown_front_matter
-from wqb.resource_evidence import PROJECT_WINDOW_POLICY, resource_contract_version, knowledge_catalog_admission
+from wqb.resource_evidence import (PROJECT_WINDOW_POLICY, resource_contract_version,
+                                   knowledge_catalog_admission, VECTOR_REDUCTIONS)
 from wqb.mechanism_evidence import MAX_CONTEXT as MAX_MECHANISM_CONTEXT
 
 
 COMPILER_VERSION = 'hypothesis-design-v4'
 CONDITION_COMPILER_VERSION = 'hypothesis-design-conditioned-v1'
+VECTOR_COMPILER_VERSION = 'hypothesis-design-vector-v1'
 MAX_JSON_BYTES = 1_000_000
 DESIGN_WORKER_CONTRACT = dict(version=3, instructions=(
     'Every prose value, including summary, each explanation, criterion and control, must be exactly one sentence, '
@@ -156,22 +166,28 @@ def _string(values: tuple | None = None) -> dict:
 
 
 def _feature_schema(design_version: int = 1) -> dict:
-    """Input: design version int. Output: finite depth-two feature union dict, no recursion."""
+    """Input: design version int. Output: finite feature union dict with versioned role leaves, no recursion."""
     leaf = _object(dict(kind=_string(('role',)), role=_string()))
-    choices = [leaf,
-        _object(dict(kind=_string(('level',)), input=leaf)),
-        _object(dict(kind=_string(('change',)), input=leaf,
+    operand = leaf
+    if design_version == 3:
+        reduced = _object(dict(kind=_string(('role',)), role=_string(),
+            reduction=_object(dict(operator=_string(tuple(VECTOR_REDUCTIONS)), parameters=_object({})))))
+        operand = dict(anyOf=[leaf, reduced])
+    choices = [operand,
+        _object(dict(kind=_string(('level',)), input=operand)),
+        _object(dict(kind=_string(('change',)), input=operand,
                      horizon=dict(type='integer', minimum=1, maximum=MAX_HORIZON))),
-        _object(dict(kind=_string(('relative',)), input=leaf, group_role=leaf,
+        _object(dict(kind=_string(('relative',)), input=operand, group_role=leaf,
                      comparison=_string(('group_rank', 'group_demean'))))]
-    if design_version == 2:
-        choices.append(_object(dict(kind=_string(('conditioned',)), input=leaf,
-            condition_role=leaf, comparator=_string(('greater', 'less')), threshold=dict(type='number'))))
+    if design_version in (2, 3):
+        choices.append(_object(dict(kind=_string(('conditioned',)), input=operand,
+            condition_role=operand, comparator=_string(('greater', 'less')), threshold=dict(type='number'))))
     return dict(anyOf=choices)
 
 
-def design_output_schema(resource_version: int | None = None, *, include_conditioned: bool = False) -> dict:
-    """Input: producer int or None (syntax-only union). Output: strict schema, never trust.
+def design_output_schema(resource_version: int | None = None, *, include_conditioned: bool = False,
+                         include_vector: bool = False) -> dict:
+    """Input: producer int/None and explicit bool opt-ins. Output: strict schema, never trust.
 
     The checkpoint transport checks syntax without producer context. Workers and
     the semantic validator always pass the verified version explicitly.
@@ -180,6 +196,8 @@ def design_output_schema(resource_version: int | None = None, *, include_conditi
         resource_version = 2
     if type(include_conditioned) is not bool:
         raise ValueError('include_conditioned must be an explicit bool')
+    if type(include_vector) is not bool:
+        raise ValueError('include_vector must be an explicit bool')
     resource_contract_version({'resource_contract_version': resource_version})
     text = _string()
     ref = _object(dict(source_path=text, sha256=text, capture_date=text,
@@ -201,15 +219,20 @@ def design_output_schema(resource_version: int | None = None, *, include_conditi
             treatments=_array(_object(dict(feature=feature, rationale=text))),
             controls=_array(text), rejection_criteria=text, inconclusive_criteria=text)),
         evidence_refs=_array(ref)))
-    if not include_conditioned:
+    if not include_conditioned and not include_vector:
         return _object(dict(summary=text, designs=_array(design)))
-    version2 = deepcopy(design)
-    properties = version2['properties']
-    properties['design_version'] = dict(type='integer', enum=[2])
-    properties['feature_plan'] = _feature_schema(2)
-    properties['experiment_plan']['properties']['baseline'] = _feature_schema(2)
-    properties['experiment_plan']['properties']['treatments']['items']['properties']['feature'] = _feature_schema(2)
-    return _object(dict(summary=text, designs=_array(dict(anyOf=[design, version2]))))
+    choices = [design]
+    for version, enabled in ((2, include_conditioned), (3, include_vector)):
+        if not enabled:
+            continue
+        item = deepcopy(design)
+        properties = item['properties']
+        properties['design_version'] = dict(type='integer', enum=[version])
+        properties['feature_plan'] = _feature_schema(version)
+        properties['experiment_plan']['properties']['baseline'] = _feature_schema(version)
+        properties['experiment_plan']['properties']['treatments']['items']['properties']['feature'] = _feature_schema(version)
+        choices.append(item)
+    return _object(dict(summary=text, designs=_array(dict(anyOf=choices))))
 
 
 def _json_copy(value: object, depth: int = 0, source_metadata: bool = False, full_source: bool = False) -> object:
@@ -357,12 +380,23 @@ def _sentence(text: str, histories: list[dict], refs: list[dict], criterion: boo
         raise ValueError('empirical claim absent from supplied evidence histories')
 
 
-def _feature(feature: dict, roles: dict, pack: dict) -> None:
+def _feature(feature: dict, roles: dict, pack: dict, design_version: int = 1) -> None:
     """Input: schema-checked feature/roles/pack dicts. Output: None; validate role intents."""
     kind = feature['kind']
     leaf = feature if kind == 'role' else feature['input']
     if leaf['role'] not in roles or roles[leaf['role']]['field_type'] == 'GROUP':
         raise ValueError('feature needs a declared value role')
+    operands = [leaf] + ([feature['condition_role']] if kind == 'conditioned' else [])
+    if design_version == 3:
+        for operand in operands:
+            role = roles.get(operand['role'])
+            if role is None or role['field_type'] == 'GROUP':
+                raise ValueError('feature needs a declared numeric value role')
+            reduction = operand.get('reduction')
+            if (role['field_type'] == 'VECTOR') != (reduction is not None):
+                raise ValueError('VECTOR requires explicit reduction; MATRIX cannot declare reduction')
+            if reduction is not None:
+                input_slot_from_dict(dict(role, role=role['name'], reduction=reduction))
     intent = 'level' if kind == 'role' else feature.get('comparison', kind)
     if intent not in pack['allowed_operator_intents']:
         raise ValueError('feature intent is not supplied by evidence pack')
@@ -374,8 +408,8 @@ def _feature(feature: dict, roles: dict, pack: dict) -> None:
             raise ValueError('relative requires a declared GROUP role')
     if kind == 'conditioned':
         name = feature['condition_role']['role']
-        if (roles[leaf['role']]['field_type'] != 'MATRIX' or name not in roles
-                or roles[name]['field_type'] != 'MATRIX'):
+        if (name not in roles or (design_version != 3 and
+                (roles[leaf['role']]['field_type'] != 'MATRIX' or roles[name]['field_type'] != 'MATRIX'))):
             raise ValueError('conditioned requires declared MATRIX value and condition roles')
 
 
@@ -433,7 +467,9 @@ def validate_hypothesis_design(answer: dict, evidence_pack: dict, policy: Semant
     version = resource_contract_version(pack)
     conditioned = any(isinstance(item, dict) and item.get('design_version') == 2
                       for item in result.get('designs', [])) if isinstance(result, dict) else False
-    _check_schema(design_output_schema(version, include_conditioned=conditioned), result)
+    vector = any(isinstance(item, dict) and item.get('design_version') == 3
+                 for item in result.get('designs', [])) if isinstance(result, dict) else False
+    _check_schema(design_output_schema(version, include_conditioned=conditioned, include_vector=vector), result)
     _sentence(result['summary'], [], [])
     if not result['designs'] or len(result['designs']) > MAX_DESIGNS:
         raise ValueError('expected a nonempty bounded design batch')
@@ -473,14 +509,14 @@ def validate_hypothesis_design(answer: dict, evidence_pack: dict, policy: Semant
         if set(condition['observable_roles']) - roles.keys() or bool(condition['observable_roles']) != (condition['mode'] == 'observable'):
             raise ValueError('condition mode and observable proxy roles disagree')
         exp = design['experiment_plan']
-        _feature(design['feature_plan'], roles, pack)
-        _feature(exp['baseline'], roles, pack)
+        _feature(design['feature_plan'], roles, pack, design['design_version'])
+        _feature(exp['baseline'], roles, pack, design['design_version'])
         if exp['baseline'] != design['feature_plan'] or len(exp['treatments']) > 1:
             raise ValueError('baseline mismatch or excessive treatments')
         exp['controls'] = _strings(exp['controls'])
         features = [design['feature_plan'], exp['baseline']]
         for treatment in exp['treatments']:
-            _feature(treatment['feature'], roles, pack)
+            _feature(treatment['feature'], roles, pack, design['design_version'])
             features.append(treatment['feature'])
             if _feature_identity(treatment['feature'], roles) == _feature_identity(exp['baseline'], roles):
                 raise ValueError('treatment duplicates baseline')
@@ -488,7 +524,7 @@ def validate_hypothesis_design(answer: dict, evidence_pack: dict, policy: Semant
         if conditioned and (condition['mode'] != 'observable' or any(
                 feature['condition_role']['role'] not in condition['observable_roles'] for feature in conditioned)):
             raise ValueError('executable condition must consume a declared observable condition role')
-        if design['design_version'] == 2 and condition['mode'] == 'observable' and not set(
+        if design['design_version'] in (2, 3) and condition['mode'] == 'observable' and not set(
                 condition['observable_roles']) <= {f['condition_role']['role'] for f in conditioned}:
             raise ValueError('v2 observable roles must be tested by executable conditions')
         used_roles = set(condition['observable_roles'])
@@ -524,8 +560,8 @@ def validate_hypothesis_design(answer: dict, evidence_pack: dict, policy: Semant
         for source in sources.values():
             source['content_hash'] = source['content_hash'].lower()
         used_histories = sorted([h for h in pack['histories'] if h['statement'] in prose], key=_canonical)
-        identity = dict(design=design, compiler_version=(CONDITION_COMPILER_VERSION
-                        if design['design_version'] == 2 else COMPILER_VERSION), scope=pack['scope'],
+        identity = dict(design=design, compiler_version=(VECTOR_COMPILER_VERSION if design['design_version'] == 3
+                        else CONDITION_COMPILER_VERSION if design['design_version'] == 2 else COMPILER_VERSION), scope=pack['scope'],
                         sources=sources, histories=used_histories,
                         allowed_role_semantics=pack['allowed_role_semantics'],
                         allowed_operator_intents=pack['allowed_operator_intents'])

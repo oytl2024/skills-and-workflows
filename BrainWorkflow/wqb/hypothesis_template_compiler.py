@@ -66,6 +66,14 @@ platform definitions reject rather than being reinterpreted. V2 arms each have
 condition_filter_applied; the experiment flag means at least one arm is filtered,
 not that every arm is filtered. V1 output shape and identities remain unchanged.
 
+Explicit v3 role leaves can select a direct unary sourced VECTOR reduction;
+the existing binder applies each InputSlot.reduction before its MATRIX consumer.
+Both conditioned operands are supported. Missing/unsupported reductions reject;
+no mean fallback is supplied. Each arm retains its own reduction in bindings;
+v3 context_bindings records arm_reductions separately from the shared field
+identity, allowing an explicit mean-versus-sum experiment on the same field.
+Within an arm a role has one reduction; distinct roles can share one field.
+
 Operators require exact documented signatures without optional hidden arguments.
 Version 1 accepted meanings are the sentences in OPERATOR_CONTRACTS (case,
 whitespace and terminal period insensitive); unfamiliar descriptions reject,
@@ -90,7 +98,7 @@ import hashlib
 from wqb import hypothesis_design as contract
 from wqb.resource_evidence import (resource_contract_version, resolve_operator_definition,
                                    OPERATOR_RULES, OPERATOR_MEANING_SUFFIXES, knowledge_catalog_admission,
-                                   catalog_operator_definition)
+                                   catalog_operator_definition, VECTOR_REDUCTIONS)
 from wqb.knowledge_compile import _coverage_field_supported, _coverage_operator_supported
 from wqb.semantic_contracts import (SemanticPolicy, _indexed_source, _path,
     input_slot_from_dict, operator_definition_from_dict, validate_semantic_record)
@@ -263,6 +271,13 @@ def _operator(name: str, rows: list[dict], pack: dict) -> None:
         if not catalog_mode and not _coverage_operator_supported(row, pack['source_texts'], source_index=pack['source_index'],
                                             resource_contract_version=version):
             raise ValueError('definition differs from exact sourced operator facts')
+        if name in VECTOR_REDUCTIONS:
+            # These declarations are usable only in the explicit catalog/v3 path.
+            if (not catalog_mode or version != 2 or definition['input_types'] != ['VECTOR']
+                    or definition['output_type'] != 'MATRIX'
+                    or definition['parameters'] != [dict(name='x', type='VECTOR', required=True)]):
+                raise ValueError('reduction requires a sourced direct unary VECTOR to MATRIX signature')
+            return
         conditional = name in CONDITION_OPERATOR_CONTRACTS
         inputs, types, meanings = (CONDITION_OPERATOR_CONTRACTS if conditional else OPERATOR_CONTRACTS)[name]
         meaning = ' '.join(definition['description'].lower().strip().rstrip('.').split())
@@ -407,13 +422,14 @@ def compile_design(design: dict, resources: dict, scope: dict) -> dict:
         if direction == 'unknown' or normalized['conditions']['mode'] == 'unidentifiable':
             _fail('unsupported_feature', 'conditions/prediction_direction',
                   'unknown direction or unidentifiable condition cannot produce oriented trading drafts')
-        if any(r['field_type'] == 'VECTOR' for r in normalized['field_roles']):
+        if normalized['design_version'] != 3 and any(r['field_type'] == 'VECTOR' for r in normalized['field_roles']):
             _fail('unsupported_feature', 'field_roles', 'VECTOR has no structured reduction intent in design v1')
         orientation = -1 if direction == 'negative' else 1
         exp = normalized['experiment_plan']
         features = [dict(feature=exp['baseline'], rationale=normalized['operator_rationale'])] + exp['treatments']
         drafts, arms, fingerprints, union_bindings = [], [], set(), {}
-        compiler_version = (contract.CONDITION_COMPILER_VERSION if normalized['design_version'] == 2
+        compiler_version = (contract.VECTOR_COMPILER_VERSION if normalized['design_version'] == 3
+                            else contract.CONDITION_COMPILER_VERSION if normalized['design_version'] == 2
                             else contract.COMPILER_VERSION)
         context = dict(design=normalized, resources=data, scope=scope, compiler_version=compiler_version)
         digest = _digest(context)
@@ -430,7 +446,23 @@ def compile_design(design: dict, resources: dict, scope: dict) -> dict:
                 comparator = construction['feature']['comparator']
                 _operator(comparator, data['operator_rows'], pack)
                 operators.append(comparator)
-            slots = [dict(r, role=r['name'], reduction=None) for r in normalized['field_roles'] if r['name'] in used]
+            reductions = {}
+            if normalized['design_version'] == 3:
+                feature = construction['feature']
+                operands = [feature if feature['kind'] == 'role' else feature['input']]
+                if conditioned:
+                    operands.append(feature['condition_role'])
+                for operand in operands:
+                    name, reduction = operand['role'], operand.get('reduction')
+                    if name in reductions and reductions[name] != reduction:
+                        _fail('unsupported_feature', 'feature_plan', 'one slot cannot have conflicting reductions within an arm')
+                    reductions[name] = reduction
+                    if reduction is not None:
+                        _operator(reduction['operator'], data['operator_rows'], pack)
+                        if reduction['operator'] not in operators:
+                            operators.append(reduction['operator'])
+            slots = [dict(r, role=r['name'], reduction=deepcopy(reductions.get(r['name'])))
+                     for r in normalized['field_roles'] if r['name'] in used]
             card = dict(data_meaning=normalized['data_meaning'], mechanism=normalized['economic_rationale'],
                 conditions=normalized['conditions']['description'], alternative=normalized['alternative_explanation'],
                 prediction=normalized['prediction'], operator_roles=normalized['operator_rationale'],
@@ -460,13 +492,16 @@ def compile_design(design: dict, resources: dict, scope: dict) -> dict:
                 _fail('duplicate_template', 'experiment_plan', 'bound AST/settings duplicates another arm')
             fingerprints.add(key)
             for name, chosen in binding['bindings'].items():
-                if name in union_bindings and chosen != union_bindings[name]:
+                shared = deepcopy(chosen)
+                if normalized['design_version'] == 3:
+                    shared.pop('reduction', None)
+                if name in union_bindings and shared != union_bindings[name]:
                     _fail('unsupported_feature', 'experiment_plan', 'treatment changes shared field binding, not only feature')
-                union_bindings[name] = deepcopy(chosen)
+                union_bindings[name] = shared
             drafts.append(template)
             arms.append(dict(arm_id='baseline' if index == 0 else 'treatment', template_id=template['template_id'],
                 **deepcopy(construction), settings=deepcopy(data['settings']), scope=deepcopy(scope), binding=binding))
-            if normalized['design_version'] == 2:
+            if normalized['design_version'] in (2, 3):
                 arms[-1]['condition_filter_applied'] = conditioned
         if set(union_bindings) != {r['name'] for r in normalized['field_roles']}:
             _fail('unsupported_feature', 'experiment_plan', 'all declared roles must be consumed across the experiment')
@@ -478,6 +513,10 @@ def compile_design(design: dict, resources: dict, scope: dict) -> dict:
             context_bindings[name] = dict(deepcopy(chosen),
                 source_paths=(sorted({ref['source_path'] for ref in refs}) if knowledge_catalog_admission(data)
                               else sorted(row['source_paths'])), evidence_refs=refs)
+            if normalized['design_version'] == 3:
+                context_bindings[name]['arm_reductions'] = {arm['arm_id']: deepcopy(
+                    arm['binding']['bindings'][name].get('reduction'))
+                    for arm in arms if name in arm['binding']['bindings']}
         experiment = dict(experiment_id='experiment_' + digest, design_id=normalized['design_id'],
             compiler_version=compiler_version, compilation_digest=digest,
             baseline_template_id=drafts[0]['template_id'], arms=arms, changed_dimension='feature',

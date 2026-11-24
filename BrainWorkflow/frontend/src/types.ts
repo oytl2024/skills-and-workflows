@@ -18,8 +18,19 @@ export interface ScopeSelection {
 export interface Preparation {
   stage: string;
   status: string;
-  requests_used: number;
-  request_limit: number;
+  requests_used?: number;
+  request_limit?: number;
+  tool_progress?: {
+    stage: string;
+    operation: string;
+    queries: number;
+    validations: number;
+    returned_bytes: number;
+    max_queries: number;
+    max_validations: number;
+    max_returned_bytes: number;
+    activity_at: string;
+  };
   scope?: ResearchScope;
   field_count?: number;
   reason?: string;

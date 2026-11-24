@@ -20,7 +20,7 @@ from wqb.runtime_revision import LOADED_CODE_REVISION
 
 
 WORKER_MODULES = frozenset({"wqb.cli", "wqb.console_start", "wqb.codex_ai_worker", "wqb.research_group_driver",
-                          "wqb.multiplier_supervision"})
+                          "wqb.multiplier_supervision", "wqb.retrieval_research_planning"})
 WINDOW_SIZE = (1280, 840)
 MIN_WINDOW_SIZE = (760, 540)
 

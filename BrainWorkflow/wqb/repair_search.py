@@ -349,6 +349,8 @@ def _materialize_parent(policy: dict, parent: dict) -> dict:
 
     Explicit traits require premises for every actual parent field. Uncovered
     traits and dependent rules are omitted; independent rules remain eligible.
+    Setting-only v2 policies retain separate slots for explicit reducers of one
+    VECTOR field; legacy and transform policies keep their prior restriction.
     """
     metric_directed = policy.get('schema_version') == 2
     if not metric_directed and not policy.get('resources', {}).get('producer'):
@@ -366,12 +368,14 @@ def _materialize_parent(policy: dict, parent: dict) -> dict:
     if metric_directed and not leaves:
         raise ValueError('accepted parent requires frozen field leaves')
     selected, slots, tokens = [], [], {}
+    occurrence_tokens, replacements = {}, {}
+    allowed_types = ('MATRIX', 'VECTOR', 'GROUP') if metric_directed else ('MATRIX', 'VECTOR')
     for i, name in enumerate(leaves):
         rows = [r for r in resources['field_rows'] if r['field_id'] == name]
-        if len(rows) != 1 or rows[0]['field_type'] not in ('MATRIX', 'VECTOR'):
+        if len(rows) != 1 or rows[0]['field_type'] not in allowed_types:
             raise ValueError('parent field missing/ambiguous or unsupported type')
         row = rows[0]
-        reduction = None
+        reductions, vector_leaves = [None], []
         if row['field_type'] == 'VECTOR':
             reducers = set()
             for leaf in ast.walk(tree):
@@ -382,31 +386,43 @@ def _materialize_parent(policy: dict, parent: dict) -> dict:
                         or len(call.args) != 1 or call.args[0] is not leaf or call.keywords):
                     raise ValueError('VECTOR parent needs explicit unary sourced reducer')
                 reducers.add(call.func.id)
-            if len(reducers) != 1 or not catalog and not row.get('vector_grain'):
+                vector_leaves.append(leaf)
+            if not reducers or not catalog and not row.get('vector_grain'):
                 if catalog:
                     raise ValueError('VECTOR reducer missing or ambiguous')
                 raise ValueError('VECTOR grain/reducer missing or ambiguous')
-            reducer = next(iter(reducers))
-            definitions = [r['definition'] for r in resources['operator_rows'] if r.get('operator') == reducer]
-            if (len(definitions) != 1 or definitions[0]['input_types'] != ['VECTOR']
-                    or definitions[0]['output_type'] != 'MATRIX' or len(definitions[0]['parameters']) != 1):
-                raise ValueError('VECTOR reducer requires explicit VECTOR to MATRIX signature')
-            reduction = dict(operator=reducer, parameters={})
-        slot = 'repair_field_' + str(i)
-        token = '__repair_slot_' + str(i)
-        if token in parent['expression']:
-            raise ValueError('parent placeholder collision')
-        tokens[name] = token
+            if len(reducers) > 1 and (not metric_directed or any(
+                    rule['edit'] == 'transform' for rule in result['rules'])):
+                raise ValueError('multiple VECTOR reductions require setting-only metric-directed Repair')
+            reductions = []
+            for reducer in sorted(reducers):
+                definitions = [r['definition'] for r in resources['operator_rows'] if r.get('operator') == reducer]
+                if (len(definitions) != 1 or definitions[0]['input_types'] != ['VECTOR']
+                        or definitions[0]['output_type'] != 'MATRIX' or len(definitions[0]['parameters']) != 1):
+                    raise ValueError('VECTOR reducer requires explicit VECTOR to MATRIX signature')
+                reductions.append(dict(operator=reducer, parameters={}))
         selected.append(row)
         semantics = ['field:' + row['dataset_id'] + '/' + row['field_id']] if catalog else [row['field_description']]
-        slots.append(dict(name=slot, role='signal', required_semantics=semantics,
-                          field_type=row['field_type'], required_metadata=[], reduction=reduction))
+        # Keep distinct reducer occurrences bound to the same unique sourced field.
+        for index, reduction in enumerate(reductions):
+            suffix = str(i) + ('_' + str(index) if index else '')
+            slot, token = 'repair_field_' + suffix, '__repair_slot_' + suffix
+            if token in parent['expression']:
+                raise ValueError('parent placeholder collision')
+            tokens.setdefault(name, token)
+            replacements[token] = '{' + slot + '}'
+            for leaf in vector_leaves:
+                if parents[id(leaf)].func.id == reduction['operator']:
+                    occurrence_tokens[id(leaf)] = token
+            slots.append(dict(name=slot, role='context' if row['field_type'] == 'GROUP' else 'signal', required_semantics=semantics,
+                              field_type=row['field_type'], required_metadata=[], reduction=reduction))
+    if not any(row['field_type'] in ('MATRIX', 'VECTOR') for row in selected):
+        raise ValueError('accepted parent requires a sourced numeric signal')
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and id(node) not in functions:
-            node.id = tokens[node.id]
+            node.id = occurrence_tokens.get(id(node), tokens[node.id])
     skeleton = ast.unparse(tree)
-    replacements = {tokens[name]: '{repair_field_' + str(i) + '}' for i, name in enumerate(leaves)}
-    skeleton = re.sub(r'\b__repair_slot_\d+\b', lambda match: replacements[match.group()], skeleton)
+    skeleton = re.sub(r'\b__repair_slot_\d+(?:_\d+)?\b', lambda match: replacements[match.group()], skeleton)
     # A resource-pack fact cannot authorize unrelated fields in the accepted parent.
     if metric_directed:
         _validate_v2_sources(resources)
@@ -480,13 +496,14 @@ def _validate_v2_sources(resources: dict) -> None:
 
 
 def _parent_traits(traits: dict, selected: list, resources: dict) -> dict:
-    """Input: declared traits/actual parent rows/resources. Output: only source-proven parent-local traits."""
+    """Input: declared traits/actual parent rows/resources. Output: source-proven parent traits, GROUP never proving numeric."""
     from wqb.knowledge_compile import _coverage_source_fields
     context, scope = resources['evidence_context'], resources['scope']
     compiled = compile_repair_search_policy(_parent_resources(resources, selected),
         dict(compile_version=1, rules=[], traits={}))
     established = compiled['traits']
-    if all(row['field_type'] in ('MATRIX', 'VECTOR') for row in selected):
+    numeric_fields = [row for row in selected if row['field_type'] in ('MATRIX', 'VECTOR')]
+    if numeric_fields:
         established['numeric_observation'] = dict(value=True)
     for name, field_fact in COMPILED_TRAIT_FACTS.items():
         values = []
@@ -511,8 +528,10 @@ def _parent_traits(traits: dict, selected: list, resources: dict) -> dict:
                 or _trait_reason(traits, name, fact['value'])):
             continue
         paths = {ref['source_path'] for ref in fact['evidence_refs']}
+        # GROUP remains bound context, not evidence of a numeric observation.
+        required_fields = numeric_fields if name == 'numeric_observation' else selected
         if all(paths.intersection(_field_source_paths(row, context['source_index'],
-                context['source_texts'], scope, _catalog_admission(resources))) for row in selected):
+                context['source_texts'], scope, _catalog_admission(resources))) for row in required_fields):
             result[name] = copy.deepcopy(fact)
     # Parent-local frequency is mandatory even when a heterogeneous batch omitted it.
     if 'sampling_frequency_sessions' in established:

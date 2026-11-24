@@ -461,7 +461,8 @@ def project_application(paths, state: dict, server_epoch: str, sequence: int) ->
         preparation = preparation_projection(paths, start_preparation) if isinstance(start_preparation, dict) else None
         if isinstance(preparation, dict) and preparation:
             result['preparation'] = {key: preparation[key] for key in (
-                'stage', 'status', 'requests_used', 'request_limit', 'scope', 'field_count', 'reason') if key in preparation}
+                'stage', 'status', 'requests_used', 'request_limit', 'scope', 'field_count', 'reason',
+                'tool_progress') if key in preparation}
             if start_preparation.get('status') == 'blocked' and result['start_mode'] == 'new':
                 result['blocker'] = str(start_preparation.get('error') or 'Start preparation blocked')
         result['request_revision'] = hashlib.sha256(_canonical([

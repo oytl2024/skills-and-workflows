@@ -20,6 +20,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 import hashlib
 import html
+from html.parser import HTMLParser
 import json
 from pathlib import PurePosixPath
 import re
@@ -35,6 +36,27 @@ from wqb.semantic_contracts import (
 
 
 KNOWLEDGE_CATALOG_POLICY = 'knowledge_catalog_v1'
+VECTOR_REDUCTIONS = {
+    'vec_min': 'Minimum value form vector field x',
+    'vec_count': 'Number of elements in vector field x',
+    'vec_sum': 'Calculates the sum of all values in a vector field.',
+    'vec_max': 'Maximum value form vector field x',
+    'vec_avg': ('Calculates the mean (average) of all elements in a vector field for each instrument and date, '
+                'converting vector data to a single matrix value.'),
+    'vec_stddev': 'Standard Deviation of vector field x',
+    'vec_range': 'Difference between maximum and minimum element in vector field x',
+}
+VECTOR_TUTORIAL_MEANINGS = {
+    'vec_min': 'Minimum value form vector field x',
+    'vec_count': 'Number of elements in vector field x',
+    'vec_sum': 'Sum of vector field x',
+    'vec_max': 'Maximum value form vector field x',
+    'vec_avg': 'Taking mean of the vector field x',
+    'vec_stddev': 'Standard Deviation of vector field x',
+    'vec_range': 'Difference between maximum and minimum element in vector field x',
+}
+VECTOR_TABLE_INTRO = ('Following are the different operators to convert vector data field into a matrix each '
+                      'differing in the way vector for a particular date and instrument is aggregated to a single value:')
 
 
 def knowledge_catalog_admission(resources: dict) -> bool:
@@ -1156,6 +1178,162 @@ def _operator_receipt_context(body: str, source: dict, raw: str | bytes, operato
     return canonical
 
 
+class _VectorTableRows(HTMLParser):
+    """Input: HTML via feed(str). Output: rows list[list[str]]; parse table cells without guessing signatures."""
+
+    def __init__(self):
+        """Input: none. Output: parser with empty rows; collect only actual table cells."""
+        super().__init__(convert_charrefs=True)
+        self.rows, self.row, self.cell = [], None, None
+        self.table_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        """Input: HTML tag str/attrs list. Output: None; start bounded table/row/cell state."""
+        if tag == 'table':
+            self.table_depth += 1
+            if self.table_depth > 1:
+                raise ValueError('nested vector signature tables are unsupported')
+        elif tag == 'tr' and self.table_depth:
+            self.row = []
+        elif tag in ('td', 'th') and self.row is not None:
+            self.cell = []
+
+    def handle_data(self, data):
+        """Input: text str. Output: None; retain nested inline table cell text."""
+        if self.cell is not None:
+            self.cell.append(data)
+
+    def handle_endtag(self, tag):
+        """Input: HTML tag str. Output: None; finalize explicit cells and rows."""
+        if tag in ('td', 'th') and self.cell is not None:
+            self.row.append(' '.join(' '.join(self.cell).split()))
+            self.cell = None
+        elif tag == 'tr' and self.row is not None:
+            self.rows.append(self.row)
+            self.row = None
+        elif tag == 'table':
+            self.table_depth -= 1
+
+
+def _vector_tutorial_premises(page: dict, operator: str) -> None:
+    """Input: verified complete page dict/operator str. Output: None; check relevant conversion/signature premises.
+
+    Unrelated notes/media are not type authority and do not invalidate it. The
+    exact conversion passage and selected table row must remain; explicit
+    contradictory technical overrides are unsupported, not silently ignored. Examples
+    never define new types, NaN behavior or empirical evidence.
+    """
+    texts, rows = [], []
+    for block in page['content']:
+        if block['type'] == 'IMAGE':
+            continue
+        text = _documentation_text(block['value'])
+        texts.append(text)
+        if block['type'] == 'TEXT':
+            parser = _VectorTableRows()
+            parser.feed(block['value'])
+            parser.close()
+            rows.extend(parser.rows)
+        elif block['type'] == 'TABLE':
+            rows.extend([[_documentation_text(cell) for cell in row] for row in block['value']['data']])
+    if not any(MATRIX_PAGE_CONTEXT in text for text in texts) or not any(VECTOR_TABLE_INTRO in text for text in texts):
+        raise ValueError('missing explicit VECTOR to MATRIX conversion premises')
+    selected = [row for row in rows if row and re.search(r'\b' + re.escape(operator) + r'\b', row[0])]
+    if selected != [[operator + '(x)', VECTOR_TUTORIAL_MEANINGS[operator]]]:
+        raise ValueError('missing or contradictory selected vector signature/table mapping')
+    # Compare explicit local type relations, not unrelated content or unknown
+    # empirical properties. The positive type proof still comes only from above.
+    subject = (r'(?:\b' + re.escape(operator) + r'(?:\([^)]*\))?(?:\s+operator)?'
+               r'|\b(?:vector|vec_)\s+(?:operators?|reductions?|aggregations?))')
+    types = r'(VECTOR|MATRIX|GROUP|FLOAT|INTEGER|BOOLEAN|SCALAR)\b'
+    output_claim = re.compile(subject + r'\s+(?:(?:now\s+)?(?:returns?|outputs?|produces?)'
+        r'\s+(?:an?\s+)?|output(?:\s+type)?\s*(?:is|:|=)\s*)' + types, re.IGNORECASE)
+    input_claim = re.compile(subject + r'\s+(?:(?:now\s+)?(?:accepts?|requires?|takes?)'
+        r'\s+(?:an?\s+)?|input(?:\s+type)?\s*(?:is|:|=)\s*)' + types, re.IGNORECASE)
+    negative_claim = re.compile(subject + r'\s+(?:does?\s+not|never)\s+'
+        r'(?:return|output|produce)\s+(?:an?\s+)?MATRIX\b', re.IGNORECASE)
+    opposite = ('mean|average' if operator == 'vec_sum' else 'sum|total' if operator == 'vec_avg' else None)
+    meaning_conflict = re.compile(subject + r'\s+(?:returns?|computes?|calculates?|produces?)\s+'
+        r'(?:the\s+|an?\s+)?(?:' + opposite + r')\b', re.IGNORECASE) if opposite else None
+    for text in texts:
+        remainder = text.replace(MATRIX_PAGE_CONTEXT, '').replace(VECTOR_TABLE_INTRO, '')
+        if (any(match[1].upper() != 'MATRIX' for match in output_claim.finditer(remainder))
+                or any(match[1].upper() != 'VECTOR' for match in input_claim.finditer(remainder))
+                or negative_claim.search(remainder)
+                or meaning_conflict and meaning_conflict.search(remainder)):
+            raise ValueError('contradictory additional vector technical mapping claim')
+
+
+def _vector_catalog_definition(operator: str, catalog_ref: dict, vector_ref: dict,
+                               source_index: dict, source_texts: dict) -> dict:
+    """Input: operator str/two documented refs/index/full texts dicts. Output: sourced unary definition dict or ValueError.
+
+    This finite rule composes the actual authenticated catalog call with the
+    explicit official vector tutorial conversion/table premises. It never uses the
+    vec_sum worked-table typo, delta example, or an assumed average fallback.
+    Source freshness/inventory generation remain the selecting caller's gates.
+    """
+    if operator not in VECTOR_REDUCTIONS:
+        raise ValueError('unsupported direct vector reduction: ' + str(operator))
+    if any(evidence_ref_from_dict(ref).kind != 'documented' for ref in (catalog_ref, vector_ref)):
+        raise ValueError('vector technical declarations require documented official evidence')
+    catalog_body = _source(catalog_ref, source_index, source_texts)
+    catalog_path = catalog_ref['source_path']
+    if source_index[catalog_path]['source_type'] != 'platform_learn_material' or '## Raw GET Receipt' not in catalog_body:
+        raise ValueError('vector declaration requires complete authenticated operator catalog')
+    _operator_receipt_context(catalog_body, source_index[catalog_path], source_texts[catalog_path],
+                              operator, raw_capture=True)
+    match = re.fullmatch(r'(.*?)\n## Raw GET Receipt\n\n```json\n(.*)\n```\n', catalog_body, re.DOTALL)
+    receipt = json.loads(match[2], object_pairs_hook=_json_object, parse_constant=_invalid_constant)
+    if receipt['target'] != {'kind': 'operators'} or receipt['endpoint'] != '/operators':
+        raise ValueError('vector declaration needs the current full operator catalog, not tutorial visibility alone')
+    payload = receipt['payload']
+    rows = payload if isinstance(payload, list) else payload['results']
+    actual = next(row for row in rows if row['name'] == operator)
+    if (actual.get('category') != 'Vector' or 'REGULAR' not in actual['scope']
+            or actual['definition'] != operator + '(x)'
+            or actual['description'] != VECTOR_REDUCTIONS[operator]
+            or actual.get('documentation') not in (None, '/operators/' + operator)):
+        raise ValueError('catalog conflicts with supported direct vector call/meaning')
+    page = validated_documentation_page(vector_ref, source_index, source_texts)
+    if page['id'] != 'vector-datafields':
+        raise ValueError('vector type declaration requires the official vector-datafields tutorial')
+    _vector_tutorial_premises(page, operator)
+    return dict(description=actual['description'], input_types=['VECTOR'], output_type='MATRIX',
+        parameters=[dict(name='x', type='VECTOR', required=True)],
+        evidence_refs=[deepcopy(catalog_ref), deepcopy(vector_ref)])
+
+
+def enrich_vector_operator_record(record: dict, source_index: dict, source_texts: dict, *,
+                                  catalog_ref: dict, vector_ref: dict) -> dict:
+    """Input: selected catalog row/index/full texts/two documented refs dicts. Output: new typed row; no IO or mutation.
+
+    Parent selected-catalog API: retain both original sources in resources and
+    evidence_pack, call this helper for each selected supported vector operator,
+    then use catalog_operator_definition as usual. Use resource contract 2 and
+    knowledge_catalog_v1 with explicit design_version=3/include_vector=True.
+    No ledger publication, source age renewal or research authority is granted.
+    Existing conflicting typed/raw claims reject instead of being overwritten.
+    """
+    operator = record['operator']
+    definition = _vector_catalog_definition(operator, catalog_ref, vector_ref, source_index, source_texts)
+    previous = record.get('definition')
+    if previous is not None:
+        if not isinstance(previous, dict) or any(previous.get(key) != definition[key]
+                for key in ('input_types', 'output_type', 'parameters', 'description')):
+            raise ValueError('existing vector definition conflicts with official declaration')
+    for key, expected in (('raw_definition', operator + '(x)'), ('raw_description', definition['description'])):
+        if key in record and record[key] != expected:
+            raise ValueError('existing raw vector claim conflicts with official catalog')
+    result = deepcopy(record)
+    if 'definition_basis' in result:
+        raise ValueError('vector declaration cannot replace an unrelated definition basis')
+    result['definition'] = definition
+    result['source_paths'] = sorted(set(result.get('source_paths', [])) |
+                                    {catalog_ref['source_path'], vector_ref['source_path']})
+    return result
+
+
 def catalog_operator_definition(record: dict, source_index: dict, source_texts: dict) -> dict:
     """Input: catalog operator/index/full texts dicts. Output: actual typed definition; compare technical facts, not economic prose."""
     from wqb.semantic_compilation import _markdown_definitions
@@ -1176,6 +1354,13 @@ def catalog_operator_definition(record: dict, source_index: dict, source_texts: 
                 raise ValueError('catalog signature contradicts captured technical facts: ' + record['operator'])
             found = found or all(key in candidate for key in keys)
     if not found:
+        if record['operator'] in VECTOR_REDUCTIONS and len(definition['evidence_refs']) == 2:
+            refs = definition['evidence_refs']
+            # The generated record keeps catalog then tutorial refs; no trust flag.
+            sourced = _vector_catalog_definition(record['operator'], refs[0], refs[1], source_index, source_texts)
+            if definition != sourced:
+                raise ValueError('vector declaration differs from verified official facts')
+            return definition
         resolved = resolve_operator_definition(record, source_index, source_texts, resource_contract_version=2)
         if resolved['status'] != 'supported' or any(not _equal(resolved['value']['definition'][key], expected[key]) for key in keys):
             raise ValueError('catalog operator lacks a supported technical signature: ' + record['operator'])

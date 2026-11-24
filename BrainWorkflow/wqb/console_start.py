@@ -32,10 +32,11 @@ START_CONFIG_FIELDS = (
     'request_timeout_seconds', 'max_retries', 'base_backoff_seconds', 'max_alphas_per_round',
     'max_rounds', 'runtime_max_steps', 'runtime_no_progress_limit', 'max_runtime_seconds',
     'max_recoveries', 'live_api_enabled', 'parallel_workflows', 'plan_depth', 'initial_hypotheses',
+    'retrieval_max_queries', 'retrieval_max_validations', 'retrieval_max_returned_bytes',
 )
 START_POLICY_FIELDS = ('preplanned_tree_version', 'paired_scout', 'exploration_scout',
     'exploration_policy_version', 'parallel_workflows', 'plan_depth', 'initial_hypotheses',
-    'execution_package_version', 'multiplier_scope_version')
+    'execution_package_version', 'multiplier_scope_version', 'retrieval_design_version')
 
 
 def load_start_config(paths) -> dict:
@@ -52,6 +53,9 @@ def load_start_config(paths) -> dict:
     clean = {key: config[key] for key in START_CONFIG_FIELDS if key in config}
     if any(type(value) not in (str, int, float, bool) for value in clean.values()):
         raise ValueError('Console Start settings must be scalar values')
+    for key in ('retrieval_max_queries', 'retrieval_max_validations', 'retrieval_max_returned_bytes'):
+        if key in clean and (type(clean[key]) is not int or clean[key] <= 0):
+            raise ValueError(key + ' must be a positive integer')
     policy = config.get('research_policy', {})
     if not isinstance(policy, dict):
         raise ValueError('research_policy must be an object')
@@ -66,6 +70,9 @@ def load_start_config(paths) -> dict:
         raise ValueError('Console Start policy settings must be boolean or integer values')
     from wqb.execution_package import package_enabled
     package_enabled(clean)
+    retrieval = clean['research_policy'].get('retrieval_design_version', 0)
+    if type(retrieval) is not int or retrieval not in (0, 1):
+        raise ValueError('retrieval_design_version must be integer 0 or 1')
     from wqb.multiplier_scope import multiplier_enabled
     multiplier_enabled(clean)
     if 'multiplier_preparation_policy' in config:
@@ -246,6 +253,27 @@ def _require_retired_intent(runs_root: Path, intent: dict) -> None:
         raise ValueError('retired source runtime intent changed during preparation')
 
 
+def _require_resolved_retrieval(paths, previous: dict) -> None:
+    """Input: paths/prior Start. Output: None; unresolved model ownership cannot be erased by a new timestamp or Stop."""
+    binding = previous.get('retrieval_design_task')
+    if binding is None:
+        return
+    from wqb.console_api import _safe
+    from wqb.retrieval_research_planning import read_design_task
+    try:
+        directory = _safe(paths.runs_root, Path(binding['directory']))
+        if not directory.is_relative_to((paths.runs_root / 'start_preflight/preplanned').absolute()):
+            raise ValueError('task outside preparation boundary')
+        task = read_design_task(directory)
+        owner = task['identity']['config'].get('retrieval_owner')
+        if (task['input_sha256'] != binding['input_sha256'] or owner != dict(
+                runs_root=str(paths.runs_root), request_id=previous['request_id'])
+                or task['status'] != 'completed'):
+            raise ValueError('original task not completed')
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        raise ValueError('unresolved retrieval preparation retained; maintenance must reconcile original model task') from error
+
+
 def register_start(paths, form: dict, job_id: str) -> dict:
     """Input: ConsolePaths, form dict, job ID str. Output: request dict. Reserve local prep without mission creation."""
     selection = _selection(form)
@@ -268,6 +296,7 @@ def register_start(paths, form: dict, job_id: str) -> dict:
                 if previous.get("selection") != selection:
                     raise ValueError("another Console Start preparation is active; Stop it before changing options")
                 return previous
+        _require_resolved_retrieval(paths, previous)
         extra = {}
         if preplanned:
             from wqb.console_server import _selected_option
@@ -315,12 +344,70 @@ def cancel_start(runs_root: Path) -> dict:
                                          "error": "Stop requested; local Start preparation cancelled"})
 
 
+def _retrieval_progress(paths, row: dict, binding: dict) -> dict:
+    """Input: Console paths, Start/binding dicts. Output: sanitized dict bound to the original active task, or empty."""
+    from wqb.console_api import _safe
+    from wqb.retrieval_research_planning import read_design_task
+    from wqb.research_tool_service import PROGRESS_PATH, OPERATIONS, tool_limits
+    try:
+        active = read_start_request(paths.runs_root)
+        if (row.get('status') not in PREPARING_STATUSES
+                or active.get('status') not in PREPARING_STATUSES
+                or active.get('request_id') != row.get('request_id')
+                or active.get('multiplier_preparation', {}).get('retrieval_task') != binding
+                or active.get('source_intent') != row.get('source_intent')
+                or row.get('source_intent') != _source_intent(paths.runs_root)):
+            return {}
+        directory = _safe(paths.runs_root, Path(binding['directory']))
+        if not directory.is_relative_to((paths.runs_root / 'start_preflight/preplanned').absolute()):
+            return {}
+        task = read_design_task(directory)
+        identity = task['identity']
+        owner = identity['config'].get('retrieval_owner')
+        scope = row.get('selection', {}).get('scope', {})
+        if (task.get('status') != 'running' or task['input_sha256'] != binding['input_sha256']
+                or owner != dict(runs_root=str(paths.runs_root), request_id=row['request_id'])
+                or identity['knowledge_root'] != str(paths.knowledge_root)
+                or any(key not in scope or identity['scope'].get(key) != scope[key]
+                       for key in ('region', 'delay', 'universe'))
+                or identity['scope'].get('instrument_type') != scope.get('instrument_type',
+                    row.get('preplanned_config', {}).get('instrument_type'))):
+            return {}
+        path = _safe(directory, directory / PROGRESS_PATH)
+        if path.stat().st_size > MAX_PREPARATION_STATE_BYTES:
+            return {}
+        progress = json.loads(path.read_text(encoding='utf-8'))
+        if (progress.get('input_sha256') != task['input_sha256']
+                or progress.get('stage') not in {'retrieving', 'validating', 'planning'}
+                or progress.get('operation') not in OPERATIONS):
+            return {}
+        limits = tool_limits(identity['config'])
+        for count, limit in (('queries', 'max_queries'), ('validations', 'max_validations'),
+                             ('returned_bytes', 'max_returned_bytes')):
+            if (type(progress.get(count)) is not int or type(progress.get(limit)) is not int
+                    or progress[limit] != limits[limit] or not 0 <= progress[count] <= limits[limit]):
+                return {}
+        stamp = progress['activity_at']
+        if not isinstance(stamp, str) or datetime.fromisoformat(stamp).tzinfo is None:
+            return {}
+        return {key: progress[key] for key in ('stage', 'operation', 'queries', 'validations',
+            'returned_bytes', 'max_queries', 'max_validations', 'max_returned_bytes', 'activity_at')}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return {}
+
+
 def preparation_projection(paths, row: dict) -> dict:
     """Input: Console paths/original request. Output: bounded display facts; never grant resource or execution authority."""
     current = row.get('multiplier_preparation')
     if not isinstance(current, dict):
         return {}
     result = dict(current)
+    binding = result.pop('retrieval_task', None)
+    result.pop('tool_progress', None)
+    if isinstance(binding, dict):
+        progress = _retrieval_progress(paths, row, binding)
+        if progress:
+            result['tool_progress'] = progress
     request_id = row.get('request_id', '')
     if isinstance(request_id, str) and re.fullmatch(r'[0-9a-f]{32}', request_id):
         from wqb.multiplier_preparation import _load
@@ -529,8 +616,41 @@ def _execute_preplanned_start(paths, original: dict) -> dict:
     from wqb.research_group_driver import initialize_group_runtime
     from wqb.runtime_control import DEFAULT_MAX_RUNTIME_SECONDS, DEFAULT_MAX_RECOVERIES
     runtime_paths = OrchestratorPaths(paths.project_root, paths.workflow_root, paths.knowledge_root, paths.runs_root)
-    config = original['preplanned_config']
+    config = deepcopy(original['preplanned_config'])
     runners = {}
+
+    def check_original_start():
+        """Input: none. Output: None; reject cancelled/superseded Start or changed original runtime intent."""
+        with start_request_guard(paths.runs_root):
+            row = read_start_request(paths.runs_root)
+            if row.get('request_id') != original['request_id'] or row.get('status') not in PREPARING_STATUSES:
+                raise InterruptedError('retrieval Start stopped or superseded')
+            if row.get('source_intent') != _source_intent(paths.runs_root):
+                raise InterruptedError('retrieval Start source intent changed')
+
+    def retrieval_model_runner(directory: Path, brief: dict) -> dict:
+        """Input: owning preparation task/compact brief. Output: one bounded existing Codex task result."""
+        from wqb.retrieval_research_planning import create_retrieval_model_runner
+        check_original_start()
+        directory = _safe(paths.runs_root, directory)
+        if not directory.is_relative_to(paths.runs_root / 'start_preflight/preplanned'):
+            raise ValueError('retrieval task outside original Start preparation boundary')
+        with start_request_guard(paths.runs_root):
+            row = read_start_request(paths.runs_root)
+            if row.get('request_id') != original['request_id'] or row.get('status') not in PREPARING_STATUSES:
+                raise InterruptedError('retrieval Start stopped or superseded')
+            from wqb.retrieval_research_planning import read_design_task
+            task = read_design_task(directory)
+            if task['identity']['config'].get('retrieval_owner') != dict(
+                    runs_root=str(paths.runs_root), request_id=original['request_id']):
+                raise ValueError('retrieval task owner differs from original Start')
+            preparation = dict(row.get('multiplier_preparation', {}), stage='planning', status='running')
+            preparation['retrieval_task'] = dict(directory=str(directory), input_sha256=task['input_sha256'])
+            _write_request(paths.runs_root, {**row, 'multiplier_preparation': preparation,
+                'retrieval_design_task': deepcopy(preparation['retrieval_task'])})
+        if directory not in runners:
+            runners[directory] = create_retrieval_model_runner(directory, config, check_original_start)
+        return runners[directory](brief)
 
     def model_runner(supplied: dict) -> dict:
         """Input: source-bound brief with context dict. Output: exact persisted-brief model answer for one owned lane."""
@@ -575,8 +695,12 @@ def _execute_preplanned_start(paths, original: dict) -> dict:
         authority = dict(enable_live_api=original['selection']['enable_live_api'],
             max_runtime_seconds=config.get('max_runtime_seconds', DEFAULT_MAX_RUNTIME_SECONDS),
             max_recoveries=config.get('max_recoveries', DEFAULT_MAX_RECOVERIES))
+        extra = {}
+        if config.get('research_policy', {}).get('retrieval_design_version') == 1:
+            config['retrieval_owner'] = dict(runs_root=str(paths.runs_root), request_id=original['request_id'])
+            extra = dict(retrieval_model_runner=retrieval_model_runner, check_cancelled=check_original_start)
         result = prepare_preplanned_start(runtime_paths, original['preplanned_option'], authority, config,
-                                           model_runner=model_runner)
+                                           model_runner=model_runner, **extra)
         with start_request_guard(paths.runs_root):
             row = read_start_request(paths.runs_root)
             if row.get('request_id') != original['request_id'] or row.get('status') not in PREPARING_STATUSES:
@@ -584,6 +708,12 @@ def _execute_preplanned_start(paths, original: dict) -> dict:
             if result.get('status') != 'completed':
                 raise ValueError(result.get('reason') or 'preplanned Start preparation blocked')
             group = result['group']
+            if extra and not row.get('group_dir'):
+                current_group = read_group(Path(group['group_dir']))
+                if current_group['authority'] != authority:
+                    raise ValueError('retrieval group authority differs from original Start')
+                row = _write_request(paths.runs_root, {**row, 'group_dir': group['group_dir'],
+                    'group_request_revision': group['request_revision']})
             if (row.get('group_dir') != group['group_dir']
                     or row.get('group_request_revision') != group['request_revision']
                     or read_group(Path(group['group_dir']))['request_revision'] != row['group_request_revision']):
@@ -594,6 +724,9 @@ def _execute_preplanned_start(paths, original: dict) -> dict:
             if current_intent['run_dir'] and str(Path(current_intent['run_dir']).resolve()) not in own_runs:
                 raise ValueError('source runtime intent changed before group commit')
             initialize_group_runtime(runtime_paths, group)
+            if extra:
+                row = {**row, 'multiplier_preparation': {
+                    **row.get('multiplier_preparation', {}), 'stage': 'ready', 'status': 'completed'}}
             return _write_request(paths.runs_root, {**row, 'status': 'completed', 'passed': True,
                 'warnings': result.get('warnings', []), 'prepared_lanes': result.get('prepared_lanes')})
     except Exception as error:

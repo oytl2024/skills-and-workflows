@@ -69,7 +69,7 @@ def _object(properties: dict) -> dict:
     return dict(type='object', properties=properties, required=list(properties), additionalProperties=False)
 
 
-def _output_schema(version: int) -> dict:
+def _output_schema(version: int, *, include_vector: bool = False) -> dict:
     """Input: verified resource version int. Output: strict structured answer schema dict."""
     text = dict(type='string')
     ids = dict(type='array', items=text)
@@ -81,7 +81,8 @@ def _output_schema(version: int) -> dict:
         parent_arm_id=dict(anyOf=[text, dict(type='null')]), design_index=dict(type='integer'),
         targets=_object({arm: ids for arm in ARMS}), fallback=ids,
         reverse=reverse_arms))
-    schema = design_output_schema(version, include_conditioned=True)
+    schema = design_output_schema(version, include_conditioned=True,
+        **({'include_vector': True} if include_vector else {}))
     schema['properties']['tree'] = _object(dict(roots=ids, nodes=dict(type='array', items=node)))
     schema['required'].append('tree')
     return schema
@@ -259,7 +260,8 @@ def _brief(resources: dict, manifest: dict, certificate: dict, receipts: list, p
         compatible_template_receipts=compatible,
         resource_certificate_sha256=certificate['content_sha256'],
         composition_contract=composition,
-        output_schema=_output_schema(resources.get('resource_contract_version', 1)))
+        output_schema=_output_schema(resources.get('resource_contract_version', 1),
+            include_vector=manifest['start_snapshot'].get('research_policy', {}).get('retrieval_design_version') == 1))
     if _annotation_mode(manifest):
         brief['annotation_context'] = _annotation_context(resources, manifest)
         brief['output_schema']['properties']['data_characteristics'] = _annotation_schema()

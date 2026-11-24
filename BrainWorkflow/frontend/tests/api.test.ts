@@ -13,6 +13,17 @@ class FakeEvents {
 afterEach(() => vi.useRealTimers());
 
 describe('application transport', () => {
+  it('accepts local preparation without platform counts and validates optional tool telemetry', () => {
+    const tool_progress = { stage: 'retrieving', operation: 'fields', queries: 3, validations: 1, returned_bytes: 500,
+      max_queries: 64, max_validations: 24, max_returned_bytes: 1048576, activity_at: '2026-11-24T01:02:03+00:00' };
+    const preparation = { stage: 'planning', status: 'running', tool_progress };
+    expect(parseSnapshot({ ...fixtureSnapshot(), preparation }).preparation).toEqual(preparation);
+    expect(parseSnapshot({ ...fixtureSnapshot(), preparation: { stage: 'planning', status: 'running' } })).toBeTruthy();
+    for (const patch of [{ queries: -1 }, { queries: 65 }, { validations: true }, { max_queries: 0 }, { activity_at: 'bad' }, { operation: 'secret' }]) {
+      expect(() => parseSnapshot({ ...fixtureSnapshot(), preparation: { ...preparation, tool_progress: { ...tool_progress, ...patch } } })).toThrow();
+    }
+    expect(() => parseSnapshot({ ...fixtureSnapshot(), preparation: { ...preparation, requests_used: 0 } })).toThrow();
+  });
   it('validates optional manual catalog and preparation strictly while preserving old snapshots', () => {
     const snapshot = multiplierSnapshot();
     expect(parseSnapshot(snapshot)).toBe(snapshot);

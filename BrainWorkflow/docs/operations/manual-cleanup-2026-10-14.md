@@ -1,5 +1,25 @@
 # 手动清理清单
 
+## 2026-11-24 Retrieval Desktop Replacement Audit
+
+Pending full-suite success and verified Git equality; no deletion performed at
+audit time. Exact destination:BrainWorkflow/output/desktop-application/installed/BrainWorkflow/.
+Replacement:build20261124-154123-9668/dist space 中文/BrainWorkflow/.
+Inventory:366->371 files; five code additions (codex_locator, research_query_index,
+research_queries, research_tool_service, retrieval_research_planning) plus JS
+replacement. ONLY deletion:installed/BrainWorkflow/_internal/frontend/dist/assets/index-D5TNGxgA.js,
+superseded by index-COtZnMa3.js; new index.html references the replacement.
+Old generated JS is reproducible from synchronized prior source/Git history;
+private audit binds all hashes. Native fixture/query acceptance passed.
+Installer requires full-suite digest, build/source and committed local/remote
+equality, literal containment and no reparse entries; rechecks hashes and refuses
+active research workers. Update existing installation receipt only. Exclusions:
+knowledge, research/recovery evidence, profiles, credentials/configuration, root
+records, old proof and policy-rejected %SystemDrive% directory. Protected old-run
+authority/state hashes must not change. Private audit/installer:
+output/desktop-validation/retrieval-install-audit-20261124.json and
+deploy_retrieval_20261124.ps1. Result belongs to root todo.md.
+
 ## 2026-11-06 Native Installation Replacement Audit
 
 Pending verified Git sync and full-suite acceptance: replace only

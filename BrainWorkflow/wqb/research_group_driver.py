@@ -399,11 +399,11 @@ def run_group_lane(paths, group, run_dir, *, config, step=None) -> dict:
         def complete(source):
             """Input: existing source path str. Output: existing source summary dict after reconciliation."""
             cli.complete_in_flight(bound, source)
-            return cli.summarize_run_dir(source, paths.knowledge_root)
+            return cli.summarize_run_dir(source, paths.knowledge_root, cli.source_benchmark_run(bound, Path(source)))
         def retry(source):
             """Input: existing source path str. Output: bounded retry summary dict, preserving identity."""
             cli.retry_planned(bound, source)
-            return cli.summarize_run_dir(source, paths.knowledge_root)
+            return cli.summarize_run_dir(source, paths.knowledge_root, cli.source_benchmark_run(bound, Path(source)))
         def step():
             """Input: closed-over lane authority/config. Output: next ordinary workflow step dict."""
             return auto_continue_workflow(paths, bound, utc_now(), enable_live_api=live,

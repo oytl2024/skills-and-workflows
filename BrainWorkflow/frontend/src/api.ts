@@ -34,8 +34,17 @@ function validScopeSelection(value: unknown): value is ScopeSelection {
 // Input: unknown JSON. Output: boolean; validates optional preparation facts without synthesizing progress.
 function validPreparation(value: unknown): value is Preparation {
   const p = value as Preparation | null;
-  return !!p && typeof p.stage === 'string' && typeof p.status === 'string' &&
-    Number.isSafeInteger(p.requests_used) && p.requests_used >= 0 && Number.isSafeInteger(p.request_limit) && p.request_limit >= 0 &&
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return false;
+  const t = p.tool_progress;
+  const bounded = (count: number, limit: number) => Number.isSafeInteger(count) && count >= 0 && Number.isSafeInteger(limit) && limit > 0 && count <= limit;
+  return typeof p.stage === 'string' && typeof p.status === 'string' &&
+    ((p.requests_used === undefined && p.request_limit === undefined) ||
+      (Number.isSafeInteger(p.requests_used) && p.requests_used! >= 0 && Number.isSafeInteger(p.request_limit) && p.request_limit! >= 0)) &&
+    (t === undefined || (!!t && typeof t === 'object' && !Array.isArray(t) &&
+      ['retrieving', 'validating', 'planning'].includes(t.stage) &&
+      ['fields', 'operators', 'templates', 'experience', 'source', 'validate'].includes(t.operation) &&
+      bounded(t.queries, t.max_queries) && bounded(t.validations, t.max_validations) && bounded(t.returned_bytes, t.max_returned_bytes) &&
+      typeof t.activity_at === 'string' && Number.isFinite(Date.parse(t.activity_at)))) &&
     (p.scope === undefined || validScope(p.scope)) && (p.field_count === undefined || (Number.isSafeInteger(p.field_count) && p.field_count >= 0)) &&
     (p.reason === undefined || typeof p.reason === 'string');
 }

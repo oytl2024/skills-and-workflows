@@ -260,7 +260,8 @@ def _optional_published_operators(root: Path, diagnostics: list, max_bytes: int)
 
 
 def read_catalog_resources(root: Path, scope: dict, count: int, *, settings: dict,
-                           max_fields_per_lane: int = 30) -> tuple[list[dict], list[dict]]:
+                           max_fields_per_lane: int = 30,
+                           _selected_rows: list[dict] | None = None) -> tuple[list[dict], list[dict]]:
     """Input: vault Path/exact scope dict/count int/settings dict/field cap int.
 
     Output: (compiler resource dict list, diagnostic dict list). Read canonical
@@ -610,10 +611,18 @@ def read_catalog_resources(root: Path, scope: dict, count: int, *, settings: dic
     # Only verified fields occupy bounded slots. A complete identity-only audit
     # detects shadows even before the selected occurrence, then refills from the
     # deterministic stream without retaining an unbounded candidate queue.
+    def field_rows(report_rows: bool = True):
+        """Input: diagnostic flag bool. Output: canonical selected rows or the legacy bounded stream."""
+        if _selected_rows is None:
+            return _rows(root, 'data_ledger', diagnostics, scan_state=scan_state,
+                         report_rows=report_rows)
+        scan_state['data_ledger'] = True
+        return iter(_selected_rows)
+
     selected_fields, duplicate_ids, selected_bytes = {}, set(), 0
     target = count * max_fields_per_lane
     while True:
-        for row in _rows(root, 'data_ledger', diagnostics, scan_state=scan_state):
+        for row in field_rows():
             if not _scope_matches(row, scope):
                 continue
             identity = (row.get('dataset_id'), row.get('field_id'))
@@ -665,7 +674,7 @@ def read_catalog_resources(root: Path, scope: dict, count: int, *, settings: dic
         if not scan_state['data_ledger']:
             return [], diagnostics
         occurrences = dict.fromkeys(selected_fields, 0)
-        for row in _rows(root, 'data_ledger', diagnostics, scan_state=scan_state, report_rows=False):
+        for row in field_rows(report_rows=False):
             if _scope_matches(row, scope):
                 identity = (row.get('dataset_id'), row.get('field_id'))
                 if all(isinstance(v, str) for v in identity) and identity in occurrences:
@@ -689,7 +698,8 @@ def read_catalog_resources(root: Path, scope: dict, count: int, *, settings: dic
     # Seed each view with an actual MATRIX when possible, then stably pack all
     # types without coercion. Count is a cap, not a demand to invent DSL inputs.
     matrix_fields = [item for item in selected_fields.values() if item[0]['field_type'] == 'MATRIX']
-    seeds = matrix_fields[:count]
+    seeds = (list(selected_fields.values())[:count] if _selected_rows is not None
+             else matrix_fields[:count])
     seeded_ids = {(item[0]['dataset_id'], item[0]['field_id']) for item in seeds}
     batches = [[item] for item in seeds]
     lane_limit = len(seeds) if seeds else count
@@ -720,3 +730,97 @@ def read_catalog_resources(root: Path, scope: dict, count: int, *, settings: dic
         if len(resources) == count:
             return resources, diagnostics
     return resources, diagnostics
+
+
+def read_selected_catalog_resources(root: Path, scope: dict, identities: list[tuple[str, str]],
+                                    *, generation: str, settings: dict) -> tuple[dict, list[dict]]:
+    """Input: vault/scope, exact field IDs, query generation/settings. Output: one verified resource plus diagnostics.
+
+    Resolve indexed original rows only; never replace an unavailable selection
+    with a shortlist field. VECTOR visibility here grants no compilation authority.
+    """
+    from wqb.research_query_index import read_field_rows
+    if (not isinstance(identities, list) or not 1 <= len(identities) <= MAX_FIELDS_PER_LANE
+            or any(not isinstance(pair, (list, tuple)) or len(pair) != 2
+                   or any(not isinstance(value, str) or not value for value in pair)
+                   for pair in identities)):
+        raise ValueError('invalid bounded selected field identities')
+    wanted = [tuple(pair) for pair in identities]
+    if len(set(wanted)) != len(wanted):
+        raise ValueError('duplicate selected field identity')
+    rows = read_field_rows(root, generation, scope, wanted)
+    actual = [(row.get('dataset_id'), row.get('field_id')) for row in rows]
+    if len(actual) != len(wanted) or set(actual) != set(wanted):
+        raise ValueError('indexed rows do not match exact selected identities')
+    resources, diagnostics = read_catalog_resources(root, scope, 1, settings=settings,
+        max_fields_per_lane=len(wanted), _selected_rows=rows)
+    if len(resources) != 1 or set((r['dataset_id'], r['field_id'])
+            for r in resources[0]['field_rows']) != set(wanted):
+        raise ValueError('selected field evidence unavailable: ' + json.dumps(diagnostics)[:2000])
+    if any(row['field_type'] == 'VECTOR' for row in resources[0]['field_rows']):
+        return enrich_selected_vector_resources(root, resources[0], diagnostics), diagnostics
+    return resources[0], diagnostics
+
+
+def enrich_selected_vector_resources(root: Path, resource: dict, diagnostics: list) -> dict:
+    """Input: vault/selected resource/diagnostics. Output: copied sourced VECTOR declarations, never an implicit reduction.
+
+    The actual official catalog and conversion tutorial supply independent
+    technical premises. Missing premises leave operators visible and untyped;
+    final compiler validation decides whether a proposed call is supported.
+    """
+    from wqb.resource_evidence import (VECTOR_REDUCTIONS, enrich_vector_operator_record,
+                                      validated_documentation_page)
+    result = deepcopy(resource)
+    index = {}
+    scan_state = {}
+    for source in _rows(root, 'source_index', diagnostics, scan_state=scan_state):
+        path = source.get('path')
+        if path in index:
+            raise ValueError('ambiguous vector source index identity')
+        index[path] = source
+    candidates = []
+    now = datetime.now(timezone.utc)
+    for path, source in index.items():
+        if (not isinstance(path, str) or not path.startswith('raw/platform/learn/')
+                or Path(path).name != 'documentation_pages.md'):
+            continue
+        try:
+            _fresh(source.get('captured_at'), now)
+            _, text = _material(root, source)
+            ref = dict(source_path=path, sha256=source['content_hash'],
+                capture_date=source['captured_at'][:10], kind='documented', experiment_refs=[])
+            page = validated_documentation_page(ref, {path: source}, {path: text})
+            if page['id'] == 'vector-datafields':
+                candidates.append((source['captured_at'], path, source, text, ref))
+        except (OSError, ValueError, TypeError, KeyError):
+            continue
+    if not candidates:
+        _diagnostic(diagnostics, 'vector_definition_unavailable',
+                    'No valid indexed VECTOR conversion tutorial; identity remains visible.', severity='warning')
+        return result
+    _, path, source, text, vector_ref = max(candidates, key=lambda item: (item[0], item[1]))
+    for row in result['operator_rows']:
+        if row['operator'] not in VECTOR_REDUCTIONS:
+            continue
+        for catalog_path in row.get('source_paths', []):
+            if catalog_path not in result['source_index']:
+                continue
+            catalog = result['source_index'][catalog_path]
+            catalog_ref = dict(source_path=catalog_path, sha256=catalog['content_hash'],
+                capture_date=catalog['captured_at'][:10], kind='documented', experiment_refs=[])
+            selected_index = {**result['source_index'], path: source}
+            selected_texts = {**result['source_texts'], path: text}
+            try:
+                enriched = enrich_vector_operator_record(row, selected_index, selected_texts,
+                    catalog_ref=catalog_ref, vector_ref=vector_ref)
+            except (ValueError, TypeError, KeyError):
+                continue
+            row.clear()
+            row.update(enriched)
+            result['source_index'][path] = source
+            result['source_texts'][path] = text
+            result['evidence_pack']['source_index'][path] = deepcopy(source)
+            result['evidence_pack']['source_texts'][path] = text
+            break
+    return result

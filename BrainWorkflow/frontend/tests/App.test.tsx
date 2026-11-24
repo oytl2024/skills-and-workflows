@@ -85,6 +85,25 @@ describe('research workspace (explicit offline fixtures)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
     expect(command).toHaveBeenCalledWith('stop');
   });
+  it('shows compact local tool activity without fabricated platform requests or new actions', () => {
+    const snapshot = { ...fixtureSnapshot(), preparation: { stage: 'planning', status: 'running',
+      tool_progress: { stage: 'retrieving', operation: 'fields', queries: 3, validations: 1, returned_bytes: 500,
+        max_queries: 64, max_validations: 24, max_returned_bytes: 1048576, activity_at: '2026-11-24T01:02:03+00:00' } } };
+    render(<App client={ApplicationClient.fixture(snapshot)} />);
+    expect(screen.getByText(/fields/)).toBeTruthy();
+    expect(screen.getByText(/3 \/ 64/)).toBeTruthy();
+    expect(screen.getByText(/1 \/ 24/)).toBeTruthy();
+    expect(screen.getByText(/500 \/ 1048576/)).toBeTruthy();
+    expect(screen.queryByText(/请求 0 \/ 0/)).toBeNull();
+    expect(screen.getByText('2026-11-24T01:02:03+00:00')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /^(Start|Stop)$/ })).toHaveLength(2);
+  });
+  it('hides zero platform allowance during local preparation', () => {
+    render(<App client={ApplicationClient.fixture({ ...fixtureSnapshot(), preparation: {
+      stage: 'planning', status: 'running', requests_used: 0, request_limit: 0 } })} />);
+    expect(screen.queryByText(/请求 0 \/ 0/)).toBeNull();
+    expect(screen.getByText(/规划研究/)).toBeTruthy();
+  });
   it('disables maintenance-only goals and shows the exact configured scope', () => {
     const snapshot = fixtureSnapshot();
     snapshot.group.group_id = 'none';

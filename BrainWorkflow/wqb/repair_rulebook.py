@@ -48,9 +48,10 @@ def build_default_repair_policy(resources: dict, rulebook: dict | None = None) -
     certified = compile_repair_search_policy(resources, dict(compile_version=1, rules=[], traits={}))
     facts = deepcopy(certified['traits'])
     fields = certified['resources']['field_rows']
-    if not fields or any(row['field_type'] not in {'MATRIX', 'VECTOR'} for row in fields):
+    numeric_fields = [row for row in fields if row['field_type'] in {'MATRIX', 'VECTOR'}]
+    if not numeric_fields:
         raise ValueError('default Repair requires sourced numeric fields')
-    paths = sorted({path for row in fields for path in _field_source_paths(row,
+    paths = sorted({path for row in numeric_fields for path in _field_source_paths(row,
         resources['source_index'], resources['source_texts'], resources['evidence_pack']['scope'],
         _catalog_admission(resources))})
     references = [dict(source_path=path, sha256=resources['source_index'][path]['content_hash'],

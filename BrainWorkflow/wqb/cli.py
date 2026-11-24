@@ -1018,7 +1018,8 @@ def latest_run_dir(run_root: str | Path) -> Path | None:
     return max(run_dirs, key=lambda path: path.stat().st_mtime)
 
 
-def summarize_run_dir(run_dir: str | Path, knowledge_root: str | Path | None = None) -> dict[str, Any]:
+def summarize_run_dir(run_dir: str | Path, knowledge_root: str | Path | None = None,
+                      benchmark_run_dir: str | Path | None = None) -> dict[str, Any]:
     """Input: run path and optional vault root. Output: status summary dict. Summarize with active benchmark rules."""
     recorder = RunRecorder(run_dir)
     alpha_records = recorder.read_jsonl("all_alphas.jsonl")
@@ -1046,7 +1047,7 @@ def summarize_run_dir(run_dir: str | Path, knowledge_root: str | Path | None = N
         benchmark = benchmark_alpha_record(
             record,
             knowledge_root=knowledge_root,
-            run_dir=run_dir,
+            run_dir=benchmark_run_dir if benchmark_run_dir is not None else run_dir,
             consumer="repair_loop",
         )
         benchmark_counts[benchmark.label] += 1
@@ -1083,7 +1084,7 @@ def summarize_run_dir(run_dir: str | Path, knowledge_root: str | Path | None = N
         existing_benchmark = benchmark_alpha_record(
             record,
             knowledge_root=knowledge_root,
-            run_dir=run_dir,
+            run_dir=benchmark_run_dir if benchmark_run_dir is not None else run_dir,
             consumer="repair_loop",
         )
         existing_scan_benchmark_counts[existing_benchmark.label] += 1
@@ -1260,6 +1261,15 @@ def benchmark_fields_for_record(
         "benchmark_reasons": benchmark.reasons,
         "next_stage": benchmark.next_stage,
     }
+
+
+def source_benchmark_run(config: dict[str, Any], source: Path) -> Path:
+    """Input: source execution config and source Path. Output: sealed benchmark owner, or unchanged legacy source."""
+    owner = config.get('active_workflow_run_dir')
+    if not owner:
+        return Path(source)
+    from wqb.repair_policy import benchmark_resource_run
+    return benchmark_resource_run(Path(owner), Path(source))
 
 
 def inspect_existing_alpha(
@@ -2416,6 +2426,7 @@ def run_field_batch(
             client, recorder, payloads, metadata, submit_mode, "run_field_batch",
             defer_poll=defer_poll, multi_chunk_sleep_seconds=multi_chunk_sleep_seconds,
             knowledge_root=config.get("knowledge_root", default_knowledge_root()),
+            benchmark_run_dir=source_benchmark_run(config, recorder.run_dir),
         )
 
     summaries = []
@@ -2742,6 +2753,7 @@ def retry_planned_candidates(
         multi_chunk_sleep_seconds=multi_chunk_sleep_seconds,
         sleep_func=sleep_func,
         knowledge_root=config.get("knowledge_root", default_knowledge_root()),
+        benchmark_run_dir=source_benchmark_run(config, recorder.run_dir),
     )
 
 
@@ -2757,6 +2769,7 @@ def submit_candidate_payloads(
     multi_chunk_sleep_seconds: float = DEFAULT_MULTI_CHUNK_SLEEP_SECONDS,
     sleep_func=cooperative_sleep,
     knowledge_root: str | Path | None = None,
+    benchmark_run_dir: str | Path | None = None,
 ) -> list[Any]:
     """Input: client, payloads, mode, options, vault root. Output: summaries. Submit and classify with active rules."""
     summaries = []
@@ -2888,7 +2901,7 @@ def submit_candidate_payloads(
                     benchmark_fields_for_record(
                         record,
                         knowledge_root=knowledge_root,
-                        run_dir=recorder.run_dir,
+                        run_dir=benchmark_run_dir if benchmark_run_dir is not None else recorder.run_dir,
                         consumer="triage",
                     )
                 )
@@ -2963,7 +2976,7 @@ def submit_candidate_payloads(
             benchmark_fields_for_record(
                 record,
                 knowledge_root=knowledge_root,
-                run_dir=recorder.run_dir,
+                run_dir=benchmark_run_dir if benchmark_run_dir is not None else recorder.run_dir,
                 consumer="triage",
             )
         )
@@ -3194,7 +3207,8 @@ def complete_in_flight(config: dict[str, Any], run_dir: str | None = None) -> No
                 {
                     "run_dir": str(selected_run_dir),
                     "completed_alpha_ids": [],
-                    "status": summarize_run_dir(selected_run_dir, config.get("knowledge_root", default_knowledge_root())),
+                    "status": summarize_run_dir(selected_run_dir, config.get("knowledge_root", default_knowledge_root()),
+                                                source_benchmark_run(config, selected_run_dir)),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -3207,7 +3221,8 @@ def complete_in_flight(config: dict[str, Any], run_dir: str | None = None) -> No
             {
                 "run_dir": str(selected_run_dir),
                 "completed_alpha_ids": completed_alpha_ids,
-                "status": summarize_run_dir(selected_run_dir, config.get("knowledge_root", default_knowledge_root())),
+                "status": summarize_run_dir(selected_run_dir, config.get("knowledge_root", default_knowledge_root()),
+                                            source_benchmark_run(config, selected_run_dir)),
             },
             ensure_ascii=False,
             indent=2,
@@ -3234,7 +3249,8 @@ def retry_planned(
         print(json.dumps({"run_dir": str(selected_run_dir), "status": "auth_recoverable_error"}, ensure_ascii=False, indent=2))
         return
     summaries = retry_planned_candidates(client, recorder, config, submit_mode=submit_mode, defer_poll=defer_poll)
-    run_status = summarize_run_dir(selected_run_dir, config.get("knowledge_root", default_knowledge_root()))
+    run_status = summarize_run_dir(selected_run_dir, config.get("knowledge_root", default_knowledge_root()),
+                                   source_benchmark_run(config, selected_run_dir))
     status_label = field_batch_status_label(run_status, summaries)
     print(
         json.dumps(
@@ -3563,7 +3579,8 @@ def field_batch(
         defer_poll=defer_poll,
         multi_chunk_sleep_seconds=multi_chunk_sleep_seconds,
     )
-    run_status = summarize_run_dir(run_dir, config.get("knowledge_root", default_knowledge_root()))
+    run_status = summarize_run_dir(run_dir, config.get("knowledge_root", default_knowledge_root()),
+                                   source_benchmark_run(config, run_dir))
     status_label = field_batch_status_label(run_status, summaries)
     payload = {
         "run_dir": str(run_dir),
@@ -4148,12 +4165,14 @@ def main() -> None:
             def complete_runner(source_run_dir: str) -> dict[str, object]:
                 """Input: source run path. Output: source run summary. Complete only existing submitted simulations."""
                 complete_in_flight(config, source_run_dir)
-                return summarize_run_dir(source_run_dir, config.get("knowledge_root", default_knowledge_root()))
+                return summarize_run_dir(source_run_dir, config.get("knowledge_root", default_knowledge_root()),
+                                         source_benchmark_run(config, Path(source_run_dir)))
 
             def retry_runner(source_run_dir: str) -> dict[str, object]:
                 """Input: source run path. Output: source run summary. Retry only source-planned candidates."""
                 retry_planned(config, source_run_dir, submit_mode=args.submit_mode, defer_poll=args.defer_poll)
-                return summarize_run_dir(source_run_dir, config.get("knowledge_root", default_knowledge_root()))
+                return summarize_run_dir(source_run_dir, config.get("knowledge_root", default_knowledge_root()),
+                                         source_benchmark_run(config, Path(source_run_dir)))
 
             def advance_runtime() -> dict[str, Any]:
                 """Input: bound CLI configuration. Output: one-step dict. Re-evaluate current time on each step."""

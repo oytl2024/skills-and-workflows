@@ -7,11 +7,21 @@ Opening the desktop app does not create a Codex task or call a GPT model. Initia
 New frozen `knowledge_catalog_v1` contexts expose source-backed catalog resources
 without requiring a published economic-semantic interpretation. Missing meaning,
 polarity, timing or grain is explicitly unknown, not a reason to hide an identity
-and not a fact the model may invent. The bounded catalog view is not proof that
-every visible operator/field combination is compilable: the current feature DSL
-requires MATRIX signal roles; unknown operator signatures remain visible but
-cannot pass deterministic type/arity validation. No implicit VECTOR reduction is
-introduced. Actual source identity, dates and returned-field coverage are kept.
+and not a fact the model may invent. Visibility does not prove compilability:
+unknown operator signatures cannot pass deterministic type/arity validation.
+New retrieval design_version3 accepts explicit source-backed VECTOR reductions
+before numeric features; v1/v2 contracts remain unchanged. GROUP is context, not
+a numeric feature. No implicit reduction is introduced. Source identity, dates
+and returned-field coverage remain independent.
+
+With retrieval_design_version=1, one read-only planning task per lane searches
+generation-bound local tools and may correct drafts before final output. The
+task owner enforces cumulative tool/validation/response limits and records compact
+progress. Scripts resolve exact selected resources/history, compile and seal them
+through the existing coordinator without a second model call. After sealing,
+tree branching/Seed/Repair remain script-owned and use frozen scientific inputs.
+No capture, late model plan, budget renewal or Alpha submission follows from a
+query or validated draft. Installed acceptance belongs to root todo.md.
 
 Resource admission, AST/type validation, experiment-tree standards, execution
 routing, Seed gates, finite Repair search and permission/accounting are separate

@@ -35,8 +35,10 @@ weaken Stop, exact scope, source dates, accounting or submission authorization.
 | Prepare Multiplier | _prepare_multiplier_start -> prepare_multiplier_fields_supervised -> supervise_command -> OwnedExecutionTree | owned child admits only the original finite preparation |
 | Reuse or capture | multiplier_preparation.prepare_multiplier_fields -> _prepare -> _ready/_raw_evidence; capture_platform_data_fields when needed | authenticate; OPTIONS /simulations; GET operators/datasets/fields only when acquisition is needed; never POST simulations here |
 | Publish locally | parent publish_scope_catalog, _write_index, compile_data_ledger_from_raw | immutable raw sources -> machine/index/ledger; child never publishes shared scientific files |
-| Compose lanes | _execute_preplanned_start -> prepare_preplanned_start -> _local_resources/_repair_policy -> prepare_group_lanes | exact scoped resources, frozen period, finite Repair rules and paused lane identities |
-| Call initial AI | prepare_initial_research -> create_initial_model_runner -> run_ai_checkpoint -> codex_ai_worker.run_worker -> codex exec | per-lane task/brief/checkpoint; read-only sandbox, medium reasoning, strict output schema |
+| Compose new retrieval lanes | _execute_preplanned_start -> prepare_preplanned_start -> prepare_retrieval_design | marker retrieval_design_version=1; bind scope, generation, original Start and one model task per lane |
+| Query and design | run_ai_checkpoint -> codex_ai_worker -> codex exec -> scripts/research_query.py or packaged retrieval worker -> task-local research_tool_service -> research_queries/research_query_index | indexed compact fields/operators/templates/history/source; local validation, no WQB; owner persists quotas/progress |
+| Resolve selection | read_selected_catalog_resources -> _resolve_answer -> _repair_policy -> prepare_group_lanes | verify exact selected fields/cited sources/history and closing generation; script resolves traits/finite Repair rules |
+| Reuse validated answer | prepare_initial_research with bound answer callback | original coordinator/schema, not a second AI invocation; old unmarked Start keeps its original runner |
 | Compile and freeze | _compiled_graph -> hypothesis_template_compiler; freeze_initial_research_snapshot, freeze_tree, seal_execution_context | hypotheses/traits -> deterministic expressions, complete tree and script-owned execution package |
 | Start lane drivers | initialize_group_runtime -> start_group_workers -> supervise_group_lane/run_group_lane -> run_workflow_driver | N lanes share accounting and keep independent durable progress |
 | Execute Scout | workflow_auto_continue -> tree_runtime.continue_tree -> advance_tree/execute_tree_round -> source_batch_runner -> cli.run_field_batch | only frozen selected experiments; local dedup, reservations and durable POST identity |
@@ -55,6 +57,24 @@ The initial research worker runs `codex exec --sandbox read-only` with
 `model_reasoning_effort=medium`, an output schema and an owning run directory.
 Its answer is saved and validated. It is not a message delivered to the maintenance
 chat. Scout branching and deterministic Repair do not call AI at every step.
+
+Retrieval marker1 uses one logical design task per lane, with bounded local tools
+inside that task. Defaults:64 total tool calls,24 draft validations,1,048,576 total
+response bytes; each response is at most64,000 bytes. Existing local configuration
+keys `retrieval_max_queries`, `retrieval_max_validations` and
+`retrieval_max_returned_bytes` override positive limits before identity freezing.
+The task owner, not the read-only worker, owns counters/progress. Transport is a
+task-local authenticated JSON pipe (loopback on non-Windows), not a platform call
+or separate service framework. Counters record rows/source/response bytes and tool
+elapsed time, never infer token use. Stop invalidates subsequent queries. Unknown
+model outcomes do not replay. Selected historical groups keep original scope and
+inconclusive labels; transfer evidence never proves target-scope causality.
+
+Explicit VECTOR reductions require a current sourced technical declaration, then
+lower before Level/Change/Relative; missing reduction is rejected, not silently
+converted to vec_avg. GROUP is context-only. Final plan selection resolves exactly
+the fields used; generation changes block before sealing. Runtime uses sealed
+resources only. Current installed/source acceptance remains in root todo.md.
 
 For a blocked Start, `_complete_start_job` or `_notify_blocked_request` persists
 preflight evidence, then `notify_preflight_blocker` reads maintenance_channel.json,
