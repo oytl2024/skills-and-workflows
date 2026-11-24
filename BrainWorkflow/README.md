@@ -112,7 +112,7 @@ BrainWorkflow/
 ├─ tests/        离线合同、恢复、生命周期及集成测试
 ├─ configs/      公开默认规则与示例；本地配置忽略上传
 ├─ scripts/      构建、验证及维护脚本
-├─ docs/         规格、计划、操作与维护文档
+├─ docs/         五份当前操作与维护文档；历史版本在 Git 中
 └─ launch-desktop.vbs / .cmd  产品点击入口
 ```
 
@@ -135,10 +135,10 @@ BrainWorkflow/
 
 凭据仅通过环境变量 `WQB_USERNAME` / `WQB_PASSWORD` 等本地方式提供，禁止写进源码或提交。知识根可通过 `BRAIN_KNOWLEDGE_ROOT` 指定；实际 vault 与 `runs/` 放在仓库外的工作区。
 
-从本目录运行后端离线测试：
+从本目录按影响范围运行后端离线测试，例如本轮新启动与存储合同：
 
 ```powershell
-python -m unittest discover -s tests -q
+python -m unittest tests.test_direct_knowledge tests.test_retrieval_start tests.test_current_knowledge_storage tests.test_compact_identity_history -q
 ```
 
 前端开发检查（已准备依赖后，从 `frontend/` 运行）：
@@ -157,14 +157,14 @@ Git 保存代码、测试、公开规则、配置示例和设计 / 操作文档�
 
 知识维护有两条独立入口：研究后编译记录与经验；明确请求后更新平台资料并编译，再供研究使用。事实留在 raw，机器资源服务程序，可复用经验与案例供人阅读；日常 Start 不全库重编、不隐式抓取平台。
 
-自包含树的自动退役已实现。通用桌面构建产物自动 GC 尚未实现；不能把一次性安全清理说成定期清理系统。历史兼容按冻结版本处理，已退役的旧模型 Repair 任务只读，不自动迁移或恢复。
+自包含树的自动退役已实现。当前知识维护避免重复整库库存与巨型报告；通用构建产物自动 GC 尚未实现，不能把一次性清理说成定期系统。本次按授权移除了旧运行依赖，只支持从当前资源重新开始；共享配额和去重事实不清零。构建后通过 `scripts/install_desktop.ps1` 安装，经 Git 同步后用 `scripts/prune_product.ps1` 审计清理；清理默认只预览，敏感目录仍需单独授权。
 
 ## 继续阅读
 
 - [用户操作指南](docs/operations/user_workflow_manual.md)：按钮、状态、研究运行与维护边界。
-- [运维合同与命令参考](docs/operations/operating_guide.md)：诊断接口；历史说明以最新合同及本地部署记录为准。
-- [维护交接指南](docs/operations/maintainer_handoff.md)：如何维护，不依赖超长聊天上下文。
-- [执行包与退役设计](docs/superpowers/specs/2026-11-09-execution-package-retirement-design.md)。
-- [最新存储清理与交付审计](docs/operations/storage-cleanup-2026-11-09.md)。
+- [工作流工具链](docs/operations/workflow-toolchain-map.md)：当前执行模块与输入输出。
+- [AI 执行边界](docs/operations/ai-execution-boundary.md)：模型职责与脚本职责。
+- [运行时长授权](docs/operations/runtime-renewal.md)：独立时长与 Stop 规则。
+- [当前存储合同与清理结果](docs/operations/product-storage.md)。
 
 本地维护先读外层唯一的 `AGENTS.md`、`milestone.md`、`todo.md`，再按模块定位代码。Git 同步、文档更新或应用打开都不自动授权真实回测及最终提交。
