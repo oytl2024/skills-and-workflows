@@ -20,6 +20,12 @@ authority/state hashes must not change. Private audit/installer:
 output/desktop-validation/retrieval-install-audit-20261124.json and
 deploy_retrieval_20261124.ps1. Result belongs to root todo.md.
 
+Executed Nov24 after synchronized implementation2d71d561:371 installed files
+hash-match audited build; only the named obsolete JS removed. Installed revision
+32a5f569 and EXEf15861b8 match the verified package; protected old-run hashes
+unchanged. Local health confirmed the same loaded revision. No research was
+started by installation. Post-install regressions and synchronization:plan/todo.
+
 ## 2026-11-06 Native Installation Replacement Audit
 
 Pending verified Git sync and full-suite acceptance: replace only

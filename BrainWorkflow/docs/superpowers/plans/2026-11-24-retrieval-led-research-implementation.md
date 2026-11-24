@@ -60,6 +60,13 @@ vec_avg(field) and ts_delta(vec_avg(field),22);6finite default Repair rules.
 This is technical support, not proof of economic performance or full104operator
 typed coverage. Evidence:output/desktop-validation/retrieval-resources-20261124.json.
 
+Deployment Nov24:implementation2d71d561 synchronized to intended branch without
+force. Audited installer verified all371 files and old-run authority/state hashes,
+replaced only named old JS and wrote matching installation receipt. Actual loaded
+health revision32a5f569 matches source/build. Private newStart configuration now
+retrieval1, codex executor, N2/depth2/width4 and live-enabled for the explicitly
+authorized trial. No old mission resumed; existing retired history remains.
+
 ## Global Constraints
 
 - Workspace branch agent/brainworkflow-phase2; retain unrelated files and user README.
@@ -185,9 +192,9 @@ worker dispatch registry and tests/test_retrieval_start.py.
 - [x] Fresh whole-branch medium review; resolve actionable findings.
 - [x] Stage/review intended source/docs, diff --check, freeze code/tests and run
       full offline unittest suite; frontend tests/typecheck/build and native smoke.
-- [ ] Update root architecture/handoff, operator docs and feature defaults for new
+- [x] Update root architecture/handoff, operator docs and feature defaults for new
       research. Verify Git sync before audited application installation/cleanup.
-- [ ] Verify actual loaded revision, preserved Stop/accounting and next legal Start.
+- [x] Verify actual loaded revision, preserved Stop/accounting and next legal Start.
 
 ## Task 7: Authorized Three-Tree Operational Trial
 
