@@ -261,6 +261,7 @@ def _optional_published_operators(root: Path, diagnostics: list, max_bytes: int)
 
 def read_catalog_resources(root: Path, scope: dict, count: int, *, settings: dict,
                            max_fields_per_lane: int = 30,
+                           direct_knowledge_version: int | None = None,
                            _selected_rows: list[dict] | None = None) -> tuple[list[dict], list[dict]]:
     """Input: vault Path/exact scope dict/count int/settings dict/field cap int.
 
@@ -280,6 +281,11 @@ def read_catalog_resources(root: Path, scope: dict, count: int, *, settings: dic
     as_of = datetime.fromisoformat(scope['as_of'].replace('Z', '+00:00'))
     if as_of.tzinfo is None:
         raise ValueError('scope.as_of requires timezone')
+    if direct_knowledge_version is not None:
+        from wqb.direct_knowledge import direct_knowledge_enabled, read_direct_resources
+        direct_knowledge_enabled(dict(direct_knowledge_version=direct_knowledge_version))
+        return read_direct_resources(Path(root), scope, count, settings=settings,
+            max_fields_per_lane=max_fields_per_lane, selected_rows=_selected_rows)
     root, now = Path(root), datetime.now(timezone.utc)
     diagnostics, index, bad_paths, scan_state = [], {}, set(), {}
     metadata_bytes = 0
@@ -733,7 +739,8 @@ def read_catalog_resources(root: Path, scope: dict, count: int, *, settings: dic
 
 
 def read_selected_catalog_resources(root: Path, scope: dict, identities: list[tuple[str, str]],
-                                    *, generation: str, settings: dict) -> tuple[dict, list[dict]]:
+                                    *, generation: str, settings: dict,
+                                    direct_knowledge_version: int | None = None) -> tuple[dict, list[dict]]:
     """Input: vault/scope, exact field IDs, query generation/settings. Output: one verified resource plus diagnostics.
 
     Resolve indexed original rows only; never replace an unavailable selection
@@ -753,10 +760,14 @@ def read_selected_catalog_resources(root: Path, scope: dict, identities: list[tu
     if len(actual) != len(wanted) or set(actual) != set(wanted):
         raise ValueError('indexed rows do not match exact selected identities')
     resources, diagnostics = read_catalog_resources(root, scope, 1, settings=settings,
-        max_fields_per_lane=len(wanted), _selected_rows=rows)
+        max_fields_per_lane=len(wanted), _selected_rows=rows,
+        direct_knowledge_version=direct_knowledge_version)
     if len(resources) != 1 or set((r['dataset_id'], r['field_id'])
             for r in resources[0]['field_rows']) != set(wanted):
         raise ValueError('selected field evidence unavailable: ' + json.dumps(diagnostics)[:2000])
+    if direct_knowledge_version is not None:
+        from wqb.research_query_index import validate_query_generation
+        validate_query_generation(root, generation)
     if any(row['field_type'] == 'VECTOR' for row in resources[0]['field_rows']):
         return enrich_selected_vector_resources(root, resources[0], diagnostics), diagnostics
     return resources[0], diagnostics
@@ -771,6 +782,8 @@ def enrich_selected_vector_resources(root: Path, resource: dict, diagnostics: li
     """
     from wqb.resource_evidence import (VECTOR_REDUCTIONS, enrich_vector_operator_record,
                                       validated_documentation_page)
+    from wqb.direct_knowledge import direct_knowledge_enabled, read_direct_source
+    direct = direct_knowledge_enabled(resource)
     result = deepcopy(resource)
     index = {}
     scan_state = {}
@@ -786,8 +799,9 @@ def enrich_selected_vector_resources(root: Path, resource: dict, diagnostics: li
                 or Path(path).name != 'documentation_pages.md'):
             continue
         try:
-            _fresh(source.get('captured_at'), now)
-            _, text = _material(root, source)
+            if not direct:
+                _fresh(source.get('captured_at'), now)
+            _, text = read_direct_source(root, source) if direct else _material(root, source)
             ref = dict(source_path=path, sha256=source['content_hash'],
                 capture_date=source['captured_at'][:10], kind='documented', experiment_refs=[])
             page = validated_documentation_page(ref, {path: source}, {path: text})

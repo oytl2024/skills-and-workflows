@@ -17,6 +17,15 @@ read-only worker; existing React/WebView2/PyInstaller application.
 
 ## Execution Record
 
+Preserved predecessor handoff (formerly root todo):
+Nov23 synced71ffe58,README retained,digest1b0a4d9e.3412tests/9skip/1148.034s PASS:
+output/desktop-validation/console-delivery-verified-full-suite-20261123-preparation.{json,log};
+27frontend/tsc/build PASS. Build20261123-140037-6347/native140145-2732 PASS,
+revision199adf7c,EXE0e320217; installedNov10. Approved product %SystemDrive%4db/989184B
+deletion policy-REJECTED; no deletion/receipt,never bypass. Saved65fields compiled16.625s,
+_ready0.125s;N2 has1MATRIX. Goodall medium reviewed. No live resume/budget/proofrenewal/submit.
+Diagnosis:runs/start_preflight/79805fb3be8742d2ba25b6d1ee98019e-diagnosis-20261123.md.
+
 Nov24: Task1-4 implemented; focused aggregate193PASS before lifecycle additions.
 Schema2 query index also binds optional supporting publications, uses one active
 replaceable SQL slot. Selected historical groups freeze original bytes run-locally.

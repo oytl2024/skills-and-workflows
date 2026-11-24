@@ -23,7 +23,7 @@ LOCK_SECONDS = 5.0
 LOCK_POLL_SECONDS = 0.05
 CONFIG_KEYS = ('instrument_type', 'region', 'delay', 'universe', 'decay', 'neutralization',
     'truncation', 'pasteurization', 'unit_handling', 'nan_handling', 'language',
-    'measurement_period', 'research_policy', 'repair_search_policy',
+    'measurement_period', 'research_policy', 'repair_search_policy', 'direct_knowledge_version',
     'retrieval_excluded_selections', 'retrieval_owner', 'retrieval_max_queries',
     'retrieval_max_validations', 'retrieval_max_returned_bytes')
 TOOL_CONTRACTS = {
@@ -158,7 +158,8 @@ def _attach_cited_sources(root: Path, resources: dict, refs: list[dict]) -> dict
             raise ValueError('cited supporting source hash or capture date changed')
         if path in result['source_index']:
             continue
-        source, text = _material(root, row)
+        from wqb.direct_knowledge import direct_knowledge_enabled
+        source, text = _material(root, row, direct=direct_knowledge_enabled(resources))
         result['source_index'][path] = source
         result['source_texts'][path] = text
         result['evidence_pack']['source_index'][path] = deepcopy(source)
@@ -174,9 +175,12 @@ def _resolved_context(task: dict, selection: list[tuple[str, str]], refs: list[d
     from wqb.initial_research_planning import _annotation_context
     identity = task['identity']
     config = identity['config']
+    from wqb.direct_knowledge import direct_knowledge_enabled
+    direct = direct_knowledge_enabled(config)
     resources, diagnostics = read_selected_catalog_resources(Path(identity['knowledge_root']),
         identity['scope'], selection, generation=identity['generation'], settings=build_settings(
-            {**config, **{key: identity['scope'][key] for key in ('instrument_type', 'region', 'delay', 'universe')}}))
+            {**config, **{key: identity['scope'][key] for key in ('instrument_type', 'region', 'delay', 'universe')}}),
+        **(dict(direct_knowledge_version=1) if direct else {}))
     if refs:
         resources = _attach_cited_sources(Path(identity['knowledge_root']), resources, refs)
     repair = _repair_policy(resources, config.get('repair_search_policy'))
@@ -349,7 +353,9 @@ def _query_design_task_local(directory: Path, operation: str, arguments: dict) -
     if operation != 'validate':
         from wqb.research_queries import query_knowledge
         return query_knowledge(Path(identity['knowledge_root']), identity['generation'],
-                               identity['scope'], operation, arguments)
+                               identity['scope'], operation, arguments,
+                               **(dict(direct_knowledge_version=identity['config']['direct_knowledge_version'])
+                                  if 'direct_knowledge_version' in identity['config'] else {}))
     try:
         if set(arguments) - {'selection', 'design', 'answer', 'history_selection'} or (
                 'design' in arguments and 'answer' in arguments):

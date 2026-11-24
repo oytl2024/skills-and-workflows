@@ -48,6 +48,12 @@ class ProjectEntryDocsTests(unittest.TestCase):
         self.assertLess(len(source), 25000)
 
     def test_legacy_documents_are_archived_without_duplicate_entries(self):
+        rules = (ROOT / 'AGENTS.md').read_text(encoding='utf-8')
+        if 'Approved Minimum Product Policy (2026-11-24)' in rules:
+            for base in (ROOT / 'skills-and-workflows', ROOT / 'skills-and-workflows' / 'BrainWorkflow'):
+                for name in ('AGENTS.md', 'todo.md', 'milestone.md'):
+                    self.assertFalse((base / name).exists())
+            return
         manifest = (ARCHIVE / "README.md").read_text(encoding="utf-8")
         for name in ("root-milestone.md", "root-todo.md", "repository-milestone.md", "repository-todo.md", "project-todo.md"):
             path = ARCHIVE / name

@@ -72,7 +72,8 @@ def _retire_completed_package(run: Path, owner_id: str, now: str) -> dict | None
 def resolve_ai_executor_argv(config: dict[str, Any]) -> list[str]:
     """Input: runtime config dict. Output: explicit worker argv. Select a bounded run-local AI adapter."""
     if config.get("ai_executor") == "codex":
-        return [sys.executable, "-m", "wqb.codex_ai_worker", "{input}", "{output}"]
+        from wqb.desktop_application import packaged_worker_command
+        return packaged_worker_command([sys.executable, "-m", "wqb.codex_ai_worker", "{input}", "{output}"])
     configured = config.get("ai_executor_argv", [])
     return configured if isinstance(configured, list) and all(isinstance(item, str) for item in configured) else []
 

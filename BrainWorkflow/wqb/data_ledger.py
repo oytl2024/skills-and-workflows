@@ -31,7 +31,7 @@ class DataLedgerRecord:
     delay: int
     universe: str
     semantic_tags: list[str]
-    coverage: float
+    coverage: float | None
     alpha_count: int
     user_count: int
     simulation_usage_count: int
@@ -116,7 +116,7 @@ def data_ledger_record_from_dict(row: dict[str, Any]) -> DataLedgerRecord:
         delay=int(row.get("delay", 0)),
         universe=str(row.get("universe", "")),
         semantic_tags=[str(item) for item in row.get("semantic_tags", []) if str(item)],
-        coverage=float(row.get("coverage", 0.0)),
+        coverage=float(row["coverage"]) if row.get("coverage") is not None else None,
         alpha_count=int(row.get("alpha_count", 0)),
         user_count=int(row.get("user_count", 0)),
         simulation_usage_count=int(row.get("simulation_usage_count", 0)),
@@ -404,7 +404,7 @@ def load_data_ledger_from_knowledge(knowledge_root: str | Path) -> list[DataLedg
 
 def score_data_for_research(record: DataLedgerRecord, incentive: str, region: str, delay: int) -> float:
     """Input: data record, incentive, region, delay. Output: float score. Rank fields for research scheduling."""
-    score = float(record.coverage) * 2.0
+    score = float(record.coverage or 0.0) * 2.0
     if record.region.upper() == region.upper() and int(record.delay) == int(delay):
         score += MATCHING_SCOPE_BONUS
     tags = {tag.lower() for tag in record.semantic_tags}

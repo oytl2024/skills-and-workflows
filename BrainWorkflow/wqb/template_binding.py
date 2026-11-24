@@ -110,6 +110,9 @@ def _select_field(slot: object, rows: list[dict], scope: dict, resource_version:
             continue
         description = row.get('field_description', row.get('description', ''))
         tags = row.get('semantic_tags', [])
+        if catalog_mode and row.get('direct_knowledge_version') == 1:
+            description = description if isinstance(description, str) else ''
+            tags = tags if isinstance(tags, list) else []
         if not isinstance(description, str) or not isinstance(tags, list):
             continue
         # Semantics must be explicit tags or complete phrases in the source description, never field IDs.

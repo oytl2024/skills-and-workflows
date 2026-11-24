@@ -43,6 +43,23 @@ def _now() -> str:
 
 def _write_report(knowledge_root: str | Path, report: dict[str, Any]) -> Path:
     """Input: knowledge root and report. Output: report path. Persist maintenance evidence."""
+    from wqb.knowledge_paths import current_only_knowledge
+    if current_only_knowledge(knowledge_root):
+        from wqb.runtime_control import _write
+        path = Path(knowledge_root) / 'machine/maintenance_summary.json'
+        summary = {}
+        for key in ('generated_at', 'status', 'mode', 'data_compile', 'wiki', 'interaction_lessons', 'warnings'):
+            value = report.get(key)
+            if len(json.dumps(value, ensure_ascii=False).encode('utf-8')) <= 4000:
+                summary[key] = value
+            elif isinstance(value, dict):
+                summary[key] = {name: item for name, item in value.items()
+                    if isinstance(item, (str, int, float, bool)) and len(str(item)) <= 500}
+            else:
+                summary[key] = {'detail_omitted': True}
+        _write(path, summary)
+        report['report_path'] = str(path)
+        return path
     generated = datetime.fromisoformat(str(report["generated_at"]).replace("Z", "+00:00"))
     stem = generated.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     root = Path(knowledge_root).resolve()
@@ -139,6 +156,9 @@ def run_knowledge_maintenance(
 ) -> dict[str, Any]:
     """Input: knowledge root and compile settings. Output: maintenance report. Run compile, cleanup, and health verification."""
     generated = generated_at or _now()
+    from wqb.knowledge_paths import current_only_knowledge
+    if current_only_knowledge(knowledge_root):
+        return _maintain_current_product(Path(knowledge_root), generated, max_case_reports)
     pointer = Path(knowledge_root) / "machine" / "semantic_release.json"
     if pointer.exists() or pointer.is_symlink():
         return _maintain_active_release(Path(knowledge_root), generated, apply_cleanup, max_case_reports)
@@ -191,6 +211,61 @@ def run_knowledge_maintenance(
     )
     report["verification_report_path"] = str(verification_report_path) if verification_report_path else None
     _write_report(knowledge_root, report)
+    return report
+
+
+def _compile_current_fields(root: Path, generated: str) -> dict:
+    """Input: current vault/timestamp. Output: compact changed-capture counts; update the canonical ledger, never inventory jobs."""
+    import hashlib
+    from wqb.data_ledger_compile import compile_data_ledger_from_raw
+    from wqb.runtime_control import _read, _write
+    from wqb.semantic_compilation import _safe
+    state_path = root / 'machine/capture_compile_state.json'
+    state = _read(state_path)
+    captures = state.get('captures', {})
+    updated, skipped, warnings = 0, 0, []
+    base = root / 'raw/platform/data_fields'
+    for capture in sorted(base.iterdir()) if base.exists() else []:
+        relative = capture.relative_to(root).as_posix()
+        capture = _safe(root, relative)
+        if not capture.is_dir() or not (capture / 'data_fields.jsonl').is_file() or not (capture / 'manifest.json').is_file():
+            continue
+        digest = hashlib.sha256()
+        for name in ('data_fields.jsonl', 'manifest.json'):
+            with _safe(root, relative + '/' + name).open('rb') as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                    digest.update(chunk)
+        token = digest.hexdigest()
+        if captures.get(relative) == token:
+            skipped += 1
+            continue
+        try:
+            compile_data_ledger_from_raw(root, capture_dir=capture, generated_at=generated)
+            captures[relative] = token
+            updated += 1
+        except (ValueError, OSError) as error:
+            warnings.append(relative + ': ' + str(error)[:300])
+    _write(state_path, dict(schema_version=1, captures=captures))
+    return dict(status='completed_with_warnings' if warnings else 'completed',
+                updated_captures=updated, unchanged_captures=skipped, warnings=warnings[:20])
+
+
+def _maintain_current_product(root: Path, generated: str, max_case_reports: int) -> dict:
+    """Input: current vault/timestamp/case bound. Output: one compact maintenance summary, no legacy restoration."""
+    ensure_knowledge_dirs(root)
+    report = dict(mode='current_only_v1', generated_at=generated, status='completed', warnings=[])
+    for name, action in (
+        ('data_compile', lambda: _compile_current_fields(root, generated)),
+        ('wiki', lambda: compile_human_experience_wiki(root, generated, max_case_reports=max_case_reports)),
+        ('interaction_lessons', lambda: compile_interaction_lessons(root, generated)),
+    ):
+        try:
+            report[name] = action()
+        except (ValueError, OSError, RuntimeError) as error:
+            report[name] = dict(status='failed', reason=str(error)[:500])
+            report['warnings'].append(name + ': ' + str(error)[:500])
+            report['status'] = 'completed_with_warnings'
+    _write_report(root, report)
     return report
 
 

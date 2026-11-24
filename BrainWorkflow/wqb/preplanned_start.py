@@ -171,6 +171,23 @@ def _catalog_field_sources(root: Path, row: dict, scope: dict, texts: dict, inde
 def _validate_resource(root: Path, resource: dict, scope: dict, ledger: list[dict], index: dict) -> dict:
     """Input: vault/resource/scope/canonical ledger/index. Output: validated copied compiler resources dict."""
     resource, _ = _resources(resource, scope)
+    from wqb.direct_knowledge import direct_knowledge_enabled, read_direct_source
+    if direct_knowledge_enabled(resource):
+        for path, source in resource['source_index'].items():
+            registered = index.get(path)
+            if registered is None or any(source.get(key) != value for key, value in registered.items()):
+                raise ValueError('DIRECT source registration changed')
+            _, text = read_direct_source(root, source)
+            if text != resource['source_texts'].get(path):
+                raise ValueError('DIRECT source bytes changed')
+        for row in resource['field_rows']:
+            actual = {key: value for key, value in row.items() if key != 'direct_knowledge_version'}
+            matches = [item for item in ledger if _scope_matches(item, scope)
+                       and (item.get('dataset_id'), item.get('field_id')) ==
+                           (row['dataset_id'], row['field_id'])]
+            if len(matches) != 1 or matches[0] != actual:
+                raise ValueError('DIRECT compiled field identity changed')
+        return resource
     texts = _source_context(root, resource['source_index'], index)
     if texts != resource['source_texts'] or resource['evidence_pack'].get('source_texts') != texts:
         raise ValueError('compiler materials differ from actual indexed raw text')
@@ -262,12 +279,15 @@ def _local_resources(root: Path, scope: dict, config: dict, count: int) -> tuple
     raw text and the existing settings/compiler/coverage helpers. Never compile
     the vault, publish a release, capture data or load an arbitrary Python builder.
     """
-    if knowledge_catalog_admission(config):
+    from wqb.direct_knowledge import direct_knowledge_enabled
+    direct = direct_knowledge_enabled(config)
+    if direct or knowledge_catalog_admission(config):
         from wqb.research_resource_catalog import read_catalog_resources
         settings = build_settings({**config,
             **{key: scope[key] for key in ('region', 'delay', 'universe')},
             'instrument_type': scope['instrument_type']})
         resources, diagnostics = read_catalog_resources(root, scope, count, settings=settings,
+            **(dict(direct_knowledge_version=1) if direct else {}),
                                                        max_fields_per_lane=MAX_FIELDS_PER_LANE)
         return resources, [], diagnostics
     index = {}
@@ -447,6 +467,11 @@ def _technical_repair_resources(resource: dict) -> dict:
         if isinstance(basis, dict):
             premises = [basis['signature_premise'], *basis['type_premises']]
             paths.update(premise['evidence_ref']['source_path'] for premise in premises)
+    from wqb.direct_knowledge import direct_knowledge_enabled
+    if direct_knowledge_enabled(resource):
+        # Unused catalog entries can have unknown or obsolete provenance; they
+        # must not block numeric setting trials or become invented source facts.
+        paths.intersection_update(resource['source_index'])
     if not paths <= resource['source_index'].keys():
         raise ValueError('Repair technical evidence missing from selected resources')
     result = deepcopy(resource)
@@ -490,6 +515,8 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
     """
     result = dict(status='blocked', reason='', missing_facts=[], warnings=[], prepared_lanes=0)
     try:
+        from wqb.direct_knowledge import direct_knowledge_enabled, DIRECT_POLICY
+        direct = direct_knowledge_enabled(config)
         from wqb.execution_package import package_enabled, PACKAGE_VERSION
         use_package = package_enabled(config)
         retrieval = config.get('research_policy', {}).get('retrieval_design_version', 0)
@@ -522,7 +549,10 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
                         repair_search_policy=supplied_repair)
         if retrieval:
             identity['retrieval_design_version'] = retrieval
-        if knowledge_catalog_admission(config):
+        if direct:
+            identity['direct_knowledge_version'] = 1
+            identity['resource_admission_policy'] = DIRECT_POLICY
+        if not direct and knowledge_catalog_admission(config):
             identity['resource_admission_policy'] = KNOWLEDGE_CATALOG_POLICY
         if use_package:
             identity['execution_package_version'] = PACKAGE_VERSION
@@ -577,6 +607,7 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
                 prepared = prepare_group_lanes(paths, resources, scope, selected_option, authority,
                     plan_depth=policy['plan_depth'], initial_hypotheses=policy['initial_hypotheses'],
                     **({'execution_package_version': PACKAGE_VERSION} if use_package else {}),
+                    **({'direct_knowledge_version': 1} if direct else {}),
                     **({'retrieval_design_version': retrieval} if retrieval else {}))
                 group = prepared['group']
                 state = dict(identity=identity, resources=resources, receipts=receipts,

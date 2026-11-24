@@ -990,11 +990,25 @@ def annotate_regular_peer_availability(
 
 
 def run_root_expression_hashes(run_root: str | Path) -> set[str]:
-    """Input: run root path. Output: expression hashes. Collect hashes already submitted or checked."""
+    """Input: run root path. Output: preserved compact identities plus current submitted/checked hashes."""
     root = Path(run_root)
     hashes: set[str] = set()
     if not root.exists():
         return hashes
+    history_path = root / 'simulation_identity_history.json'
+    if history_path.exists():
+        from hashlib import sha256
+        if history_path.is_symlink() or history_path.is_junction():
+            raise ValueError('linked simulation identity history')
+        history = json.loads(history_path.read_text(encoding='utf-8'))
+        identities = history.get('identities') if isinstance(history, dict) else None
+        if (not isinstance(history, dict) or history.get('schema_version') != 1 or not isinstance(identities, list)
+                or any(not isinstance(value, str) or not value for value in identities)
+                or identities != sorted(set(identities))
+                or history.get('identities_sha256') != sha256(
+                    json.dumps(identities, separators=(',', ':')).encode()).hexdigest()):
+            raise ValueError('invalid simulation identity history; do not reset dedup')
+        hashes.update(identities)
     for run_dir in root.iterdir():
         if not run_dir.is_dir():
             continue

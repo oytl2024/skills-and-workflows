@@ -63,7 +63,7 @@ def knowledge_catalog_admission(resources: dict) -> bool:
     """Input: producer resource/pack dict. Output: bool; recognize explicit catalog admission without weakening old contexts."""
     if 'resource_admission_policy' not in resources:
         return False
-    if resources['resource_admission_policy'] != KNOWLEDGE_CATALOG_POLICY:
+    if resources['resource_admission_policy'] not in (KNOWLEDGE_CATALOG_POLICY, 'direct_knowledge_v1'):
         raise ValueError('unsupported resource admission policy')
     return True
 
@@ -78,6 +78,8 @@ def catalog_field_source_paths(row: dict, index: dict, texts: dict, scope: dict)
     from wqb.knowledge_compile import _coverage_source_fields
     from wqb.template_binding import _scope_matches
 
+    if row.get('direct_knowledge_version') == 1:
+        return [path for path in row.get('source_paths', []) if path in index and path in texts]
     paths = []
     originals = row.get('source_paths')
     if not isinstance(originals, list) or not originals:
@@ -1339,6 +1341,8 @@ def catalog_operator_definition(record: dict, source_index: dict, source_texts: 
     from wqb.semantic_compilation import _markdown_definitions
     from wqb.knowledge_compile import _coverage_json_objects
     definition = operator_definition_from_dict(record['definition'])
+    if record.get('direct_knowledge_version') == 1:
+        return definition
     keys = ('input_types', 'output_type', 'parameters')
     expected = {key: definition[key] for key in keys}
     found = False

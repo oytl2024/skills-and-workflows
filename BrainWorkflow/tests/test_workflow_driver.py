@@ -14,6 +14,16 @@ from wqb.workflow_driver import run_workflow_driver, resolve_ai_executor_argv
 
 
 class WorkflowDriverTests(unittest.TestCase):
+    def test_frozen_ai_executor_uses_allowlisted_desktop_worker_dispatch(self):
+        """Input: frozen desktop executable. Output: worker-module argv, never unsupported Python -m."""
+        import sys
+        with patch.object(sys, 'frozen', True, create=True), patch.object(
+                sys, 'executable', str(Path.cwd() / 'BrainWorkflow.exe')):
+            self.assertEqual(resolve_ai_executor_argv({'ai_executor': 'codex'}),
+                [sys.executable, '--worker-module', 'wqb.codex_ai_worker', '{input}', '{output}'])
+            custom = ['explicit-worker', '{input}', '{output}']
+            self.assertEqual(resolve_ai_executor_argv({'ai_executor_argv': custom}), custom)
+
     def test_nonrecoverable_repair_receipt_is_explicit_blocker_not_no_progress(self):
         from wqb.workflow_driver import _repair_cooldown_result
         with tempfile.TemporaryDirectory() as directory:

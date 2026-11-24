@@ -76,8 +76,11 @@ def _source_index(root: Path) -> dict:
     return rows
 
 
-def _material(root: Path, row: dict) -> tuple[dict, str]:
+def _material(root: Path, row: dict, *, direct: bool = False) -> tuple[dict, str]:
     """Input: vault Path/indexed source dict. Output: verified metadata/text tuple with original age and hashes."""
+    if direct:
+        from wqb.direct_knowledge import read_direct_source
+        return read_direct_source(root, row)
     from wqb.research_resource_catalog import _fresh
     from wqb.semantic_compilation import _material as read_material
     _fresh(row.get('captured_at'), datetime.now(timezone.utc))
@@ -152,10 +155,17 @@ def _field_card(root: Path, row: dict, index: dict) -> dict:
     return dict(deepcopy(row), role_selector='field:' + identity[0] + '/' + identity[1], evidence_refs=refs)
 
 
-def _operators(root: Path, scope: dict, arguments: dict) -> tuple[list[dict], list]:
+def _operators(root: Path, scope: dict, arguments: dict, *, direct: bool = False) -> tuple[list[dict], list]:
     """Input: vault Path/scope/arguments dicts. Output: current official operator cards/warnings lists."""
     from wqb.research_resource_catalog import _operator_facts, _identity, MAX_OPERATORS
     index = _source_index(root)
+    if direct:
+        from wqb.research_resource_catalog import _rows
+        notes, state = [], {}
+        cards = [deepcopy(row) for row in _rows(root, 'operator_ledger', notes, scan_state=state)
+                 if arguments.get('operator', row.get('operator')) == row.get('operator')
+                 and _matches_scope(row, scope) and _lexical(row, arguments.get('query', ''))]
+        return cards, notes
     candidates = [(datetime.fromisoformat(row['captured_at'].replace('Z', '+00:00')), path, row)
                   for path, row in index.items() if path.startswith('raw/platform/')
                   and Path(path).stem.lower() == 'operators' and Path(path).suffix.lower() in ('.json', '.jsonl', '.md')]
@@ -212,10 +222,16 @@ def _operators(root: Path, scope: dict, arguments: dict) -> tuple[list[dict], li
     return selected, warnings
 
 
-def _templates(root: Path, scope: dict, arguments: dict) -> tuple[list[dict], list]:
+def _templates(root: Path, scope: dict, arguments: dict, *, direct: bool = False) -> tuple[list[dict], list]:
     """Input: vault Path/scope/arguments dicts. Output: canonical template cards/warnings, without status promotion."""
     from wqb.knowledge_compile import read_semantic_rows
-    receipt, _, templates = read_semantic_rows(root)
+    if direct:
+        from wqb.research_resource_catalog import _rows
+        notes, state = [], {}
+        templates = list(_rows(root, 'template_library', notes, scan_state=state))
+        receipt = None
+    else:
+        receipt, _, templates = read_semantic_rows(root)
     rows, seen = [], set()
     for template in templates:
         identity = template.get('template_id')
@@ -226,8 +242,9 @@ def _templates(root: Path, scope: dict, arguments: dict) -> tuple[list[dict], li
                 or not _lexical(template, arguments.get('query', ''))):
             continue
         card = deepcopy(template)
-        card['resource_ref'] = dict(resource='template_library', release_id=receipt.get('release_id'),
-                                    sha256=receipt['digests']['template_library'])
+        if receipt is not None:
+            card['resource_ref'] = dict(resource='template_library', release_id=receipt.get('release_id'),
+                                        sha256=receipt['digests']['template_library'])
         rows.append(card)
     return sorted(rows, key=lambda row: row['template_id']), []
 
@@ -281,13 +298,25 @@ def _experience(root: Path, scope: dict, arguments: dict) -> tuple[list[dict], l
     return rows, warnings
 
 
-def _source(root: Path, arguments: dict) -> dict:
+def _source(root: Path, arguments: dict, *, direct: bool = False) -> dict:
     """Input: vault Path/arguments dict. Output: one bounded indexed source excerpt plus full provenance."""
-    index = _source_index(root)
     path = arguments.get('path')
-    if not isinstance(path, str) or not path.startswith('raw/') or path not in index:
-        raise ValueError('source path must reference an indexed raw source')
-    source, text = _material(root, index[path])
+    if direct and isinstance(path, str) and path.startswith('wiki/'):
+        from wqb.semantic_compilation import _safe
+        relative = Path(path)
+        if (relative.suffix.lower() != '.md' or any(part.startswith('.') for part in relative.parts)
+                or '..' in relative.parts or '\\' in path):
+            raise ValueError('DIRECT wiki source requires a safe Markdown path')
+        _safe(root, path)
+        raw = _read(root, path)
+        text = raw.decode('utf-8')
+        source = dict(path=path, source_type='compiled_wiki', knowledge_status='compiled_unreviewed',
+            captured_at=None, platform_capture=False, content_hash=hashlib.sha256(raw).hexdigest())
+    else:
+        index = _source_index(root)
+        if not isinstance(path, str) or not path.startswith('raw/') or path not in index:
+            raise ValueError('source path must reference an indexed raw source')
+        source, text = _material(root, index[path], direct=direct)
     start, length = arguments.get('start', 0), arguments.get('length', 2000)
     if start > len(text):
         raise ValueError('source start exceeds text length')
@@ -297,7 +326,8 @@ def _source(root: Path, arguments: dict) -> dict:
     return dict(items=[item], total=1, offset=0, next_offset=None)
 
 
-def query_knowledge(root: Path, generation: str, scope: dict, operation: str, arguments: dict) -> dict:
+def query_knowledge(root: Path, generation: str, scope: dict, operation: str, arguments: dict,
+                    *, direct_knowledge_version: int | None = None) -> dict:
     """Input: vault Path/generation str/exact scope dict/operation str/arguments dict.
 
     Scope permits only instrument_type,region,delay,universe and optional as_of.
@@ -320,6 +350,9 @@ def query_knowledge(root: Path, generation: str, scope: dict, operation: str, ar
     silently shortened identity data. No validate, preparation, writes or network.
     """
     backend = importlib.import_module('wqb.research_query_index')
+    from wqb.direct_knowledge import direct_knowledge_enabled, WARNING
+    direct = (direct_knowledge_enabled(dict(direct_knowledge_version=direct_knowledge_version))
+              if direct_knowledge_version is not None else False)
     root = Path(root)
     if not isinstance(generation, str) or not generation:
         raise ValueError('generation must be a nonempty string')
@@ -356,6 +389,8 @@ def query_knowledge(root: Path, generation: str, scope: dict, operation: str, ar
     offset = _integer(arguments.get('offset', 0), 'offset', 0)
     limit = _integer(arguments.get('limit', 20), 'limit', 1, MAX_PAGE_SIZE)
     warnings = [UNKNOWN_WARNING]
+    if direct:
+        warnings.append(WARNING)
     if operation == 'fields':
         field_type = arguments.get('field_type')
         if field_type is not None and field_type not in ('MATRIX', 'VECTOR', 'GROUP'):
@@ -390,10 +425,11 @@ def query_knowledge(root: Path, generation: str, scope: dict, operation: str, ar
     elif operation == 'source':
         _integer(arguments.get('start', 0), 'start', 0)
         _integer(arguments.get('length', 2000), 'length', 1, MAX_EXCERPT_CHARS)
-        page = _source(root, arguments)
+        page = _source(root, arguments, direct=direct)
     else:
         readers = dict(operators=_operators, templates=_templates, experience=_experience)
-        rows, notes = readers[operation](root, scope, arguments)
+        options = dict(direct=direct) if operation in ('operators', 'templates') else {}
+        rows, notes = readers[operation](root, scope, arguments, **options)
         page = _page(rows, offset, limit)
         warnings.extend(notes)
     unique_warnings = {_json_bytes(warning): warning for warning in warnings}

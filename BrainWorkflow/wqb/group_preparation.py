@@ -27,6 +27,7 @@ def _digest(value: dict) -> str:
 def prepare_group_lanes(paths, resources: list[dict], scope: dict, selected_option: dict,
                         authority: dict, *, plan_depth: int = 2, initial_hypotheses: int = 4,
                         execution_package_version: int | None = None,
+                        direct_knowledge_version: int | None = None,
                         retrieval_design_version: int | None = None) -> dict:
     """Input: existing paths, lane resources/scope/option/authority dicts and depth/width ints.
 
@@ -57,6 +58,10 @@ def prepare_group_lanes(paths, resources: list[dict], scope: dict, selected_opti
         if type(retrieval_design_version) is not int or retrieval_design_version != 1:
             raise ValueError('unsupported retrieval design version')
         policy['retrieval_design_version'] = retrieval_design_version
+    if direct_knowledge_version is not None:
+        from wqb.direct_knowledge import direct_knowledge_enabled
+        direct_knowledge_enabled(dict(direct_knowledge_version=direct_knowledge_version))
+        policy['direct_knowledge_version'] = direct_knowledge_version
     plans = [dict(run_id='lane-' + uuid4().hex, plan_digest=_digest(item)) for item in resources]
     group = create_group(paths.run_root, plans, authority)
     certificates = []

@@ -9,6 +9,40 @@ from tests import test_preplanned_start as fixtures
 
 
 class RetrievalStartTests(unittest.TestCase):
+    def test_direct_console_start_uses_local_catalog_without_multiplier_quality_gate(self):
+        from tests import test_console_start as console_fixtures
+        from wqb import console_start as worker
+        host = console_fixtures.PreplannedConsoleStartTests()
+        host.setUp()
+        self.addCleanup(host.doCleanups)
+        self.fixture = host.case
+        # This mode consumes current machine resources, never archived semantic jobs.
+        operators = {row['operator']: row for resource in host.case.resources for row in resource['operator_rows']}
+        (host.paths.knowledge_root / 'machine/operator_ledger.jsonl').write_text(
+            ''.join(json.dumps(row) + '\n' for row in operators.values()), encoding='utf-8')
+        config = {**self.config, **host.config,
+            'research_policy': dict(preplanned_tree_version=1, execution_package_version=1,
+                retrieval_design_version=1, direct_knowledge_version=1)}
+        (host.paths.workflow_root / 'configs/workflow_local.json').write_text(json.dumps(config), encoding='utf-8')
+        request = worker.register_start(host.paths, host.form, 'direct-console-job')
+        request = dict(request, multiplier_preparation={})
+        worker._write_request(host.paths.runs_root, request)
+
+        def factory(directory, _config, check):
+            """Input: task/config/Stop callback. Output: offline fake model using real local retrieval tools."""
+            check()
+            self.assertEqual(_config['direct_knowledge_version'], 1)
+            return lambda brief: self.model(directory, brief)
+
+        with patch('wqb.retrieval_research_planning.create_retrieval_model_runner', side_effect=factory), \
+                patch('wqb.multiplier_supervision.prepare_multiplier_fields_supervised',
+                    side_effect=AssertionError('legacy quality gate or capture reached')):
+            prepared = worker._prepare_multiplier_start(host.paths, request)
+            self.assertEqual(prepared['multiplier_preparation']['field_source'], 'knowledge')
+            result = worker.execute_start(host.paths, host.form, request['request_id'])
+        self.assertTrue(result['passed'], result)
+        self.assertEqual(len(self.calls), 1)
+
     def setUp(self):
         """Input: TestCase. Output: isolated source-backed composer fixture, never platform resources."""
         self.fixture = fixtures.PreplannedStartTests()

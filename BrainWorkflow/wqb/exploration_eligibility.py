@@ -124,6 +124,9 @@ def _run_context(run: Path, knowledge_root: Path, scope: dict) -> tuple[dict, di
 def _resource_certificate(run: Path, knowledge_root: Path, resources: dict, scope: dict) -> dict:
     """Input: run/vault Paths, resource/scope dicts. Output: raw-verified bound certificate dict, no writes."""
     owner, policy = _run_context(run, knowledge_root, scope)
+    from wqb.direct_knowledge import direct_knowledge_enabled
+    if direct_knowledge_enabled(resources) != direct_knowledge_enabled(policy):
+        raise ValueError('DIRECT resources require matching frozen new-start policy')
     vault = Path(owner['knowledge_root'])
     canonical = machine_resource_path(vault, 'source_index')
     index = _safe(vault, canonical.relative_to(vault).as_posix())
@@ -147,8 +150,15 @@ def _resource_certificate(run: Path, knowledge_root: Path, resources: dict, scop
     for path, row in sorted(requested.items()):
         if row.get('path') != path:
             raise ValueError('requested source differs from canonical registration')
-        equivalent = verify_source_equivalence(vault, row, registered.get(path))
-        verified, text = equivalent['source_index'], equivalent['source_text']
+        from wqb.direct_knowledge import direct_knowledge_enabled, read_direct_source
+        if direct_knowledge_enabled(resources):
+            current = registered.get(path)
+            if current is None or any(row.get(key) != current.get(key) for key in current):
+                raise ValueError('DIRECT source registration changed')
+            verified, text = read_direct_source(vault, row)
+        else:
+            equivalent = verify_source_equivalence(vault, row, registered.get(path))
+            verified, text = equivalent['source_index'], equivalent['source_text']
         if text != texts[path]:
             raise ValueError('exploration source text differs from actual raw bytes')
         sources[path] = verified

@@ -108,8 +108,16 @@ def _annotation_context(resources: dict, manifest: dict) -> dict:
     if len(set(rules)) != len(rules):
         raise ValueError('ambiguous frozen Repair rule IDs')
     scope = resources['evidence_pack']['scope']
+    from wqb.direct_knowledge import direct_knowledge_enabled
+    direct = direct_knowledge_enabled(resources)
     fields = []
     for row in resources['field_rows']:
+        if direct:
+            facts = {key: dict(value=deepcopy(row[key]), basis='compiled', evidence_refs=[])
+                     for key in TRAIT_KEYS if key in row and row[key] not in (None, '', [], {})}
+            fields.append(dict(dataset_id=row['dataset_id'], field_id=row['field_id'],
+                known_facts=facts, unknown_trait_keys=sorted(set(TRAIT_KEYS) - set(facts))))
+            continue
         paths = _field_source_paths(row, resources['source_index'], resources['source_texts'],
             scope, knowledge_catalog_admission(resources))
         raw = [(field, path) for path in paths

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import json
 
 
 MACHINE_RESOURCE_FILES: dict[str, str] = {
@@ -33,6 +34,19 @@ RAW_INTERACTION_ROOT = Path("raw") / "community" / "user_messages"
 ENGINEERING_LESSONS_WIKI_PATH = Path("wiki") / "50_engineering_lessons.md"
 DECISION_ARTIFACTS_ROOT = Path("machine") / "decisions"
 LEGACY_DECISION_ARTIFACTS_ROOT = Path("wiki") / "70_decisions"
+
+
+def current_only_knowledge(knowledge_root: str | Path) -> bool:
+    """Input: knowledge root. Output: explicit current-only storage mode; no freshness or semantic admission."""
+    path = Path(knowledge_root) / 'machine/knowledge_storage_policy.json'
+    if not path.exists():
+        return False
+    if path.is_symlink() or path.is_junction():
+        raise ValueError('linked knowledge storage policy')
+    value = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(value, dict) or value.get('schema_version') != 1 or value.get('mode') != 'current_only_v1':
+        raise ValueError('invalid current-only knowledge storage policy')
+    return True
 
 
 @dataclass(frozen=True)

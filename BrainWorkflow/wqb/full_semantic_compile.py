@@ -422,6 +422,9 @@ def prepare_full_semantic_compile(root: Path, config: dict) -> dict:
     Presence and source validation are not compiler/binder eligibility. Invalid
     sources are diagnosed independently and their identifiable targets retained.
     """
+    from wqb.knowledge_paths import current_only_knowledge
+    if current_only_knowledge(root):
+        raise ValueError('current-only knowledge uses incremental maintenance, not whole-vault semantic inventories')
     if not isinstance(config, dict):
         raise ValueError('prepare config must be an object')
     config = dict(config)

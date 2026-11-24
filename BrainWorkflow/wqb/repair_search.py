@@ -145,6 +145,12 @@ def _repair_field_supported(row: dict, texts: dict, index: dict, scope: dict, ca
     from wqb.template_binding import _known, _scope_matches
     from wqb.workflow_stage_adapters import (_row_has_measured_platform_coverage,
         _row_has_positive_coverage, _row_has_source_date)
+    if row.get('direct_knowledge_version') == 1:
+        return (catalog and isinstance(row.get('field_id'), str)
+            and bool(IDENTIFIER.fullmatch(row['field_id']))
+            and isinstance(row.get('dataset_id'), str) and bool(row['dataset_id'])
+            and row.get('field_type') in ('MATRIX', 'VECTOR', 'GROUP')
+            and _scope_matches(row, scope))
     if not catalog:
         return _coverage_field_supported(dict(row, semantic_tags=[]), texts, index, scope,
                                          resource_contract_version=2)

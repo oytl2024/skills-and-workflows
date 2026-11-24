@@ -36,7 +36,7 @@ START_CONFIG_FIELDS = (
 )
 START_POLICY_FIELDS = ('preplanned_tree_version', 'paired_scout', 'exploration_scout',
     'exploration_policy_version', 'parallel_workflows', 'plan_depth', 'initial_hypotheses',
-    'execution_package_version', 'multiplier_scope_version', 'retrieval_design_version')
+    'execution_package_version', 'multiplier_scope_version', 'retrieval_design_version', 'direct_knowledge_version')
 
 
 def load_start_config(paths) -> dict:
@@ -63,7 +63,14 @@ def load_start_config(paths) -> dict:
     if type(version) is not int or version not in (0, 1):
         raise ValueError('preplanned_tree_version must be integer 0 or 1')
     clean['research_policy'] = {key: policy[key] for key in START_POLICY_FIELDS if key in policy}
-    if version == 1:
+    if 'direct_knowledge_version' in policy:
+        from wqb.direct_knowledge import direct_knowledge_enabled, DIRECT_POLICY
+        direct_knowledge_enabled(dict(direct_knowledge_version=policy['direct_knowledge_version']))
+        if version != 1:
+            raise ValueError('direct knowledge requires preplanned trees')
+        clean['direct_knowledge_version'] = 1
+        clean['resource_admission_policy'] = DIRECT_POLICY
+    if version == 1 and 'direct_knowledge_version' not in clean:
         from wqb.resource_evidence import KNOWLEDGE_CATALOG_POLICY
         clean['resource_admission_policy'] = KNOWLEDGE_CATALOG_POLICY
     if any(type(value) not in (bool, int) for value in clean['research_policy'].values()):
@@ -585,6 +592,18 @@ def _prepare_multiplier_start(paths, original: dict) -> dict:
 
     try:
         check_cancelled(force=True)
+        if original['preplanned_config'].get('direct_knowledge_version') == 1:
+            from wqb.research_query_index import prepare_query_index, query_fields
+            generation = prepare_query_index(paths.knowledge_root)['generation']
+            scope = dict(instrument_type=original['preplanned_config']['instrument_type'],
+                **original['selection']['scope'])
+            fields = query_fields(paths.knowledge_root, generation, scope, limit=1)
+            check_cancelled(force=True)
+            if fields['total']:
+                progress(dict(stage='planning', status='completed', field_source='knowledge',
+                    field_count=fields['total'], generation=generation,
+                    warning='Knowledge quality/age/coverage are unknown or advisory; technical validation follows.'))
+                return read_start_request(paths.runs_root)
         directory = _safe(paths.runs_root, paths.runs_root / 'start_preflight/multiplier' / original['request_id'])
         result = prepare_multiplier_fields_supervised(paths.knowledge_root, directory, original['selection']['scope'],
             check_cancelled=check_cancelled, progress=progress,
