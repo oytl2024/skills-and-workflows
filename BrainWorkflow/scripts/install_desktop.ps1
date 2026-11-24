@@ -66,8 +66,9 @@ if (Test-Path -LiteralPath $Previous) {
     Remove-Item -LiteralPath $Previous -Recurse -Force
 }
 $Receipt=@{schema_version=1;code_revision=$Source.Trim();
-    exe_sha256=(Get-FileHash -LiteralPath (Join-Path $Target 'BrainWorkflow.exe')).Hash.ToLowerInvariant();
-    acceptance=$Proof;file_count=@($Files | Where-Object {-not $_.PSIsContainer}).Count}
+    exe_sha256=(Get-FileHash -LiteralPath (Join-Path $Target 'BrainWorkflow.exe')).Hash.ToLowerInvariant()}
+[IO.File]::WriteAllText((Join-Path $Installed 'acceptance.json'),
+    ($Proof|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText((Join-Path $Installed 'installation.json'),
     ($Receipt|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
 $Receipt | ConvertTo-Json -Depth 5

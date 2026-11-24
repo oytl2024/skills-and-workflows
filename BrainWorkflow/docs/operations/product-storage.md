@@ -18,6 +18,23 @@ No automatic final Alpha submit.
 6. Record before/after MB and verify empty-run new Start via local fake model.
 7. Keep this current contract and compact receipt; no accumulating backup trees.
 
+## Nov24 Acceptance
+
+User requested disposal before feature completion. Disposable-only cleanup used
+the synchronized dfbdc51 baseline; unfinished source and build dependencies were
+kept. Product source then passed 183 focused regressions and real native-worker
+acceptance, was installed and synchronized as5ffde40 before remaining cleanup.
+After cleanup43 affected tests passed;25 desktop launcher tests passed after
+correcting the installer to preserve its existing three-field receipt contract.
+These are scoped results, not a claim of another full-suite run.
+
+Logical workspace usage fell from3661.49MB to about792MB, including the new app's
+fresh session cache. Retained: about681MB knowledge,46.4MB current app, shared
+daily accounting,240 dedup identities, compiled-case source receipts and reusable
+experience. No platform/model calls or Alpha submissions occurred.
+Two approximately1MB literal %SystemDrive% cache directories remain excluded
+because their previous deletion was rejected by environment policy.
+
 ## Sensitive Profile Approval
 
 Named human approval received Nov24 for the exact paths below. Removal still
