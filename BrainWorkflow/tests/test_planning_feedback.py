@@ -33,6 +33,9 @@ class PlanningFeedbackTests(unittest.TestCase):
             output = Path(directory) / 'answer.json'
             prompts = []
             def execute(argv, **kwargs):
+                self.assertEqual(kwargs['encoding'], 'utf-8')
+                if __import__('os').name == 'nt':
+                    self.assertTrue(kwargs['creationflags'] & subprocess.CREATE_NO_WINDOW)
                 prompts.append(argv[-1])
                 output.write_text(json.dumps(dict(summary='draft')), encoding='utf-8')
                 return subprocess.CompletedProcess(argv, 0, '', '')

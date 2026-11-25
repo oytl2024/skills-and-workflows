@@ -4,6 +4,16 @@ Opening the desktop app does not create a Codex task or call a GPT model. Initia
 
 ## Catalog Admission Boundary
 
+Background process transport is owned by `process_transport.py`, reused by
+Console jobs, cancellable checkpoints and Codex dispatch (including draft correction).
+Windows children use CREATE_NO_WINDOW; redirected diagnostic text is explicitly
+UTF-8 with replacement for malformed log bytes. Structured answer files still use
+strict UTF-8/JSON/schema validation: replacing diagnostic bytes cannot certify a
+plan. Stop, process-tree cancellation, owner identity and timeouts are unchanged.
+Native fake-model acceptance writes Chinese stdout/stderr and asserts no console;
+it does not call a model service. A saved result after a transport error must be
+validated and reconciled locally before it can cease being an unknown outcome.
+
 Task-rule bootstrap is independent of knowledge retrieval: task-bound MCP
 `query` first uses `operation=contract` and section `overview`, then
 `composition_contract`, `tool_contracts` and `output_schema`. Follow `next_start`

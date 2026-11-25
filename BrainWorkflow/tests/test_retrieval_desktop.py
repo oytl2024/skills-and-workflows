@@ -112,7 +112,10 @@ class RetrievalDesktopTests(unittest.TestCase):
         shim = isolated / 'codex.cmd'
         shim.write_text('@echo off\n"'+sys.executable+'" -B "%~dp0fake_model.py" %*\n', encoding='utf-8')
         (isolated / 'fake_model.py').write_text(
-            'import sys, pathlib\nroot=pathlib.Path(__file__).parent\n'
+            'import sys, pathlib, os, ctypes\nroot=pathlib.Path(__file__).parent\n'
+            'os.write(1, "中文输出✓".encode("utf-8"))\n'
+            'os.write(2, "诊断输出".encode("utf-8"))\n'
+            'if os.name=="nt": assert ctypes.windll.kernel32.GetConsoleWindow()==0, "unexpected console window"\n'
             'with (root/"calls.txt").open("a") as f: f.write("invocation\\n")\n'
             '(root/"arguments.txt").write_text("\\n".join(sys.argv[1:]),encoding="utf-8")\n'
             'target=pathlib.Path(sys.argv[sys.argv.index("--output-last-message")+1])\n'

@@ -11,6 +11,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from wqb.runtime_control import check_submission_allowed, RuntimePaused
+from wqb.process_transport import background_process_options
 
 
 CHECKPOINTS_FILENAME = "ai_checkpoints.jsonl"
@@ -96,7 +97,8 @@ def stop_worker_tree(process: subprocess.Popen) -> None:
     """Input: owned worker Popen. Output: None. Stop its descendants before acknowledging Pause."""
     if os.name == 'nt':
         result = subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False)
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False,
+                                **background_process_options())
         if result.returncode and process.poll() is None:
             raise RuntimeError('AI worker tree cancellation failed')
     else:
@@ -130,7 +132,8 @@ def _run_cancellable(argv: list[str], timeout_seconds: int,
             raise AICheckpointCancelled('knowledge_job_cancelled')
     check_cancel()
     process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                               shell=False, start_new_session=os.name != 'nt', env=_model_worker_environment())
+                               shell=False, start_new_session=os.name != 'nt', env=_model_worker_environment(),
+                               **background_process_options(text=True))
     deadline = time.monotonic() + timeout_seconds
     try:
         while True:
@@ -230,7 +233,7 @@ def run_ai_checkpoint(
         else:
             result = (_run_cancellable(argv, timeout_seconds) if cancel_on_pause else
                       subprocess.run(argv, capture_output=True, text=True, timeout=timeout_seconds, check=False,
-                                     shell=False, env=_model_worker_environment()))
+                                     shell=False, env=_model_worker_environment(), **background_process_options(text=True)))
         if result.returncode != 0:
             raise RuntimeError(f"executor exit {result.returncode}: {(result.stderr or result.stdout)[-500:]}")
         output = json.loads(output_path.read_text(encoding="utf-8"))

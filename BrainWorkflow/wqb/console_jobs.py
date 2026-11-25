@@ -17,6 +17,7 @@ from wqb.console_state import ConsolePaths
 from wqb.knowledge_paths import decision_artifacts_root
 from wqb.runtime_control import DEFAULT_MAX_RUNTIME_SECONDS
 from wqb.desktop_application import packaged_worker_command
+from wqb.process_transport import background_process_options
 
 
 DEFAULT_TIMEOUT_SECONDS = 3600
@@ -212,6 +213,7 @@ def run_job(job: ConsoleJob, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> 
             text=True,
             timeout=timeout_seconds,
             check=False,
+            **background_process_options(text=True),
         )
         Path(running.stdout_path).write_text(result.stdout or "", encoding="utf-8")
         Path(running.stderr_path).write_text(result.stderr or "", encoding="utf-8")
@@ -335,6 +337,7 @@ def start_job_async(
             stdout=stdout_handle,
             stderr=stderr_handle,
             text=True,
+            **background_process_options(text=True),
         )
     except Exception as error:
         stdout_handle.close()
