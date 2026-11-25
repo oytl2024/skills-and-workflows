@@ -273,9 +273,13 @@ def _require_resolved_retrieval(paths, previous: dict) -> None:
             raise ValueError('task outside preparation boundary')
         task = read_design_task(directory)
         owner = task['identity']['config'].get('retrieval_owner')
+        known_rejection = task.get('status') == 'blocked' and isinstance(task.get('answer'), dict)
+        if known_rejection:
+            from wqb.semantic_compilation import _check_schema
+            _check_schema(task['brief']['output_schema'], task['answer'])
         if (task['input_sha256'] != binding['input_sha256'] or owner != dict(
                 runs_root=str(paths.runs_root), request_id=previous['request_id'])
-                or task['status'] != 'completed'):
+                or task['status'] != 'completed' and not known_rejection):
             raise ValueError('original task not completed')
     except (OSError, ValueError, TypeError, KeyError) as error:
         raise ValueError('unresolved retrieval preparation retained; maintenance must reconcile original model task') from error

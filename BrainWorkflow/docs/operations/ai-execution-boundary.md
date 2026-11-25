@@ -91,3 +91,27 @@ Post-install build cleanup for output/desktop-application/20261125-091347-1980
 and output/desktop-build-deps was rejected by environment policy before execution.
 They remain disposable but retained; do not bypass that rejection using another
 tool/language. Installed acceptance receipts remain separate from those caches.
+
+## Task-Bound MCP Queries (2026-11-25)
+
+The next real failure reported WinError5 in the model summary, no query progress,
+and an invented fallback field identity. An offline restricted-token probe
+reproduced named-pipe access denial. Query data and exact-scope matching were not
+the source fault. Do not replace this diagnosis with a demand to capture fields.
+
+research_mcp.py exposes only query(operation, arguments_json) over standard
+MCP stdio. Codex hosts that helper; model shell commands remain read-only.
+The helper delegates to the existing authenticated owner, original exact scope,
+generation, validation, Stop and cumulative query budgets. The task path is a
+fixed launch argument, never a model tool argument. Per-process -c configuration
+requires this server and allows only its declared read-only tool; no persistent
+Codex configuration, network service, credential access or sandbox relaxation.
+
+An empty plan can report tool failure without a fabricated field selector; it
+never executes. A schema-valid, durably received rejected draft is terminal:
+a new user Start may replace its reservation, without replay/refund or deletion.
+Unknown outcomes still cannot be replaced, even after Stop. Native worker errors
+exit explicitly rather than opening a blocking windowed error dialog.
+
+Sources: [Codex MCP configuration](https://developers.openai.com/codex/mcp/) and
+[MCP stdio specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports).

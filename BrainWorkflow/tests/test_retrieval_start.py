@@ -9,6 +9,32 @@ from tests import test_preplanned_start as fixtures
 
 
 class RetrievalStartTests(unittest.TestCase):
+    def test_known_rejected_answer_does_not_erase_or_replay_unknown_outcomes(self):
+        from types import SimpleNamespace
+        from wqb.console_start import _require_resolved_retrieval
+        runs = self.fixture.paths.run_root.absolute()
+        directory = runs / 'start_preflight/preplanned/offline'
+        directory.mkdir(parents=True)
+        paths = SimpleNamespace(runs_root=runs)
+        before = dict(request_id='original', retrieval_design_task=dict(directory=str(directory), input_sha256='digest'))
+        task = dict(input_sha256='digest', identity=dict(config=dict(retrieval_owner=dict(
+            runs_root=str(runs), request_id='original'))), status='blocked', answer=dict(summary='rejected'),
+            brief=dict(output_schema=dict(type='object', properties=dict(summary=dict(type='string')),
+                required=['summary'], additionalProperties=False)))
+        with patch('wqb.retrieval_research_planning.read_design_task', return_value=task):
+            _require_resolved_retrieval(paths, before)
+            task['status'] = 'unknown'
+            with self.assertRaisesRegex(ValueError, 'unresolved retrieval'):
+                _require_resolved_retrieval(paths, before)
+    def test_empty_plan_reports_model_failure_instead_of_placeholder_field(self):
+        from wqb.retrieval_research_planning import _resolve_answer, design_schema
+        task = dict(identity=dict(knowledge_root=str(self.fixture.paths.knowledge_root), generation='g'),
+            brief=dict(output_schema=design_schema()))
+        with patch('wqb.research_query_index.validate_query_generation'):
+            with self.assertRaisesRegex(ValueError, 'model_returned_no_plan: tool access denied'):
+                _resolve_answer(task, dict(summary='tool access denied', designs=[], selection=[],
+                    tree=dict(roots=[], nodes=[]), data_characteristics=[], history_selection=[]))
+
     def test_direct_console_start_uses_local_catalog_without_multiplier_quality_gate(self):
         from tests import test_console_start as console_fixtures
         from wqb import console_start as worker

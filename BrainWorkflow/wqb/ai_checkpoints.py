@@ -232,7 +232,7 @@ def run_ai_checkpoint(
                       subprocess.run(argv, capture_output=True, text=True, timeout=timeout_seconds, check=False,
                                      shell=False, env=_model_worker_environment()))
         if result.returncode != 0:
-            raise RuntimeError(f"executor exit {result.returncode}: {result.stderr[-500:]}")
+            raise RuntimeError(f"executor exit {result.returncode}: {(result.stderr or result.stdout)[-500:]}")
         output = json.loads(output_path.read_text(encoding="utf-8"))
         if not isinstance(output, dict) or not output.get("summary"):
             raise ValueError("AI executor output must be JSON with nonempty summary")

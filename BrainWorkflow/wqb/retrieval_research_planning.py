@@ -53,7 +53,7 @@ def design_schema() -> dict:
     from wqb.initial_research_planning import _output_schema, _annotation_schema
     schema = _output_schema(2, include_vector=True)
     text = {'type': 'string'}
-    schema['properties']['selection'] = dict(type='array', minItems=1, maxItems=MAX_SELECTION,
+    schema['properties']['selection'] = dict(type='array', minItems=0, maxItems=MAX_SELECTION,
         items=dict(type='object', properties=dict(dataset_id=text, field_id=text),
                    required=['dataset_id', 'field_id'], additionalProperties=False))
     schema['properties']['data_characteristics'] = _annotation_schema()
@@ -231,6 +231,8 @@ def _resolve_answer(task: dict, answer: dict) -> dict:
     root = Path(identity['knowledge_root'])
     validate_query_generation(root, identity['generation'])
     _check_schema(task['brief']['output_schema'], answer)
+    if not answer['designs'] or not answer['tree']['nodes']:
+        raise ValueError('model_returned_no_plan: ' + answer['summary'][:1000])
     resources, annotation, repair = _resolved_context(task, _identities(answer), _design_source_refs(answer['designs']))
     selected_context = _selected_history(task, answer['history_selection'])
     if selected_context['groups']:
@@ -457,7 +459,10 @@ def emit_query_result(value: dict) -> None:
     """Input: tool result dict. Output: UTF-8 JSON to inherited stdout, including a windowed Windows executable."""
     raw = (json.dumps(value, ensure_ascii=False, allow_nan=False) + '\n').encode('utf-8')
     if sys.stdout is not None:
-        sys.stdout.write(raw.decode('utf-8'))
+        if hasattr(sys.stdout, 'buffer'):
+            sys.stdout.buffer.write(raw)
+        else:
+            sys.stdout.write(raw.decode('utf-8'))
         sys.stdout.flush()
         return
     if os.name != 'nt':
@@ -485,13 +490,18 @@ def emit_query_result(value: dict) -> None:
 def main(argv: list[str] | None = None) -> int:
     """Input: local query CLI arguments. Output: JSON/exit code; never create a task, compile knowledge or call WQB."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['query'])
+    parser.add_argument('command', choices=['query', 'mcp'])
     parser.add_argument('--task-dir', required=True, type=Path)
-    parser.add_argument('--operation', required=True,
+    parser.add_argument('--operation',
                         choices=['fields', 'operators', 'templates', 'experience', 'source', 'validate'])
     parser.add_argument('--arguments', default='{}')
     args = parser.parse_args(argv)
+    if args.command == 'query' and args.operation is None:
+        parser.error('--operation required for query')
     try:
+        if args.command == 'mcp':
+            from wqb.research_mcp import serve
+            return serve(args.task_dir)
         value = query_design_task(args.task_dir, args.operation, json.loads(args.arguments))
         emit_query_result(value)
         return 0

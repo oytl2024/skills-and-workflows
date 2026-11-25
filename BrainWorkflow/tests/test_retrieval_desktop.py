@@ -16,6 +16,81 @@ NATIVE_TIMEOUT_SECONDS = 30
 
 @unittest.skipUnless(DESKTOP_EXE, 'set WQB_TEST_DESKTOP_EXE for packaged query acceptance')
 class RetrievalDesktopTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get('WQB_TEST_CODEX_SANDBOX_EXE'), 'set offline Codex sandbox executable')
+    def test_sandbox_pipe_denial_is_not_hidden_by_a_fake_model(self):
+        """Input: actual restricted token. Output: documented direct-pipe denial; host MCP is required instead."""
+        from tests.test_retrieval_start import RetrievalStartTests
+        from wqb.preplanned_start import prepare_preplanned_start
+        import tempfile
+        host = RetrievalStartTests()
+        self.addCleanup(host.doCleanups)
+        self.addCleanup(lambda: host.fixture.doCleanups() if hasattr(host, 'fixture') else None)
+        output = Path(__file__).resolve().parents[3] / 'runs'
+        output.mkdir(exist_ok=True)
+
+        def temporary():
+            """Input: none. Output: disposable inherited-ACL fixture, matching ordinary production directories."""
+            from types import SimpleNamespace
+            from uuid import uuid4
+            path = output / ('st-' + uuid4().hex[:8])
+            path.mkdir()
+            return SimpleNamespace(name=str(path), cleanup=lambda: shutil.rmtree(path))
+
+        with patch('tempfile.TemporaryDirectory', side_effect=temporary):
+            host.setUp()
+        observations = []
+
+        def model(directory, brief):
+            """Input: real owner task/brief. Output: fake plan after querying through the actual restricted-token sandbox."""
+            command = [os.environ['WQB_TEST_CODEX_SANDBOX_EXE'], 'sandbox', '--permission-profile', ':read-only',
+                '-C', str(directory), DESKTOP_EXE, '--worker-module', 'wqb.retrieval_research_planning',
+                'query', '--task-dir', directory.as_posix(), '--operation', 'fields', '--arguments', '{}']
+            result = subprocess.run(command, capture_output=True, timeout=30)
+            stdout, stderr = result.stdout.decode('utf-8', errors='replace'), result.stderr.decode('utf-8', errors='replace')
+            observations.append((result.returncode, stdout, stderr))
+            if result.returncode:
+                self.assertIn('PermissionError', stdout)
+            else:
+                self.assertTrue(json.loads(stdout)['items'])
+            return host.model(directory, brief)
+
+        result = prepare_preplanned_start(host.fixture.paths, host.fixture.option, host.fixture.authority,
+            host.config, model_runner=lambda _: self.fail('legacy model'), retrieval_model_runner=model)
+        self.assertTrue(observations)
+        self.assertEqual(result['status'], 'completed', observations)
+
+    def test_host_mcp_roundtrip_reuses_owner_scope_and_budget(self):
+        from tests.test_retrieval_start import RetrievalStartTests
+        from wqb.preplanned_start import prepare_preplanned_start
+        host = RetrievalStartTests()
+        host.setUp()
+        self.addCleanup(host.doCleanups)
+
+        def model(directory, brief):
+            """Input: actual owner task. Output: frozen fake plan after a real native MCP exchange."""
+            messages = [dict(jsonrpc='2.0', id=1, method='initialize', params=dict(protocolVersion='2025-06-18')),
+                dict(jsonrpc='2.0', method='notifications/initialized'), dict(jsonrpc='2.0', id=2, method='tools/list')]
+            for number, operation, arguments in [(3, 'fields', {}), (4, 'validate',
+                    dict(selection=[dict(dataset_id='not-in-scope', field_id='absent')]))]:
+                messages.append(dict(jsonrpc='2.0', id=number, method='tools/call', params=dict(name='query',
+                    arguments=dict(operation=operation, arguments_json=json.dumps(arguments)))))
+            raw = ('\n'.join(json.dumps(item) for item in messages)+'\n').encode()
+            result = subprocess.run([DESKTOP_EXE, '--worker-module', 'wqb.retrieval_research_planning', 'mcp',
+                '--task-dir', str(directory)], input=raw, capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            replies = [json.loads(line) for line in result.stdout.splitlines()]
+            fields = json.loads(replies[2]['result']['content'][0]['text'])
+            self.assertTrue(fields['items'])
+            rejected = json.loads(replies[3]['result']['content'][0]['text'])
+            self.assertFalse(rejected['valid'])
+            self.assertEqual(rejected['tool_budget']['validations'], 1)
+            self.assertEqual(rejected['tool_budget']['queries'], 2)
+            return host.model(directory, brief)
+
+        result = prepare_preplanned_start(host.fixture.paths, host.fixture.option, host.fixture.authority,
+            host.config, model_runner=lambda _: self.fail('legacy model'), retrieval_model_runner=model)
+        self.assertEqual(result['status'], 'completed', result)
+
     def _nested_checkpoint(self, *, invalid=False):
         """Input: invalid bool. Output: result/checkpoints; launch a real native worker with static offline Codex."""
         from tests.test_retrieval_start import RetrievalStartTests
@@ -32,19 +107,13 @@ class RetrievalDesktopTests(unittest.TestCase):
         for name in ('home', 'appdata', 'localappdata', 'temp', 'codex-home'):
             (isolated / name).mkdir()
         shim = isolated / 'codex.cmd'
-        shim.write_text(
-            '@echo off\n'
-            'echo invocation>>"%~dp0calls.txt"\n'
-            ':scan\n'
-            'if "%~1"=="" exit /b 91\n'
-            'if "%~1"=="--output-last-message" goto answer\n'
-            'echo %~1>>"%~dp0arguments.txt"\n'
-            'shift /1\n'
-            'goto scan\n'
-            ':answer\n'
-            'shift /1\n'
-            'copy /y "%~dp0answer.json" "%~1" >nul\n'
-            'exit /b %errorlevel%\n', encoding='ascii')
+        shim.write_text('@echo off\n"'+sys.executable+'" -B "%~dp0fake_model.py" %*\n', encoding='utf-8')
+        (isolated / 'fake_model.py').write_text(
+            'import sys, pathlib\nroot=pathlib.Path(__file__).parent\n'
+            'with (root/"calls.txt").open("a") as f: f.write("invocation\\n")\n'
+            '(root/"arguments.txt").write_text("\\n".join(sys.argv[1:]),encoding="utf-8")\n'
+            'target=pathlib.Path(sys.argv[sys.argv.index("--output-last-message")+1])\n'
+            'target.write_bytes((root/"answer.json").read_bytes())\n', encoding='utf-8')
         environment = {key: os.environ[key] for key in ('SystemRoot', 'WINDIR', 'COMSPEC') if key in os.environ}
         environment.update(PATH=str(isolated), PATHEXT='.CMD', HOME=str(isolated / 'home'),
             USERPROFILE=str(isolated / 'home'), APPDATA=str(isolated / 'appdata'),
@@ -89,7 +158,10 @@ class RetrievalDesktopTests(unittest.TestCase):
         self.assertEqual(calls.read_text().splitlines(), ['invocation'])
         arguments = (isolated / 'arguments.txt').read_text().splitlines()
         # CMD tokenizes the unquoted config assignment at '='.
-        self.assertEqual(arguments[:6], ['exec', '--sandbox', 'read-only', '-c', 'model_reasoning_effort', 'medium'])
+        self.assertEqual(arguments[0], 'exec')
+        self.assertIn('read-only', arguments)
+        self.assertTrue(any('model_reasoning_effort' in item for item in arguments))
+        self.assertTrue(any('mcp_servers.brain_research.command' in item for item in arguments))
         checkpoints = ai_checkpoints.load_ai_checkpoints(owners[0] / 'stages/ai')
         self.assertEqual(len(checkpoints), 1)
         checkpoint = checkpoints[0]
