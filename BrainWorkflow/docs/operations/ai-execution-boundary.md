@@ -86,3 +86,8 @@ offline for this change, not a new full-suite or real model/API acceptance.
 The failed HTTP400 Start was separately released by explicit human approval,
 retaining original task/error/accounting and a local resolution receipt. This is
 not a general automatic waiver for unknown model outcomes or retry authority.
+
+Post-install build cleanup for output/desktop-application/20261125-091347-1980
+and output/desktop-build-deps was rejected by environment policy before execution.
+They remain disposable but retained; do not bypass that rejection using another
+tool/language. Installed acceptance receipts remain separate from those caches.
