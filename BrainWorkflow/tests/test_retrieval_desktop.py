@@ -58,7 +58,8 @@ class RetrievalDesktopTests(unittest.TestCase):
             if invalid:
                 answer['unexpected_native_property'] = True
             answers.append(answer)
-            (isolated / 'answer.json').write_text(json.dumps(answer), encoding='utf-8')
+            from tests.test_model_schema_transport import wire_answer
+            (isolated / 'answer.json').write_text(json.dumps(wire_answer(brief['output_schema'], answer)), encoding='utf-8')
             owners.append(directory)
             deadline = time.monotonic() + NATIVE_TIMEOUT_SECONDS
 
@@ -93,8 +94,9 @@ class RetrievalDesktopTests(unittest.TestCase):
         self.assertEqual(len(checkpoints), 1)
         checkpoint = checkpoints[0]
         attempt = Path(checkpoint['input_path']).parent
-        self.assertEqual(json.loads((attempt / 'codex_last_message.json').read_text(encoding='utf-8')), answers[0])
+        from tests.test_model_schema_transport import assert_closed_provider_objects
         schema = json.loads((attempt / 'output_schema.json').read_text(encoding='utf-8'))
+        assert_closed_provider_objects(schema)
         self.assertFalse(schema['additionalProperties'])
         self.assertIn('selection', schema['required'])
         if not invalid:

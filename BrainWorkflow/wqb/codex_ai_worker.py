@@ -291,6 +291,9 @@ def run_worker(input_path: Path, output_path: Path) -> dict[str, object]:
         schema = initial_task['brief']['output_schema']
     if retrieval:
         schema = retrieval_task['brief']['output_schema']
+    if initial or retrieval:
+        from wqb.full_semantic_model_worker import strict_worker_schema
+        schema = strict_worker_schema(schema)
     if explanation:
         from wqb.full_semantic_model_worker import strict_worker_schema
         schema = strict_worker_schema(full_semantic_output_schema(explanation_job))
@@ -326,13 +329,17 @@ def run_worker(input_path: Path, output_path: Path) -> dict[str, object]:
         validate_full_semantic_output(Path(explanation_job['root']), explanation_job, final)
     if initial:
         from wqb.semantic_compilation import _check_schema
-        _check_schema(schema, answer)
+        from wqb.full_semantic_model_worker import normalize_worker_answer
+        answer = normalize_worker_answer(initial_task['brief']['output_schema'], answer)
+        _check_schema(initial_task['brief']['output_schema'], answer)
         if _authenticated_task(run) != initial_task:
             raise ValueError('initial planning task changed during model execution')
         final = answer
     if retrieval:
         from wqb.semantic_compilation import _check_schema
-        _check_schema(schema, answer)
+        from wqb.full_semantic_model_worker import normalize_worker_answer
+        answer = normalize_worker_answer(retrieval_task['brief']['output_schema'], answer)
+        _check_schema(retrieval_task['brief']['output_schema'], answer)
         if authenticated_design_task(run) != retrieval_task:
             raise ValueError('retrieval planning task changed during model execution')
         final = answer

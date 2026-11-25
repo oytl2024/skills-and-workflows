@@ -69,3 +69,20 @@ Rules activate from completed baseline failure names or a measured metric predic
 Default coverage is deliberately narrow: decay response/averaging for low Sharpe/Fitness or high turnover, and lower truncation for concentration. These are competing project experiment hypotheses, not guaranteed improvements or invented noise/exposure facts. Source-certified ts_mean/signed_power transforms and justified neutralization remain supported through explicit frozen policies; the default catalog does not fabricate their missing prerequisites. This is not a universal operator/action library.
 
 Receipts distinguish missing rules, no observed trigger, missing prerequisites, no novel candidates, tested without improvement and finite-space exhaustion. The scheduler retains the specific reason, skipped actions and measured attempt count; the existing Console comparison projection displays the trace. Exhaustion says nothing about economic causality. Full real-vault readiness and release/desktop activation remain separate acceptance boundaries; current results belong in root todo.md.
+
+## Structured Output Transport (2026-11-25)
+
+Initial and retrieval workers reuse strict_worker_schema/normalize_worker_answer:
+all provider-object properties are required on the wire; optional canonical
+properties are nullable and absent values are removed on return. Frozen task
+schemas and experiment-tree semantics do not change. In particular, null reverse
+arms do not create reversal experiments. Original schema validation and ownership
+checks still run after normalization.
+
+Fake-provider tests must inspect the actual transmitted schema recursively and
+return wire-shaped values; merely copying canonical fixture JSON cannot detect
+provider schema rejection.79 affected tests and3 native packaged tests passed
+offline for this change, not a new full-suite or real model/API acceptance.
+The failed HTTP400 Start was separately released by explicit human approval,
+retaining original task/error/accounting and a local resolution receipt. This is
+not a general automatic waiver for unknown model outcomes or retry authority.

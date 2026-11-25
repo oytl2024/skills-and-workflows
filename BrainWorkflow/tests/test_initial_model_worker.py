@@ -46,9 +46,12 @@ class InitialModelWorkerTests(unittest.TestCase):
         self.prompt = argv[-1]
         self.assertLess(len(self.prompt.encode('utf-8')), 32000)
         schema = json.loads(Path(argv[argv.index('--output-schema') + 1]).read_text(encoding='utf-8'))
-        self.assertEqual(schema, self.task['brief']['output_schema'])
+        from wqb.full_semantic_model_worker import strict_worker_schema
+        from tests.test_model_schema_transport import assert_closed_provider_objects, wire_answer
+        self.assertEqual(schema, strict_worker_schema(self.task['brief']['output_schema']))
+        assert_closed_provider_objects(schema)
         Path(argv[argv.index('--output-last-message') + 1]).write_text(
-            json.dumps(self.answer), encoding='utf-8')
+            json.dumps(wire_answer(self.task['brief']['output_schema'], self.answer)), encoding='utf-8')
         return subprocess.CompletedProcess(argv, 0, '', '')
 
     def fake_process(self, argv, **kwargs):

@@ -21,16 +21,21 @@ class RetrievalCheckpointWorkerTests(unittest.TestCase):
             task_path.parent.mkdir(parents=True)
             task_path.write_text('{}', encoding='utf-8')
             schema = dict(type='object', properties=dict(summary=dict(type='string'),
-                selection=dict(type='array', items=dict(type='string'))),
+                selection=dict(type='array', items=dict(type='string')),
+                reverse=dict(type='object', properties=dict(baseline=dict(type='string')),
+                    required=[], additionalProperties=False)),
                 required=['summary', 'selection'], additionalProperties=False)
             task = dict(brief=dict(output_schema=schema))
-            answer = dict(summary='An offline plan.', selection=['field'])
+            answer = dict(summary='An offline plan.', selection=['field'], reverse={})
             commands = []
 
             def execute(argv, **kwargs):
                 """Input: owned Codex argv/options. Output: fake successful process and strict answer file."""
                 commands.append(argv)
-                Path(argv[argv.index('--output-last-message') + 1]).write_text(json.dumps(answer), encoding='utf-8')
+                from tests.test_model_schema_transport import assert_closed_provider_objects, wire_answer
+                sent = json.loads(Path(argv[argv.index('--output-schema') + 1]).read_text())
+                assert_closed_provider_objects(sent)
+                Path(argv[argv.index('--output-last-message') + 1]).write_text(json.dumps(wire_answer(schema, answer)), encoding='utf-8')
                 return subprocess.CompletedProcess(argv, 0, '', '')
 
             with patch.object(planning, 'authenticated_design_task', return_value=task), \
