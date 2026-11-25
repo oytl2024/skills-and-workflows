@@ -19,6 +19,8 @@ MAX_TASK_BYTES = 16_000_000
 MAX_TOOL_ARGUMENT_BYTES = 64_000
 MAX_SELECTION = 30
 MAX_HISTORY_SELECTION = 12
+MAX_CONTRACT_CHARS = 8000
+CONTRACT_SECTIONS = ('overview', 'composition_contract', 'tool_contracts', 'output_schema')
 LOCK_SECONDS = 5.0
 LOCK_POLL_SECONDS = 0.05
 CONFIG_KEYS = ('instrument_type', 'region', 'delay', 'universe', 'decay', 'neutralization',
@@ -27,6 +29,9 @@ CONFIG_KEYS = ('instrument_type', 'region', 'delay', 'universe', 'decay', 'neutr
     'retrieval_excluded_selections', 'retrieval_owner', 'retrieval_max_queries',
     'retrieval_max_validations', 'retrieval_max_returned_bytes')
 TOOL_CONTRACTS = {
+    'contract': dict(arguments=dict(section='overview|composition_contract|tool_contracts|output_schema',
+        start='character offset >=0', length='integer 1..8000'),
+        purpose='Task-owned planning rules, not raw/wiki sources. Read these before constructing a plan.'),
     'fields': dict(arguments=dict(query='AND-matched text tokens; empty enumerates catalog',
         field_type='optional MATRIX/VECTOR/GROUP', offset='integer >=0', limit='integer 1..50',
         identities='optional exact [[dataset_id,field_id]], excludes query/type'),
@@ -302,7 +307,7 @@ def prepare_retrieval_design(directory: Path, knowledge: Path, scope: dict, opti
         brief = dict(schema_version=1, objective=option, scope=scope, generation=generation,
             plan_depth=policy['plan_depth'], max_width=policy['initial_hypotheses'],
             measurement_period=config['measurement_period'], output_schema=deepcopy(contract['output_schema']),
-            tools=['fields', 'operators', 'templates', 'experience', 'source', 'validate'],
+            tools=['contract', 'fields', 'operators', 'templates', 'experience', 'source', 'validate'],
             tool_contracts=deepcopy(TOOL_CONTRACTS),
             tool_limits=deepcopy(limits),
             excluded_selections=deepcopy(config.get('retrieval_excluded_selections', [])),
@@ -345,9 +350,35 @@ def query_design_task(directory: Path, operation: str, arguments: dict) -> dict:
     return request_tool(directory, operation, arguments)
 
 
+def _task_contract(task: dict, arguments: dict) -> dict:
+    """Input: authenticated task/section paging dicts. Output: bounded planning-contract text; no arbitrary file reads."""
+    if set(arguments) - {'section', 'start', 'length'}:
+        raise ValueError('unknown contract arguments; allowed: section,start,length')
+    section = arguments.get('section', 'overview')
+    start, length = arguments.get('start', 0), arguments.get('length', MAX_CONTRACT_CHARS)
+    if section not in CONTRACT_SECTIONS:
+        raise ValueError('contract section must be one of: ' + ','.join(CONTRACT_SECTIONS))
+    if type(start) is not int or start < 0 or type(length) is not int or not 1 <= length <= MAX_CONTRACT_CHARS:
+        raise ValueError('invalid contract page')
+    brief = task['brief']
+    value = (dict(scope=brief['scope'], objective=brief['objective'], plan_depth=brief['plan_depth'],
+        max_width=brief['max_width'], measurement_period=brief['measurement_period'], sections=list(CONTRACT_SECTIONS))
+        if section == 'overview' else brief[section])
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+    end = min(start + length, len(text))
+    return dict(kind='task_contract', section=section, text=text[start:end], start=start,
+        next_start=end if end < len(text) else None, total_chars=len(text),
+        text_sha256=hashlib.sha256(text.encode('utf-8')).hexdigest(),
+        scope=deepcopy(brief['scope']), generation=task['identity']['generation'], authority='planning_contract_only')
+
+
 def _query_design_task_local(directory: Path, operation: str, arguments: dict) -> dict:
     """Input: running task Path/op/JSON arguments. Output: bounded read-only knowledge or offline validation result."""
     task = authenticated_design_task(directory)
+    if operation == 'contract':
+        if not isinstance(arguments, dict):
+            raise ValueError('contract arguments must be an object')
+        return _task_contract(task, arguments)
     if (not isinstance(arguments, dict)
             or len(json.dumps(arguments, ensure_ascii=False).encode()) > MAX_TOOL_ARGUMENT_BYTES):
         raise ValueError('oversized or invalid local query arguments')
@@ -406,7 +437,7 @@ def retrieval_projection(directory: Path) -> dict:
         excluded_selections=brief['excluded_selections'],
         tool_limits=brief['tool_limits'],
         query_command=command + ['query', '--task-dir', str(Path(directory).absolute()),
-            '--operation', '<fields|operators|templates|experience|source|validate>', '--arguments', '<JSON object>'],
+            '--operation', '<contract|fields|operators|templates|experience|source|validate>', '--arguments', '<JSON object>'],
         stdio_hint='For a windowed helper in PowerShell, pipe its command to Out-String to wait and capture UTF-8 JSON.',
         references=dict(output_schema='/brief/output_schema', composition_contract='/brief/composition_contract',
                         instructions='/brief/instructions', tool_contracts='/brief/tool_contracts'))
@@ -493,7 +524,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('command', choices=['query', 'mcp'])
     parser.add_argument('--task-dir', required=True, type=Path)
     parser.add_argument('--operation',
-                        choices=['fields', 'operators', 'templates', 'experience', 'source', 'validate'])
+                        choices=['contract', 'fields', 'operators', 'templates', 'experience', 'source', 'validate'])
     parser.add_argument('--arguments', default='{}')
     args = parser.parse_args(argv)
     if args.command == 'query' and args.operation is None:

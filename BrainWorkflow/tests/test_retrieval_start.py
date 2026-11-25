@@ -9,6 +9,28 @@ from tests import test_preplanned_start as fixtures
 
 
 class RetrievalStartTests(unittest.TestCase):
+    def test_contract_bootstrap_is_separate_from_knowledge_sources(self):
+        from wqb.preplanned_start import prepare_preplanned_start
+        from wqb.retrieval_research_planning import query_design_task
+
+        def model(directory, brief):
+            """Input: running task. Output: fake plan after reading contracts through the owning budgeted interface."""
+            for section in ('overview', 'composition_contract', 'tool_contracts', 'output_schema'):
+                page = query_design_task(directory, 'contract', dict(section=section, length=8000))
+                self.assertEqual(page['kind'], 'task_contract')
+                self.assertTrue(page['text'])
+                self.assertEqual(page['scope'], brief['scope'])
+                self.assertIn('queries', page['tool_budget'])
+            with self.assertRaisesRegex(ValueError, 'source_path.*allowed:.*path'):
+                query_design_task(directory, 'source', dict(source_path='runtime/task.json'))
+            with self.assertRaisesRegex(ValueError, 'contract'):
+                query_design_task(directory, 'contract', dict(section='../secrets'))
+            return self.model(directory, brief)
+
+        result = prepare_preplanned_start(self.fixture.paths, self.fixture.option, self.fixture.authority,
+            self.config, model_runner=lambda _: self.fail('legacy model'), retrieval_model_runner=model)
+        self.assertEqual(result['status'], 'completed', result)
+
     def test_known_rejected_answer_does_not_erase_or_replay_unknown_outcomes(self):
         from types import SimpleNamespace
         from wqb.console_start import _require_resolved_retrieval

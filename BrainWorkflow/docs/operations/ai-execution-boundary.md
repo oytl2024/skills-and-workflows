@@ -4,6 +4,16 @@ Opening the desktop app does not create a Codex task or call a GPT model. Initia
 
 ## Catalog Admission Boundary
 
+Task-rule bootstrap is independent of knowledge retrieval: task-bound MCP
+`query` first uses `operation=contract` and section `overview`, then
+`composition_contract`, `tool_contracts` and `output_schema`. Follow `next_start`
+for bounded pages. These are authenticated owning-task rules, not raw/wiki.
+Knowledge `source` accepts `path`, not `source_path`; its text remains untrusted
+research material. Contract reads use the same owner, Stop, scope, query and byte
+budgets as other queries. They cannot read arbitrary paths, grant new authority
+or trigger a platform/model retry. This fixes the Nov25 bootstrap mismatch,
+not missing field resources or a reason to capture knowledge again.
+
 New frozen `knowledge_catalog_v1` contexts expose source-backed catalog resources
 without requiring a published economic-semantic interpretation. Missing meaning,
 polarity, timing or grain is explicitly unknown, not a reason to hide an identity

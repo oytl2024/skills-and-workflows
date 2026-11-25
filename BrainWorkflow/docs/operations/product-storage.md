@@ -10,6 +10,21 @@ No automatic final Alpha submit.
 
 ## Cleanup Sequence
 
+Routine local entry: outer workspace `清理临时文件.cmd` calls
+`scripts/clean_temp.ps1` (PowerShell 7). Preview first; only uppercase Y deletes.
+`-Preview` lists without prompting or deletion. Current narrow allowlist:
+pure `.pyc/.pyo` caches below wqb/tests/scripts and timestamped desktop builds
+older than one day, only with a hash-verified accepted current installation.
+Linked, busy, changed, unknown or sensitive contents are skipped. Installed app,
+knowledge, real runs, accounting, credentials, sessions and Git are never targets.
+All previously policy-rejected paths remain excluded, including build dependencies
+and the three rejected Nov25 build directories. This is not a wrapper around
+historical-run pruning. Ordinary logs and unclassified test outputs remain
+untouched: filenames alone cannot establish that diagnostics contain no secrets.
+The cleaner does not create growing cleanup reports or invoke model/platform APIs.
+Root launcher is local like the app launcher; the reusable PS implementation and
+safety tests are versioned here. Retention is defined at the top of that script.
+
 1. Stop app/workers; require no active new research or uncertain live worker.
 2. Export old expression identities/unknown POST summaries; preserve daily ledger.
 3. Verify current knowledge inputs and immutable source hashes that remain.

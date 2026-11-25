@@ -378,7 +378,8 @@ def query_knowledge(root: Path, generation: str, scope: dict, operation: str, ar
                   source={'path', 'start', 'length'})
     allowed = extras[operation] | (common if operation != 'source' else set())
     if set(arguments) - allowed:
-        raise ValueError('unknown query arguments: ' + ','.join(sorted(set(arguments) - allowed)))
+        raise ValueError('unknown query arguments: ' + ','.join(sorted(set(arguments) - allowed))
+            + '; allowed: ' + ','.join(sorted(allowed)))
     if 'include_other_scopes' in arguments and type(arguments['include_other_scopes']) is not bool:
         raise ValueError('include_other_scopes must be a boolean')
     for key in ('query', 'operator', 'template_id', 'mechanism_family', 'experiment_id', 'group_id', 'path'):

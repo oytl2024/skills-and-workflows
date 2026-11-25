@@ -11,7 +11,10 @@ MAX_MESSAGE_BYTES = MAX_ARGUMENT_BYTES + 8192
 MCP_STARTUP_SECONDS = 20
 MCP_TOOL_SECONDS = 35
 QUERY_TOOL = dict(name='query', description='Read exact-scope local knowledge or validate a complete draft. '
-    'Use fields first; use validate diagnostics to correct drafts before final output. No platform calls.',
+    'FIRST call operation=contract with arguments_json={"section":"overview"}; then read '
+    'composition_contract, tool_contracts and output_schema sections (follow next_start). '
+    'source uses {"path":"indexed raw/wiki path"}, NOT source_path or task-contract paths. '
+    'Use validate diagnostics to correct drafts before final output. No platform calls.',
     inputSchema=dict(type='object', properties=dict(
         operation=dict(type='string', enum=sorted(OPERATIONS)),
         arguments_json=dict(type='string', maxLength=MAX_ARGUMENT_BYTES, description='JSON object using task.tool_contracts.')),

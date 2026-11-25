@@ -70,7 +70,7 @@ class RetrievalDesktopTests(unittest.TestCase):
             """Input: actual owner task. Output: frozen fake plan after a real native MCP exchange."""
             messages = [dict(jsonrpc='2.0', id=1, method='initialize', params=dict(protocolVersion='2025-06-18')),
                 dict(jsonrpc='2.0', method='notifications/initialized'), dict(jsonrpc='2.0', id=2, method='tools/list')]
-            for number, operation, arguments in [(3, 'fields', {}), (4, 'validate',
+            for number, operation, arguments in [(3, 'contract', dict(section='tool_contracts')), (4, 'fields', {}), (5, 'validate',
                     dict(selection=[dict(dataset_id='not-in-scope', field_id='absent')]))]:
                 messages.append(dict(jsonrpc='2.0', id=number, method='tools/call', params=dict(name='query',
                     arguments=dict(operation=operation, arguments_json=json.dumps(arguments)))))
@@ -79,12 +79,15 @@ class RetrievalDesktopTests(unittest.TestCase):
                 '--task-dir', str(directory)], input=raw, capture_output=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
             replies = [json.loads(line) for line in result.stdout.splitlines()]
-            fields = json.loads(replies[2]['result']['content'][0]['text'])
+            contract = json.loads(replies[2]['result']['content'][0]['text'])
+            self.assertEqual(contract['kind'], 'task_contract')
+            self.assertIn('source', json.loads(contract['text']))
+            fields = json.loads(replies[3]['result']['content'][0]['text'])
             self.assertTrue(fields['items'])
-            rejected = json.loads(replies[3]['result']['content'][0]['text'])
+            rejected = json.loads(replies[4]['result']['content'][0]['text'])
             self.assertFalse(rejected['valid'])
             self.assertEqual(rejected['tool_budget']['validations'], 1)
-            self.assertEqual(rejected['tool_budget']['queries'], 2)
+            self.assertEqual(rejected['tool_budget']['queries'], 3)
             return host.model(directory, brief)
 
         result = prepare_preplanned_start(host.fixture.paths, host.fixture.option, host.fixture.authority,
