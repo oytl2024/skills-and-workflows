@@ -4,6 +4,13 @@ Opening the desktop app does not create a Codex task or call a GPT model. Initia
 
 ## Catalog Admission Boundary
 
+Offline Learn rendering lives in `wqb.learn_rendering`, shared with the capture
+CLI without importing scripts/network collectors into research validation.
+The desktop self-test executes the canonical operator-card renderer inside the
+frozen package (`learn_rendering_ready`). This is deployment dependency checking,
+not a knowledge semantic/admission gate. Native local-resource query acceptance
+also exercises the owning source service; it is not mislabeled as a frozen owner.
+
 Background process transport is owned by `process_transport.py`, reused by
 Console jobs, cancellable checkpoints and Codex dispatch (including draft correction).
 Windows children use CREATE_NO_WINDOW; redirected diagnostic text is explicitly

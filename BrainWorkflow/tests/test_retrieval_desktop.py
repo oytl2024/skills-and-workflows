@@ -16,6 +16,47 @@ NATIVE_TIMEOUT_SECONDS = 30
 
 @unittest.skipUnless(DESKTOP_EXE, 'set WQB_TEST_DESKTOP_EXE for packaged query acceptance')
 class RetrievalDesktopTests(unittest.TestCase):
+    def test_packaged_self_test_checks_runtime_learn_rendering(self):
+        """Input: frozen EXE. Output: runtime rendering proven inside package, not delegated to source owner."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)/'diagnostics.json'
+            result = subprocess.run([DESKTOP_EXE, '--self-test', '--diagnostics-output', str(output)],
+                capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(json.loads(output.read_text(encoding='utf-8'))['learn_rendering_ready'])
+
+    @unittest.skipUnless(os.environ.get('WQB_TEST_SOURCE_TASK'), 'set saved local source task for real-resource acceptance')
+    def test_packaged_validation_reads_current_local_operator_receipts(self):
+        """Input: saved local task/current vault. Output: native validated resource context in isolated task; no model/API."""
+        from copy import deepcopy
+        import tempfile
+        from wqb.retrieval_research_planning import read_design_task, prepare_retrieval_design
+        original = Path(os.environ['WQB_TEST_SOURCE_TASK']).resolve(strict=True)
+        task = read_design_task(original)
+        saved = list((original/'stages/ai').rglob('codex_last_message.json'))
+        self.assertEqual(len(saved), 1)
+        selection = json.loads(saved[0].read_text(encoding='utf-8'))['selection']
+        self.assertTrue(selection)
+        config = deepcopy(task['identity']['config'])
+        config.pop('retrieval_owner', None)
+        with tempfile.TemporaryDirectory() as temporary:
+            def local_model(brief):
+                """Input: isolated task. Output: intentionally empty test plan after real native offline context validation."""
+                result = subprocess.run([DESKTOP_EXE, '--worker-module', 'wqb.retrieval_research_planning',
+                    'query', '--task-dir', temporary, '--operation', 'validate',
+                    '--arguments', json.dumps(dict(selection=selection))], capture_output=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
+                checked = json.loads(result.stdout)
+                self.assertTrue(checked['valid'], checked)
+                return dict(summary='Offline resource context smoke; not an executable research plan.',
+                    selection=[], history_selection=[], designs=[], tree=dict(roots=[], nodes=[]), data_characteristics=[])
+            result = prepare_retrieval_design(Path(temporary), Path(task['identity']['knowledge_root']),
+                task['identity']['scope'], task['identity']['objective'], config,
+                model_runner=local_model, check_cancelled=lambda: None)
+            self.assertEqual(result['status'], 'blocked', result)
+            self.assertTrue(result['reason'].startswith('model_returned_no_plan:'), result)
+
     @unittest.skipUnless(os.environ.get('WQB_TEST_CODEX_SANDBOX_EXE'), 'set offline Codex sandbox executable')
     def test_sandbox_pipe_denial_is_not_hidden_by_a_fake_model(self):
         """Input: actual restricted token. Output: documented direct-pipe denial; host MCP is required instead."""

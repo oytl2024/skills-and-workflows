@@ -1,5 +1,4 @@
 import hashlib
-import html
 import json
 import math
 import os
@@ -11,6 +10,7 @@ from typing import Any
 from urllib.parse import quote
 
 from wqb.client import BASE_URL, WQBClient
+from wqb.learn_rendering import clean_text, markdown_record_value
 from wqb.knowledge_contracts import SourceIndexRow, parse_markdown_front_matter, upsert_source_index_rows, _source_index_guard
 
 
@@ -366,31 +366,6 @@ def fetch_tutorial_pages(client: WQBClient, page_ids: list[str]) -> tuple[list[d
         except Exception as err:
             errors.append({"id": page_id, "error": type(err).__name__, "message": str(err)})
     return pages, errors
-
-
-def clean_text(value: Any) -> str:
-    """Input: arbitrary content value. Output: compact text. Extract readable snippets for compiled wiki pages."""
-    if isinstance(value, str):
-        without_style = re.sub(r"<style.*?</style>", " ", value, flags=re.IGNORECASE | re.DOTALL)
-        without_tags = re.sub(r"<[^>]+>", " ", without_style)
-        return " ".join(html.unescape(without_tags).split())
-    if isinstance(value, list):
-        parts = []
-        for item in value:
-            if isinstance(item, dict):
-                parts.append(clean_text(item.get("value") or item.get("content") or item.get("text") or ""))
-            else:
-                parts.append(clean_text(item))
-        return " ".join(part for part in parts if part)
-    if isinstance(value, dict):
-        return " ".join(clean_text(item) for item in value.values())
-    return ""
-
-
-def markdown_record_value(value: Any) -> str:
-    """Input: arbitrary source value. Output: readable Markdown text. Preserve source content in raw notes."""
-    text = clean_text(value)
-    return text if text else str(value or "")
 
 
 def write_raw_index(capture: dict[str, Any], manifest: dict[str, Any], output_dir: Path) -> Path:

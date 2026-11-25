@@ -1282,7 +1282,7 @@ def verified_field_extract_source(root: Path, source_path: str, dataset_id: str,
 
 def _learn_repair_body(section: str, rows: list[dict]) -> str:
     """Input: known Learn section str/original list. Output: str. Match legacy raw rendering, not inferred semantics."""
-    from scripts.capture_learn_material import markdown_record_value
+    from wqb.learn_rendering import markdown_record_value
     title = 'Operators' if section == 'operators' else 'Documentation Pages'
     lines = ['', '# ' + title, '', f'Record count: {len(rows)}', '']
     if section == 'operators':
