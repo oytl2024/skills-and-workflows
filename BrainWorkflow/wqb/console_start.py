@@ -475,6 +475,30 @@ def _blocked_request(paths, row: dict, receipt: dict, error: str) -> dict:
 
 def _notify_blocked_request(paths, row: dict) -> dict:
     """Input: ConsolePaths and blocked dict. Output: current dict. Notify unlocked, then CAS without undoing Stop."""
+    binding = row.get('retrieval_design_task')
+    if binding:
+        from wqb.console_api import _safe
+        from wqb.retrieval_research_planning import read_design_task
+        try:
+            directory = _safe(paths.runs_root, Path(binding['directory']))
+            task = read_design_task(directory)
+            ordinary = (task.get('status') == 'blocked' and isinstance(task.get('answer'), dict)
+                and str(task.get('reason', '')).startswith('model_returned_no_plan:')
+                and task['input_sha256'] == binding['input_sha256']
+                and task['identity']['config'].get('retrieval_owner') == dict(
+                    runs_root=str(paths.runs_root), request_id=row['request_id']))
+        except (OSError, ValueError, KeyError, TypeError):
+            ordinary = False
+        if ordinary:
+            with start_request_guard(paths.runs_root):
+                current = read_start_request(paths.runs_root)
+                if current.get('request_id') != row['request_id'] or current.get('status') != 'blocked':
+                    return current
+                return _write_request(paths.runs_root, {**current,
+                    'error': '',
+                    'planning_feedback': dict(status='incomplete', reason=task['reason']),
+                    'notification': dict(status='not_required', reason='Known planning outcome; not a maintenance fault'),
+                    'issues': [dict(code='planning_incomplete', level='warning', message=task['reason'])]})
     from wqb.preflight_notifications import notify_preflight_blocker
     try:
         receipt = json.loads(Path(row["preflight_receipt_path"]).read_text(encoding="utf-8"))

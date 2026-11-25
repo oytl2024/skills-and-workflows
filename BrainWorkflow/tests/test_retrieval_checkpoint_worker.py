@@ -39,6 +39,7 @@ class RetrievalCheckpointWorkerTests(unittest.TestCase):
                 return subprocess.CompletedProcess(argv, 0, '', '')
 
             with patch.object(planning, 'authenticated_design_task', return_value=task), \
+                    patch.object(planning, 'query_design_task', return_value=dict(valid=True)), \
                     patch.object(planning, 'retrieval_projection', return_value=dict(query_command=['local-query'])), \
                     patch.object(worker.shutil, 'which', return_value='codex'), \
                     patch.object(worker.subprocess, 'run', side_effect=execute):

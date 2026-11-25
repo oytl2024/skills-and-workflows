@@ -56,7 +56,7 @@ class RetrievalDesktopTests(unittest.TestCase):
 
         result = prepare_preplanned_start(host.fixture.paths, host.fixture.option, host.fixture.authority,
             host.config, model_runner=lambda _: self.fail('legacy model'), retrieval_model_runner=model)
-        self.assertTrue(observations)
+        self.assertTrue(observations, result)
         self.assertEqual(result['status'], 'completed', observations)
 
     def test_host_mcp_roundtrip_reuses_owner_scope_and_budget(self):
@@ -147,7 +147,11 @@ class RetrievalDesktopTests(unittest.TestCase):
                 self.assertEqual(target['source'], 'path')
                 runner = create_retrieval_model_runner(directory, dict(ai_executor='codex'), check_cancelled)
                 value = runner(brief)
-                self.assertEqual(value, answer)
+                if invalid:
+                    self.assertEqual(value['designs'], [])
+                    self.assertIn('planning_incomplete', value['summary'])
+                else:
+                    self.assertEqual(value, answer)
                 with self.assertRaisesRegex(ValueError, 'no blind model replay'):
                     runner(brief)
                 return value
@@ -158,7 +162,7 @@ class RetrievalDesktopTests(unittest.TestCase):
         self.assertEqual(len(owners), 1)
         calls = isolated / 'calls.txt'
         self.assertTrue(calls.is_file(), result)
-        self.assertEqual(calls.read_text().splitlines(), ['invocation'])
+        self.assertEqual(calls.read_text().splitlines(), ['invocation'] * (3 if invalid else 1))
         arguments = (isolated / 'arguments.txt').read_text().splitlines()
         # CMD tokenizes the unquoted config assignment at '='.
         self.assertEqual(arguments[0], 'exec')
@@ -192,11 +196,11 @@ class RetrievalDesktopTests(unittest.TestCase):
         self.assertEqual(checkpoint['status'], 'completed', checkpoint)
 
     def test_nested_native_codex_checkpoint_rejects_non_strict_output(self):
-        """Input: static answer with an unknown property. Output: failed strict checkpoint, never a second model."""
+        """Input: returned invalid drafts. Output: bounded planning exhaustion, not an unknown model outcome."""
         result, checkpoint = self._nested_checkpoint(invalid=True)
         self.assertNotEqual(result['status'], 'completed', result)
-        self.assertEqual(checkpoint['status'], 'failed', checkpoint)
-        self.assertFalse(Path(checkpoint['output_path']).exists())
+        self.assertEqual(checkpoint['status'], 'completed', checkpoint)
+        self.assertTrue(Path(checkpoint['output_path']).exists())
 
     def test_packaged_query_and_validation_roundtrip_to_source_owner(self):
         """Input: built windowed EXE and isolated real resources. Output: complete indexed JSON, then frozen tree."""

@@ -22,7 +22,7 @@ DEFAULT_MAX_QUERIES = 64
 DEFAULT_MAX_VALIDATIONS = 24
 DEFAULT_MAX_RETURNED_BYTES = 1_048_576
 CLIENT_WAIT_SECONDS = 30
-OPERATIONS = {'contract', 'fields', 'operators', 'templates', 'experience', 'source', 'validate'}
+OPERATIONS = {'contract', 'fields', 'operators', 'templates', 'experience', 'source', 'resources', 'validate'}
 
 
 def _bytes(value: object) -> bytes:

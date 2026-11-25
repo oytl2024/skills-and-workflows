@@ -13,6 +13,20 @@ from unittest.mock import Mock, patch
 
 
 class ResearchQueriesTests(unittest.TestCase):
+    def test_direct_unindexed_raw_machine_can_be_discovered_and_read(self):
+        from wqb.research_queries import query_knowledge
+        for relative in ('raw/local/notes.md', 'machine/current.json'):
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('known local resource', encoding='utf-8')
+            page = query_knowledge(self.root, 'g1', self.scope, 'source', dict(path=relative), direct_knowledge_version=1)
+            self.assertEqual(page['items'][0]['excerpt'], 'known local resource')
+        page = query_knowledge(self.root, 'g1', self.scope, 'resources', dict(path='machine'), direct_knowledge_version=1)
+        self.assertIn('machine/current.json', [item['path'] for item in page['items']])
+        for path in ('machine/../secrets', '/etc/passwd', 'machine/.env'):
+            with self.assertRaises((ValueError, OSError)):
+                query_knowledge(self.root, 'g1', self.scope, 'source', dict(path=path), direct_knowledge_version=1)
+
     def setUp(self):
         """Input: TestCase. Output: None; create temporary sources and a lazy index double."""
         temporary = tempfile.TemporaryDirectory()

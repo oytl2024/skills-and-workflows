@@ -13,7 +13,8 @@ MCP_TOOL_SECONDS = 35
 QUERY_TOOL = dict(name='query', description='Read exact-scope local knowledge or validate a complete draft. '
     'FIRST call operation=contract with arguments_json={"section":"overview"}; then read '
     'composition_contract, tool_contracts and output_schema sections (follow next_start). '
-    'source uses {"path":"indexed raw/wiki path"}, NOT source_path or task-contract paths. '
+    'Discover local raw/machine/wiki paths with resources; source reads paged text with {"path":"relative path"}, '
+    'NOT source_path or website URLs. Missing optional knowledge is feedback, not a command to stop. '
     'Use validate diagnostics to correct drafts before final output. No platform calls.',
     inputSchema=dict(type='object', properties=dict(
         operation=dict(type='string', enum=sorted(OPERATIONS)),

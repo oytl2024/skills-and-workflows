@@ -25,7 +25,42 @@ UNKNOWN_WARNING = ('Economic meaning, availability/timing and grain remain unkno
                    'retrieval visibility is not technical validation or reviewed evidence.')
 TRANSFER_WARNING = ('Cross-scope observations are transfer-only hypotheses, not proof in the requested market; '
                     'original scope and measurement period remain authoritative, and execution scope is unchanged.')
-OPERATIONS = {'fields', 'operators', 'templates', 'experience', 'source'}
+OPERATIONS = {'fields', 'operators', 'templates', 'experience', 'source', 'resources'}
+LOCAL_TEXT_SUFFIXES = {'.md', '.json', '.jsonl', '.txt', '.csv'}
+
+
+def _vault_resource(root: Path, relative: str) -> Path:
+    """Input: vault root and relative string. Output: safe raw/machine/wiki path, excluding secrets and links."""
+    from wqb.semantic_compilation import _safe
+    path = Path(relative)
+    if (not path.parts or path.parts[0] not in ('raw', 'machine', 'wiki') or '\\' in relative
+            or any(part.startswith('.') or part in ('..', 'credentials.json', 'auth.json', 'Cookies',
+                'Login Data', 'Local State', 'browser', 'webview2') for part in path.parts)):
+        raise ValueError('resource must be a safe local raw/machine/wiki path')
+    return _safe(root, relative)
+
+
+def _resources(root: Path, arguments: dict) -> dict:
+    """Input: vault root/listing args. Output: one bounded directory page; no recursive inventory or file contents."""
+    relative = arguments.get('path', 'raw')
+    target = _vault_resource(root, relative)
+    offset, limit = arguments.get('offset', 0), arguments.get('limit', 20)
+    import heapq
+    def entries():
+        for item in target.iterdir():
+            try:
+                path = item.relative_to(root).as_posix()
+                _vault_resource(root, path)
+                if not item.is_dir() and item.suffix.lower() not in LOCAL_TEXT_SUFFIXES:
+                    continue
+                yield dict(path=path, directory=item.is_dir(), bytes=item.stat().st_size)
+            except (ValueError, OSError):
+                continue
+    # Keep only the requested prefix in memory; never serialize the full catalog.
+    selected = heapq.nsmallest(offset + limit + 1, entries(), key=lambda item: item['path'])
+    page = selected[offset:offset + limit]
+    return dict(items=page, total=None, offset=offset,
+        next_offset=offset + limit if len(selected) > offset + limit else None)
 
 
 def _json_bytes(value: object) -> bytes:
@@ -301,22 +336,32 @@ def _experience(root: Path, scope: dict, arguments: dict) -> tuple[list[dict], l
 def _source(root: Path, arguments: dict, *, direct: bool = False) -> dict:
     """Input: vault Path/arguments dict. Output: one bounded indexed source excerpt plus full provenance."""
     path = arguments.get('path')
-    if direct and isinstance(path, str) and path.startswith('wiki/'):
-        from wqb.semantic_compilation import _safe
-        relative = Path(path)
-        if (relative.suffix.lower() != '.md' or any(part.startswith('.') for part in relative.parts)
-                or '..' in relative.parts or '\\' in path):
-            raise ValueError('DIRECT wiki source requires a safe Markdown path')
-        _safe(root, path)
-        raw = _read(root, path)
-        text = raw.decode('utf-8')
-        source = dict(path=path, source_type='compiled_wiki', knowledge_status='compiled_unreviewed',
-            captured_at=None, platform_capture=False, content_hash=hashlib.sha256(raw).hexdigest())
-    else:
-        index = _source_index(root)
-        if not isinstance(path, str) or not path.startswith('raw/') or path not in index:
-            raise ValueError('source path must reference an indexed raw source')
-        source, text = _material(root, index[path], direct=direct)
+    if direct and isinstance(path, str) and path.startswith(('raw/', 'machine/', 'wiki/')):
+        target = _vault_resource(root, path)
+        if target.suffix.lower() not in LOCAL_TEXT_SUFFIXES:
+            raise ValueError('resource is not readable text; use catalog query tools for binary indexes')
+        start, length = arguments.get('start', 0), arguments.get('length', 2000)
+        _integer(start, 'start', 0, MAX_RESOURCE_BYTES)
+        before = target.stat()
+        with target.open('r', encoding='utf-8-sig') as stream:
+            prefix = stream.read(start)
+            if len(prefix) != start:
+                raise ValueError('source start exceeds text length')
+            excerpt = stream.read(length)
+            more = bool(stream.read(1))
+        after = target.stat()
+        if (after.st_size, after.st_mtime_ns) != (before.st_size, before.st_mtime_ns):
+            raise ValueError('resource changed during read; query again')
+        end = start + len(excerpt)
+        return dict(items=[dict(source_paths=[path], source_refs=[dict(path=path,
+            source_type='local_resource', knowledge_status='unreviewed', captured_at=None,
+            platform_capture=False, excerpt_sha256=hashlib.sha256(excerpt.encode()).hexdigest())],
+            excerpt=excerpt, start=start, end=end, total_chars=None,
+            next_start=end if more else None)], total=1, offset=0, next_offset=None)
+    index = _source_index(root)
+    if not isinstance(path, str) or not path.startswith('raw/') or path not in index:
+        raise ValueError('source path must reference an indexed raw source')
+    source, text = _material(root, index[path], direct=direct)
     start, length = arguments.get('start', 0), arguments.get('length', 2000)
     if start > len(text):
         raise ValueError('source start exceeds text length')
@@ -375,7 +420,7 @@ def query_knowledge(root: Path, generation: str, scope: dict, operation: str, ar
     common = {'query', 'offset', 'limit'}
     extras = dict(fields={'field_type', 'identities'}, operators={'operator'}, templates={'template_id'},
                   experience={'mechanism_family', 'experiment_id', 'group_id', 'include_other_scopes'},
-                  source={'path', 'start', 'length'})
+                  source={'path', 'start', 'length'}, resources={'path'})
     allowed = extras[operation] | (common if operation != 'source' else set())
     if set(arguments) - allowed:
         raise ValueError('unknown query arguments: ' + ','.join(sorted(set(arguments) - allowed))
@@ -423,6 +468,10 @@ def query_knowledge(root: Path, generation: str, scope: dict, operation: str, ar
         if any(not row['evidence_refs'] or len(row['evidence_refs']) < len(set(row.get('source_paths', [])))
                for row in page['items']):
             warnings.append('field_source_evidence_unavailable: some cards lack complete indexed raw path/hash/date refs')
+    elif operation == 'resources':
+        if not direct:
+            raise ValueError('resource discovery requires direct knowledge mode')
+        page = _resources(root, arguments)
     elif operation == 'source':
         _integer(arguments.get('start', 0), 'start', 0)
         _integer(arguments.get('length', 2000), 'length', 1, MAX_EXCERPT_CHARS)

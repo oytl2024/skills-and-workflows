@@ -44,7 +44,9 @@ TOOL_CONTRACTS = {
         experiment_id='optional exact ID', include_other_scopes='optional boolean; default false',
         offset='integer >=0', limit='1..50'),
         purpose='Include failures/inconclusive results. Cross-scope results are transfer ideas, not target-scope proof.'),
-    'source': dict(arguments=dict(path='indexed raw source path', start='character offset >=0', length='1..8000'),
+    'resources': dict(arguments=dict(path='local raw/machine/wiki directory', offset='integer >=0', limit='integer 1..50'),
+        purpose='Discover local resource paths without requiring source-index admission; descend one directory at a time.'),
+    'source': dict(arguments=dict(path='local raw/machine/wiki text path in DIRECT mode; otherwise indexed raw', start='character offset >=0', length='1..8000'),
         purpose='Verified source excerpt and provenance; follow next_start for more.'),
     'validate': dict(arguments=dict(selection='[{dataset_id,field_id}]',
         design='optional one structured hypothesis', answer='optional complete answer excluding selection',
@@ -307,7 +309,7 @@ def prepare_retrieval_design(directory: Path, knowledge: Path, scope: dict, opti
         brief = dict(schema_version=1, objective=option, scope=scope, generation=generation,
             plan_depth=policy['plan_depth'], max_width=policy['initial_hypotheses'],
             measurement_period=config['measurement_period'], output_schema=deepcopy(contract['output_schema']),
-            tools=['contract', 'fields', 'operators', 'templates', 'experience', 'source', 'validate'],
+            tools=['contract', 'fields', 'operators', 'templates', 'experience', 'resources', 'source', 'validate'],
             tool_contracts=deepcopy(TOOL_CONTRACTS),
             tool_limits=deepcopy(limits),
             excluded_selections=deepcopy(config.get('retrieval_excluded_selections', [])),
@@ -437,7 +439,7 @@ def retrieval_projection(directory: Path) -> dict:
         excluded_selections=brief['excluded_selections'],
         tool_limits=brief['tool_limits'],
         query_command=command + ['query', '--task-dir', str(Path(directory).absolute()),
-            '--operation', '<contract|fields|operators|templates|experience|source|validate>', '--arguments', '<JSON object>'],
+            '--operation', '<contract|fields|operators|templates|experience|resources|source|validate>', '--arguments', '<JSON object>'],
         stdio_hint='For a windowed helper in PowerShell, pipe its command to Out-String to wait and capture UTF-8 JSON.',
         references=dict(output_schema='/brief/output_schema', composition_contract='/brief/composition_contract',
                         instructions='/brief/instructions', tool_contracts='/brief/tool_contracts'))
@@ -524,7 +526,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('command', choices=['query', 'mcp'])
     parser.add_argument('--task-dir', required=True, type=Path)
     parser.add_argument('--operation',
-                        choices=['contract', 'fields', 'operators', 'templates', 'experience', 'source', 'validate'])
+                        choices=['contract', 'fields', 'operators', 'templates', 'experience', 'resources', 'source', 'validate'])
     parser.add_argument('--arguments', default='{}')
     args = parser.parse_args(argv)
     if args.command == 'query' and args.operation is None:

@@ -14,6 +14,25 @@ budgets as other queries. They cannot read arbitrary paths, grant new authority
 or trigger a platform/model retry. This fixes the Nov25 bootstrap mismatch,
 not missing field resources or a reason to capture knowledge again.
 
+Nov25 planning feedback: DIRECT resource reads expose local raw/machine/wiki
+text without source-index admission. `resources(path,offset,limit)` lists one
+directory; `source(path,start,length)` reads a bounded UTF-8 page, including large
+machine JSONL without loading the full file. Paths cannot escape the vault or
+read secrets, links, profiles or binary files. An excerpt hash is not a full-file
+hash or semantic certification. Missing/empty optional material is not a stop rule.
+Manual Multiplier does not require automated Theme-eligibility confirmation.
+
+Before returning a draft, AI uses full-tree `validate`. The worker also validates
+returned output; known invalid JSON/schema/AST/type/tree drafts receive diagnostics
+and the prior draft for correction, at most three returned drafts per checkpoint.
+All rounds share the original 600-second total deadline and owner query/byte limits,
+not three independent time budgets. The cap is MAX_PLANNING_DRAFTS in codex_ai_worker.py.
+Timeout, nonzero process exit, lost transport or unknown outcome never replay.
+Exhaustion produces a known `planning_incomplete` answer, not executable inputs.
+Console preserves it as planning feedback without sending a code-maintenance
+notification. Actual infrastructure/integrity/unknown failures remain event-routed.
+No live research or final submission is triggered by correction or exhaustion.
+
 New frozen `knowledge_catalog_v1` contexts expose source-backed catalog resources
 without requiring a published economic-semantic interpretation. Missing meaning,
 polarity, timing or grain is explicitly unknown, not a reason to hide an identity
@@ -28,7 +47,7 @@ With retrieval_design_version=1, one read-only planning task per lane searches
 generation-bound local tools and may correct drafts before final output. The
 task owner enforces cumulative tool/validation/response limits and records compact
 progress. Scripts resolve exact selected resources/history, compile and seal them
-through the existing coordinator without a second model call. After sealing,
+through the existing coordinator; bounded initial-draft correction is described above. After sealing,
 tree branching/Seed/Repair remain script-owned and use frozen scientific inputs.
 No capture, late model plan, budget renewal or Alpha submission follows from a
 query or validated draft. Installed acceptance belongs to root todo.md.
