@@ -115,3 +115,10 @@ exit explicitly rather than opening a blocking windowed error dialog.
 
 Sources: [Codex MCP configuration](https://developers.openai.com/codex/mcp/) and
 [MCP stdio specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports).
+
+Offline acceptance:79 current affected checks,5 packaged checks (MCP protocol,
+scope rejection/budget feedback, readonly sandbox, valid/invalid model output),
+and24 architecture/entry-document checks. Earlier107 checks overlap; none is a
+full-suite or live model guarantee. Installed code and actual Start action were
+verified. New build/test-remnant cleanup was policy-rejected before execution;
+temporary outputs remain, not the knowledge vault. No bypass was attempted.
