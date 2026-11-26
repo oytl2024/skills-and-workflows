@@ -128,7 +128,7 @@ not changed by relabeling an unknown task as completed.
 - [x] **4. Deterministic Repair integration.** Frozen wrapper/literal/settings grids use shared compiler and existing receipts/comparison/batch runtime. Mocked tree->Seed->AST Repair->qualified candidate passes; unknown-POST dedup, direction, signed literals, finite exhaustion tested.
 - [x] **5. Bounded diagnostics and lifecycle.**32-record/64KB diagnostic ring, latest draft/feedback and structured faults implemented. Existing owned cancellable transport reused; timeout never retries. Scoped feedback/transport/Stop tests pass.
 - [x] **6. Packaged offline acceptance.**136 scoped regressions plus9 real EXE tests passed. Includes generic native checkpoint and MCP client, frozen compiler self-test and separate current-local-resource/source-owner check. Mocked complete driver verifies tree->Seed->AST Repair->candidate; this is not live-platform acceptance.
-- [ ] **7. Delivery.** Update current toolchain/user/AI docs and root architecture/handoff, commit/push intended public files, verify remote equality, deploy and audit only approved disposable outputs. Do not remove sensitive or previously policy-rejected paths. Report implemented behavior, coverage limits and remaining gaps accurately.
+- [x] **7. Delivery.** Feature79c8895 synced to GitHub before audited installer replacement; accepted bundle installed and health source7988b25c verified. Root handoff/architecture, toolchain and user guide updated. Only old public installed bundle retired; no sensitive/rejected-path deletion. Original unknown Start remains excluded; no live-research success claim.
 
 ## Acceptance And Scope
 
