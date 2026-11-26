@@ -515,6 +515,12 @@ def _finite_number(value: object) -> bool:
 
 def _check_schema(schema: dict, value: object) -> None:
     """Input: schema/value. Output: None. Validate the schema subset without a new dependency."""
+    if schema == {}:
+        try:
+            json.dumps(value,allow_nan=False)
+        except (TypeError,ValueError,RecursionError) as error:
+            raise ValueError('expected finite JSON value') from error
+        return
     if 'anyOf' in schema:
         for branch in schema['anyOf']:
             try:

@@ -15,7 +15,8 @@ QUERY_TOOL = dict(name='query', description='Read exact-scope local knowledge or
     'composition_contract, tool_contracts and output_schema sections (follow next_start). '
     'Discover local raw/machine/wiki paths with resources; source reads paged text with {"path":"relative path"}, '
     'NOT source_path or website URLs. Missing optional knowledge is feedback, not a command to stop. '
-    'Use validate diagnostics to correct drafts before final output. No platform calls.',
+    'Use compile for structural AST construction in expression-tool mode, then validate the full tree. '
+    'Correct diagnostics before final output. No platform calls.',
     inputSchema=dict(type='object', properties=dict(
         operation=dict(type='string', enum=sorted(OPERATIONS)),
         arguments_json=dict(type='string', maxLength=MAX_ARGUMENT_BYTES, description='JSON object using task.tool_contracts.')),

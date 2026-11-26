@@ -27,8 +27,10 @@ CONFIG_KEYS = ('instrument_type', 'region', 'delay', 'universe', 'decay', 'neutr
     'truncation', 'pasteurization', 'unit_handling', 'nan_handling', 'language',
     'measurement_period', 'research_policy', 'repair_search_policy', 'direct_knowledge_version',
     'retrieval_excluded_selections', 'retrieval_owner', 'retrieval_max_queries',
-    'retrieval_max_validations', 'retrieval_max_returned_bytes')
+    'retrieval_max_validations', 'retrieval_max_returned_bytes', 'expression_tool_version')
 TOOL_CONTRACTS = {
+    'compile': dict(arguments=dict(expression='structural AST object, not a formula string'),
+        purpose='New expression-tool mode: build/type-check a scoped expression and return its receipt/diagnostics.'),
     'contract': dict(arguments=dict(section='overview|composition_contract|tool_contracts|output_schema',
         start='character offset >=0', length='integer 1..8000'),
         purpose='Task-owned planning rules, not raw/wiki sources. Read these before constructing a plan.'),
@@ -55,15 +57,24 @@ TOOL_CONTRACTS = {
 }
 
 
-def design_schema() -> dict:
+def design_schema(*, expression_tool: bool = False) -> dict:
     """Input: none. Output: strict complete-tree schema plus exact selected field identities."""
     from wqb.initial_research_planning import _output_schema, _annotation_schema
-    schema = _output_schema(2, include_vector=True)
+    if expression_tool:
+        from wqb.expression_planning import output_schema
+        schema = output_schema()
+    else:
+        schema = _output_schema(2, include_vector=True)
     text = {'type': 'string'}
     schema['properties']['selection'] = dict(type='array', minItems=0, maxItems=MAX_SELECTION,
         items=dict(type='object', properties=dict(dataset_id=text, field_id=text),
                    required=['dataset_id', 'field_id'], additionalProperties=False))
     schema['properties']['data_characteristics'] = _annotation_schema()
+    if expression_tool:
+        item=schema['properties']['data_characteristics']['items']['properties']
+        item['hypotheses']['items']['properties']['trait_key']={'type':'string'}
+        item['known_trait_keys']['items']={'type':'string'}
+        item['unknown_trait_keys']['items']={'type':'string'}
     schema['properties']['history_selection'] = dict(type='array', maxItems=MAX_HISTORY_SELECTION,
         items=dict(type='object', properties=dict(group_id=text,
             view_sha256=dict(type='string', pattern='^[a-f0-9]{64}$')),
@@ -188,6 +199,9 @@ def _resolved_context(task: dict, selection: list[tuple[str, str]], refs: list[d
         identity['scope'], selection, generation=identity['generation'], settings=build_settings(
             {**config, **{key: identity['scope'][key] for key in ('instrument_type', 'region', 'delay', 'universe')}}),
         **(dict(direct_knowledge_version=1) if direct else {}))
+    from wqb.expression_planning import expression_mode
+    if expression_mode(config):
+        resources['expression_tool_version']=1
     if refs:
         resources = _attach_cited_sources(Path(identity['knowledge_root']), resources, refs)
     repair = _repair_policy(resources, config.get('repair_search_policy'))
@@ -240,7 +254,17 @@ def _resolve_answer(task: dict, answer: dict) -> dict:
     _check_schema(task['brief']['output_schema'], answer)
     if not answer['designs'] or not answer['tree']['nodes']:
         raise ValueError('model_returned_no_plan: ' + answer['summary'][:1000])
-    resources, annotation, repair = _resolved_context(task, _identities(answer), _design_source_refs(answer['designs']))
+    from wqb.expression_planning import expression_mode, selected_fields
+    generic=expression_mode(identity['config'])
+    if generic:
+        answer=dict(answer,selection=selected_fields(answer['designs']))
+    resources, annotation, repair = _resolved_context(task, _identities(answer), [] if generic else _design_source_refs(answer['designs']))
+    if generic:
+        from wqb.preplanned_start import _repair_policy
+        from wqb.initial_research_planning import _annotation_context
+        resources['expression_repair_recipes']=[deepcopy(design['repair_recipe']) for design in answer['designs']]
+        repair=_repair_policy(resources,identity['config'].get('repair_search_policy'))
+        annotation=_annotation_context(resources,dict(start_snapshot=dict(repair_search_policy=repair)))
     selected_context = _selected_history(task, answer['history_selection'])
     if selected_context['groups']:
         from wqb.semantic_compilation import _mechanism_summary
@@ -287,7 +311,9 @@ def prepare_retrieval_design(directory: Path, knowledge: Path, scope: dict, opti
     selected_config = {key: deepcopy(config[key]) for key in CONFIG_KEYS if key in config}
     from wqb.research_tool_service import tool_limits
     limits = tool_limits(selected_config)
-    contract = dict(version=1, output_schema=design_schema(), tools=deepcopy(TOOL_CONTRACTS), tool_limits=limits)
+    from wqb.expression_planning import expression_mode, COMPOSITION_CONTRACT
+    generic=expression_mode(config)
+    contract = dict(version=1, output_schema=design_schema(expression_tool=generic), tools=deepcopy(TOOL_CONTRACTS), tool_limits=limits)
     identity = dict(schema_version=1, knowledge_root=str(knowledge), scope=deepcopy(scope),
         objective=deepcopy(option), generation=generation, policy=policy, config=selected_config,
         design_contract=contract)
@@ -309,11 +335,11 @@ def prepare_retrieval_design(directory: Path, knowledge: Path, scope: dict, opti
         brief = dict(schema_version=1, objective=option, scope=scope, generation=generation,
             plan_depth=policy['plan_depth'], max_width=policy['initial_hypotheses'],
             measurement_period=config['measurement_period'], output_schema=deepcopy(contract['output_schema']),
-            tools=['contract', 'fields', 'operators', 'templates', 'experience', 'resources', 'source', 'validate'],
+            tools=['contract', 'fields', 'operators', 'templates', 'experience', 'resources', 'source', 'compile', 'validate'],
             tool_contracts=deepcopy(TOOL_CONTRACTS),
             tool_limits=deepcopy(limits),
             excluded_selections=deepcopy(config.get('retrieval_excluded_selections', [])),
-            composition_contract=initial.__doc__,
+            composition_contract=COMPOSITION_CONTRACT if generic else initial.__doc__,
             instructions=('Research meaning, mechanisms, conditions, alternatives and falsifiable experiments. '
                 'Retrieve relevant templates and historical evidence; report absence honestly. '
                 'Unknown traits remain unknown. Select exact fields, explicitly choose VECTOR reductions, '
@@ -385,6 +411,18 @@ def _query_design_task_local(directory: Path, operation: str, arguments: dict) -
             or len(json.dumps(arguments, ensure_ascii=False).encode()) > MAX_TOOL_ARGUMENT_BYTES):
         raise ValueError('oversized or invalid local query arguments')
     identity = task['identity']
+    if operation == 'compile':
+        from wqb.expression_planning import expression_mode, selected_fields
+        from wqb.expression_tools import compile_expression
+        try:
+            if not expression_mode(identity['config']) or set(arguments) != {'expression'}:
+                raise ValueError('compile requires expression_tool_version1 and expression argument')
+            fields=selected_fields([dict(baseline=arguments['expression'])])
+            resources,context,_=_resolved_context(task,_identities(dict(selection=fields)))
+            result=compile_expression(arguments['expression'],resources,identity['scope'])
+            return dict(result,annotation_context=context,authority='offline_only')
+        except (ValueError,TypeError,KeyError,OSError) as error:
+            return dict(valid=False,diagnostics=[dict(code=type(error).__name__,path='$',message=str(error))],authority='offline_only')
     if operation != 'validate':
         from wqb.research_queries import query_knowledge
         return query_knowledge(Path(identity['knowledge_root']), identity['generation'],
@@ -395,10 +433,12 @@ def _query_design_task_local(directory: Path, operation: str, arguments: dict) -
         if set(arguments) - {'selection', 'design', 'answer', 'history_selection'} or (
                 'design' in arguments and 'answer' in arguments):
             raise ValueError('unknown or conflicting draft validation arguments')
-        selection = _identities(arguments)
         designs = ([arguments['design']] if 'design' in arguments else
                    arguments.get('answer', {}).get('designs', []))
-        resources, context, _ = _resolved_context(task, selection, _design_source_refs(designs))
+        from wqb.expression_planning import expression_mode,selected_fields,normalize_design
+        generic=expression_mode(identity['config'])
+        selection = _identities(dict(selection=selected_fields(designs))) if generic and designs else _identities(arguments)
+        resources, context, _ = _resolved_context(task, selection, [] if generic else _design_source_refs(designs))
         selected_context = _selected_history(task, arguments.get('history_selection', []))
         if selected_context['groups']:
             from wqb.semantic_compilation import _mechanism_summary
@@ -408,12 +448,13 @@ def _query_design_task_local(directory: Path, operation: str, arguments: dict) -
             from wqb.hypothesis_design import validate_hypothesis_design
             from wqb.semantic_contracts import SemanticPolicy
             from wqb.exploration_eligibility import validate_exploration
-            normalized = validate_hypothesis_design(dict(summary='Offline proposed experiment.',
-                designs=[arguments['design']]), resources['evidence_pack'], SemanticPolicy())['designs'][0]
+            normalized = (normalize_design(arguments['design']) if generic else
+                validate_hypothesis_design(dict(summary='Offline proposed experiment.',
+                    designs=[arguments['design']]), resources['evidence_pack'], SemanticPolicy())['designs'][0])
             receipt = validate_exploration(normalized, resources, identity['scope'])
             expressions = [arm['binding']['bound_expression'] for arm in receipt['compiled']['experiment']['arms']]
         elif 'answer' in arguments:
-            _resolve_answer(task, dict(arguments['answer'], selection=arguments['selection']))
+            _resolve_answer(task, dict(arguments['answer'], selection=arguments.get('selection',[])))
             expressions = []
         else:
             expressions = []
@@ -439,7 +480,7 @@ def retrieval_projection(directory: Path) -> dict:
         excluded_selections=brief['excluded_selections'],
         tool_limits=brief['tool_limits'],
         query_command=command + ['query', '--task-dir', str(Path(directory).absolute()),
-            '--operation', '<contract|fields|operators|templates|experience|resources|source|validate>', '--arguments', '<JSON object>'],
+            '--operation', '<contract|fields|operators|templates|experience|resources|source|compile|validate>', '--arguments', '<JSON object>'],
         stdio_hint='For a windowed helper in PowerShell, pipe its command to Out-String to wait and capture UTF-8 JSON.',
         references=dict(output_schema='/brief/output_schema', composition_contract='/brief/composition_contract',
                         instructions='/brief/instructions', tool_contracts='/brief/tool_contracts'))
@@ -526,7 +567,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('command', choices=['query', 'mcp'])
     parser.add_argument('--task-dir', required=True, type=Path)
     parser.add_argument('--operation',
-                        choices=['contract', 'fields', 'operators', 'templates', 'experience', 'resources', 'source', 'validate'])
+                        choices=['contract', 'fields', 'operators', 'templates', 'experience', 'resources', 'source', 'compile', 'validate'])
     parser.add_argument('--arguments', default='{}')
     args = parser.parse_args(argv)
     if args.command == 'query' and args.operation is None:

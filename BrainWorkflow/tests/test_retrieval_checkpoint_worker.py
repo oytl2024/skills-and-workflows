@@ -25,11 +25,11 @@ class RetrievalCheckpointWorkerTests(unittest.TestCase):
                 reverse=dict(type='object', properties=dict(baseline=dict(type='string')),
                     required=[], additionalProperties=False)),
                 required=['summary', 'selection'], additionalProperties=False)
-            task = dict(brief=dict(output_schema=schema))
+            task = dict(brief=dict(output_schema=schema),identity=dict(config={}))
             answer = dict(summary='An offline plan.', selection=['field'], reverse={})
             commands = []
 
-            def execute(argv, **kwargs):
+            def execute(argv, *args):
                 """Input: owned Codex argv/options. Output: fake successful process and strict answer file."""
                 commands.append(argv)
                 from tests.test_model_schema_transport import assert_closed_provider_objects, wire_answer
@@ -42,7 +42,7 @@ class RetrievalCheckpointWorkerTests(unittest.TestCase):
                     patch.object(planning, 'query_design_task', return_value=dict(valid=True)), \
                     patch.object(planning, 'retrieval_projection', return_value=dict(query_command=['local-query'])), \
                     patch.object(worker.shutil, 'which', return_value='codex'), \
-                    patch.object(worker.subprocess, 'run', side_effect=execute):
+                    patch('wqb.ai_checkpoints._run_cancellable', side_effect=execute):
                 result = worker.run_worker(input_path, input_path.parent / 'result.json')
             self.assertEqual(result, answer)
             self.assertIn('read-only', commands[0])

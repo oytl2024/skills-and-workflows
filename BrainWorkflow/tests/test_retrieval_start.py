@@ -9,6 +9,52 @@ from tests import test_preplanned_start as fixtures
 
 
 class RetrievalStartTests(unittest.TestCase):
+    def test_expression_tool_plan_freezes_with_script_derived_identities(self):
+        from wqb.preplanned_start import prepare_preplanned_start
+        from wqb.retrieval_research_planning import query_design_task
+        config=deepcopy(self.config)
+        config['expression_tool_version']=1
+        config['research_policy']['expression_tool_version']=1
+        calls=[]
+        def model(directory,brief):
+            number=int(directory.name.rsplit('-',1)[1])
+            source=self.fixture.resources[number]['field_rows'][0]
+            node=dict(kind='field',dataset_id=source['dataset_id'],field_id=source['field_id'])
+            compiled=query_design_task(directory,'compile',dict(expression=node))
+            self.assertTrue(compiled['valid'],compiled)
+            calls.append(compiled['expression'])
+            answer=dict(summary='A hypothesis. A competing explanation.',selection=[],history_selection=[],
+                data_characteristics=[],designs=[dict(design_version=4,hypothesis='Multiple sentences.\nUnknown timing is not a rejection.',
+                    baseline=node,treatment=dict(kind='binary',operator='*',left=node,right=dict(kind='literal',value=0.5)),
+                    repair_recipe=dict(rules=[dict(edit='wrap',template=dict(kind='call',operator='ts_delta',
+                        args=[dict(kind='parent'),dict(kind='parameter')],kwargs={}),grid=[5,22],
+                        target_metric='fitness',target_direction='increase')]))],
+                tree=dict(roots=['r'],nodes=[dict(node_id='r',parent_id=None,parent_arm_id=None,design_index=0,
+                    targets=dict(baseline=[],treatment=[]),fallback=[],reverse={})]))
+            checked=query_design_task(directory,'validate',dict(selection=[],answer=answer))
+            self.assertTrue(checked['valid'],checked)
+            return answer
+        result=prepare_preplanned_start(self.fixture.paths,self.fixture.option,self.fixture.authority,config,
+            model_runner=lambda _:self.fail('legacy model'),retrieval_model_runner=model)
+        self.assertEqual(result['status'],'completed',result)
+        self.assertTrue(calls)
+        from wqb.execution_package import load_execution_context
+        run=self.fixture.paths.run_root/result['group']['lanes'][0]['run_id']
+        with patch('wqb.exploration_eligibility._validate_operational_exploration_sources',
+                side_effect=AssertionError('sealed execution must not reopen global knowledge')):
+            frozen=load_execution_context(run)
+        self.assertEqual(frozen['experiments'][0]['expression_tool_version'],1)
+        from wqb.repair_search import prepare_persisted_search,verify_persisted_search
+        from wqb.cli import simulation_identity_hash
+        arm=frozen['experiments'][0]['arms'][1]
+        parent=dict(alpha_id='offline-seed',expression=arm['binding']['bound_expression'],settings=arm['settings'],
+            status='CHECKED',metrics=dict(sharpe=1.4,fitness=.8,turnover=.3),failed=['LOW_FITNESS'],pending=[],hard_pass=False)
+        parent['expression_hash']=simulation_identity_hash(parent['expression'],parent['settings'])
+        plan=prepare_persisted_search(run,parent,[],8)
+        self.assertTrue(plan['variants'],plan)
+        self.assertEqual(plan['decision']['edit'],'transform')
+        self.assertEqual(verify_persisted_search(run,plan),plan)
+
     def test_contract_bootstrap_is_separate_from_knowledge_sources(self):
         from wqb.preplanned_start import prepare_preplanned_start
         from wqb.retrieval_research_planning import query_design_task

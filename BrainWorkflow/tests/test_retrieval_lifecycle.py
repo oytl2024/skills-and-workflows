@@ -64,7 +64,7 @@ class RetrievalLifecycleTests(unittest.TestCase):
         self.enterContext(patch('socket.create_connection', side_effect=AssertionError('offline: no network')))
         self.enterContext(patch('wqb.research_group_driver.SOURCE_MULTI_CHUNK_SLEEP_SECONDS', 0))
 
-    def prepare(self, *, weak=False, qualified=False):
+    def prepare(self, *, weak=False, qualified=False, generic=False):
         """Input: weak/qualified bools. Output: real sealed/resumed lane Path with identity-bound HTTP metrics."""
         from wqb.preplanned_start import prepare_preplanned_start
         from wqb.research_group_driver import initialize_group_runtime
@@ -72,10 +72,30 @@ class RetrievalLifecycleTests(unittest.TestCase):
         from wqb.runtime_control import request_runtime_state
         from wqb.research_tree import _load
         from wqb.cli import simulation_identity_hash
+        model=self.retrieval.model
+        if generic:
+            self.retrieval.config['expression_tool_version']=1
+            self.retrieval.config['research_policy']['expression_tool_version']=1
+            def model(directory,brief):
+                """Input: local task/brief. Output: generic vector tree and finite AST Repair, never a real model call."""
+                from wqb.retrieval_research_planning import query_design_task
+                self.retrieval.calls.append(str(directory))
+                source=self.fixture.resources[0]['field_rows'][0]
+                vector=dict(kind='field',dataset_id=source['dataset_id'],field_id=source['field_id'])
+                baseline=dict(kind='call',operator='vec_avg',args=[vector],kwargs={})
+                treatment=dict(kind='call',operator='ts_delta',args=[deepcopy(baseline),dict(kind='literal',value=22)],kwargs={})
+                self.assertTrue(query_design_task(directory,'compile',dict(expression=treatment))['valid'])
+                return dict(summary='A possible mechanism. An alternative remains open.',selection=[],history_selection=[],data_characteristics=[],
+                    designs=[dict(design_version=4,hypothesis='Use a hypothetical attention mechanism.\nCadence is unknown.',
+                        baseline=baseline,treatment=treatment,repair_recipe=dict(rules=[dict(edit='wrap',
+                            template=dict(kind='call',operator='ts_delta',args=[dict(kind='parent'),dict(kind='parameter')],kwargs={}),
+                            grid=[5,22],target_metric='fitness',target_direction='increase')]))],
+                    tree=dict(roots=['r'],nodes=[dict(node_id='r',parent_id=None,parent_arm_id=None,design_index=0,
+                        targets=dict(baseline=[],treatment=[]),fallback=[],reverse={})]))
         result = prepare_preplanned_start(self.fixture.paths, self.fixture.option,
             self.fixture.authority, self.retrieval.config,
             model_runner=lambda *_: self.fail('legacy model called'),
-            retrieval_model_runner=self.retrieval.model)
+            retrieval_model_runner=model)
         self.assertEqual(result['status'], 'completed', result)
         group = initialize_group_runtime(self.fixture.paths, result['group'])
         self.run = self.fixture.paths.run_root / group['lanes'][0]['run_id']
@@ -111,6 +131,10 @@ class RetrievalLifecycleTests(unittest.TestCase):
                 payloads = kwargs['json']
                 for payload in payloads if isinstance(payloads, list) else [payloads]:
                     settings = payload['settings']
+                    identity=simulation_identity_hash(payload['regular'],settings)
+                    if generic and identity not in self.transport.metrics:
+                        self.transport.metrics[identity]=dict(sharpe=1.8,fitness=1.2 if qualified else .8,
+                            turnover=.15,returns=.12)
                     if settings['decay'] in REPAIR_GRID:
                         parent = simulation_identity_hash(payload['regular'], dict(settings, decay=4))
                         identity = simulation_identity_hash(payload['regular'], settings)
@@ -135,6 +159,21 @@ class RetrievalLifecycleTests(unittest.TestCase):
         self.assertEqual(len(set(self.transport.posted)), len(self.transport.posted))
         self.assertEqual(len(self.retrieval.calls), 1)
         self.assertFalse(any(path.endswith('/submit') for _, path in self.transport.calls))
+
+    def test_generic_tree_seed_ast_repair_qualified_candidate_closed_loop(self):
+        """Input: new AST planning and mocked HTTP. Output: actual driver Seed/AST Repair/check cache without final submission."""
+        run=self.prepare(generic=True,qualified=True)
+        result=self.driver.drive(run)
+        self.assertEqual(result['status'],'waiting_for_user',result)
+        selection=json.loads((run/'stages/scout_seed/seed_selection.json').read_text())
+        self.assertTrue(selection['selected'],selection)
+        repair=json.loads((run/'stages/repair/repair_execution.json').read_text())
+        attempts=[attempt for attempt in repair['attempts'] if attempt.get('children')]
+        self.assertTrue(attempts,repair)
+        self.assertTrue(any(attempt['plan']['decision']['edit']=='transform' for attempt in attempts))
+        self.assertTrue(any(attempt.get('experiment_trace',{}).get('outcome')=='accepted' for attempt in attempts),attempts)
+        self.assertTrue(list((self.fixture.paths.knowledge_root/'machine/candidate_evidence').glob('*.json')))
+        self.assert_accounting()
 
     def test_vector_retrieval_driver_selects_seed_and_exhausts_finite_repair(self):
         """Input: real retrieval package/near-miss HTTP. Output: measured Seed, finite Repair and durable record."""

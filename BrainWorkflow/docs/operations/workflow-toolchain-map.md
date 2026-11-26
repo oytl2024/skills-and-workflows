@@ -25,6 +25,32 @@ weaken Stop, exact scope, source dates, accounting or submission authorization.
 
 ## Research Path
 
+### Expression Tool Mode
+
+New Starts use explicit `expression_tool_version=1`; old frozen runs are not
+reinterpreted. AI reads knowledge, proposes unrestricted economic prose and
+structural `design_version=4` baseline/treatment ASTs. The budgeted `compile`
+operation calls `expression_tools.compile_expression` ->
+`template_binding.bind_technical_template`; the same binder checks types, arity
+and supported grammar without semantic approval. `validate` checks the full tree.
+`expression_planning.compile_design` adapts those receipts to the existing
+exploration/compiler/package interfaces. Scripts derive field identities and
+facts; AI assumptions remain assumptions. No mandatory reviewed-template family.
+
+After sealing, `expression_repair` policy3 uses frozen wrapper templates, literal
+paths and finite setting grids. `repair_search` retains the existing persistent
+receipts, comparison, rollback, dedup and batch execution. New fields and late
+model formulas are not Repair. Invalid recipes return planning diagnostics.
+Syntax is nested named calls/kwargs, literals, unary +/- and binary +,-,*,/;
+not complete BRAIN language. Unknown signatures produce per-call diagnostics,
+not a global resource gate. Audited current context:104 visible operators,8 typed;
+the107 identity ledger rows are not executable signature coverage.
+
+Task-local diagnostics retain32 bounded records (<=64KB), hashes/counters and
+short diagnostics, not raw arguments/catalogs. Latest failed draft and feedback
+are overwritten in place. Cancellable worker transport owns children; timeout
+records exception/deadline and preserves unknown outcome, never retries blindly.
+
 | Step | Concrete tool/function | Persistent boundary / external activity |
 | --- | --- | --- |
 | Open desktop | BrainWorkflow.vbs/cmd -> desktop_application.main -> launch_application -> ensure_backend | local EXE/WebView2/backend only |

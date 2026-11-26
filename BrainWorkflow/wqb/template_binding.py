@@ -229,12 +229,12 @@ def bind_template(template: dict, field_rows: list[dict], operator_rows: list[di
 
 
 def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[dict], scope: dict,
-                   resource_version: int = 1, evidence_context: dict | None = None) -> dict:
+                   resource_version: int = 1, evidence_context: dict | None = None, *, technical_only: bool = False) -> dict:
     """Input: snapshot dictionaries. Output: dict. Validate version and perform conservative typed AST binding."""
     version = template.get('binding_version', 1)
     if type(version) is not int or version not in (1, 2):
         raise TemplateBindingError('unsupported binding_version')
-    catalog_mode = knowledge_catalog_admission(evidence_context or {})
+    catalog_mode = technical_only or knowledge_catalog_admission(evidence_context or {})
     if catalog_mode and (version != 2 or resource_version != 2):
         raise TemplateBindingError('catalog admission requires typed binding and resource version 2')
     if version == 1:
@@ -287,14 +287,14 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
             if result['status'] != 'supported':
                 raise TemplateBindingError(f'{name}: unsupported definition basis: {result["rejections"]}')
             receipts[name] = result['value']
-        definitions[name] = operator_definition_from_dict(row['definition'])
-        if catalog_mode:
+        definitions[name] = operator_definition_from_dict(row['definition'], technical_only=technical_only)
+        if catalog_mode and not technical_only:
             if isinstance(evidence_context, dict) and {'source_index', 'source_texts'} <= evidence_context.keys():
                 definitions[name] = catalog_operator_definition(row, evidence_context['source_index'], evidence_context['source_texts'])
-            if project:
-                if name != PROJECT_WINDOW_POLICY['operator']:
-                    raise TemplateBindingError('project window policy does not match operator identity')
-                parameter_policies[name] = PROJECT_WINDOW_POLICY
+        if catalog_mode and project:
+            if name != PROJECT_WINDOW_POLICY['operator']:
+                raise TemplateBindingError('project window policy does not match operator identity')
+            parameter_policies[name] = PROJECT_WINDOW_POLICY
         return definitions[name]
 
     for slot in slots:
@@ -420,3 +420,13 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
             bindings[slot.name]['timing_receipt'] = timing[slot.name]
     return dict(bound_expression=ast.unparse(ast.fix_missing_locations(bound)), bindings=bindings,
                 operator_provenance=provenance, operator_call_count=len(provenance))
+
+
+def bind_technical_template(template: dict, field_rows: list[dict], operator_rows: list[dict], scope: dict) -> dict:
+    """Input: script-constructed v2 template/technical resources/scope. Output: typed binding, without semantic publication gates."""
+    try:
+        return _bind_template(template, field_rows, operator_rows, scope, 2, technical_only=True)
+    except TemplateBindingError:
+        raise
+    except (ValueError, TypeError, KeyError, AttributeError, SyntaxError, RecursionError) as error:
+        raise TemplateBindingError('invalid technical binding: ' + str(error)) from error

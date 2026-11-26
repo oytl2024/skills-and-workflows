@@ -1,5 +1,16 @@
 # Minimum Product Storage
 
+## Nov26 Installation Audit
+
+After verified Git sync, the existing desktop installer replaces only
+`BrainWorkflow/output/desktop-application/installed/BrainWorkflow` with the
+accepted `20261126-095101-3662/dist space 中文/BrainWorkflow` bundle. Installer
+verifies literal containment, no links, no owning processes, copied hashes and
+acceptance revision before retiring its temporary `.previous` bundle. This is
+reproducible public product output, not research/session evidence. Preserve the
+accepted build and current installation. No other deletion in this update;
+knowledge, runs, credentials/profiles and previously rejected paths are excluded.
+
 Approved Nov24: fresh-start product, not historical mission recovery.
 Keep raw platform/community facts, compiled machine resources and wiki experience,
 current app/source/config/launchers, Git, focused tests and short current docs.

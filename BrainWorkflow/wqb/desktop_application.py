@@ -236,12 +236,23 @@ def self_test() -> dict:
         learn_ready = '- Description: Rank & normalize.' in rendered
     except (ImportError, ValueError, TypeError, KeyError):
         learn_ready = False
+    try:
+        from wqb.expression_tools import compile_expression
+        from wqb.expression_repair import compile_policy, prepare_search
+        scope = dict(instrument_type='EQUITY', region='USA', delay=1, universe='TOP3000')
+        resources = dict(scope=scope, operator_rows=[], field_rows=[dict(scope,
+            dataset_id='offline', field_id='offline_signal', field_type='MATRIX')])
+        compiled = compile_expression(dict(kind='field', dataset_id='offline', field_id='offline_signal'), resources, scope)
+        expression_ready = compiled['valid'] and compiled['expression'] == 'offline_signal' and compile_policy(resources, [])['schema_version'] == 3
+    except (ImportError, ValueError, TypeError, KeyError):
+        expression_ready = False
     return {"schema_version": 1, "frozen": bool(getattr(sys, "frozen", False)),
             "code_revision": LOADED_CODE_REVISION, "source_file_count": len(sources),
             "source_identity_valid": bool(sources) and LOADED_CODE_REVISION != hashlib.sha256(b"").hexdigest(),
             "frontend_ready": (root / "frontend" / "dist" / "index.html").is_file(),
             "repair_rulebook_id": rulebook_id, "repair_rulebook_ready": rulebook_ready,
             "learn_rendering_ready": learn_ready,
+            "expression_tools_ready": expression_ready,
             "backend_started": False, "native_bridge": False,
             "worker_modules": sorted(WORKER_MODULES)}
 
@@ -271,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
         if sys.stdout is not None:
             print(payload, end="")
         return 0 if (diagnostics["source_identity_valid"] and diagnostics['repair_rulebook_ready']
-                     and diagnostics['learn_rendering_ready']) else 1
+                     and diagnostics['learn_rendering_ready'] and diagnostics['expression_tools_ready']) else 1
     config = None
     try:
         workspace = (args.workspace_root or default_workspace()).resolve()

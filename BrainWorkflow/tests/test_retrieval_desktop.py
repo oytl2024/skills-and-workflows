@@ -25,6 +25,27 @@ class RetrievalDesktopTests(unittest.TestCase):
                 capture_output=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(json.loads(output.read_text(encoding='utf-8'))['learn_rendering_ready'])
+            self.assertTrue(json.loads(output.read_text(encoding='utf-8'))['expression_tools_ready'])
+
+    def test_generic_plan_uses_native_query_client_and_seals_repair(self):
+        """Input: frozen query client/source owner. Output: complete generic plan and persisted AST Repair, no actual model/API."""
+        from tests.test_retrieval_start import RetrievalStartTests
+        host = RetrievalStartTests()
+        host.setUp()
+        self.addCleanup(host.doCleanups)
+        calls = []
+        def native(directory, operation, arguments):
+            """Input: owning task and tool request. Output: real packaged client reply using the same owner budget."""
+            result = subprocess.run([DESKTOP_EXE, '--worker-module', 'wqb.retrieval_research_planning',
+                'query', '--task-dir', str(directory), '--operation', operation,
+                '--arguments', json.dumps(arguments)], capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls.append(operation)
+            return json.loads(result.stdout)
+        with patch('wqb.retrieval_research_planning.query_design_task', side_effect=native):
+            host.test_expression_tool_plan_freezes_with_script_derived_identities()
+        self.assertIn('compile', calls)
+        self.assertIn('validate', calls)
 
     @unittest.skipUnless(os.environ.get('WQB_TEST_SOURCE_TASK'), 'set saved local source task for real-resource acceptance')
     def test_packaged_validation_reads_current_local_operator_receipts(self):
@@ -135,7 +156,7 @@ class RetrievalDesktopTests(unittest.TestCase):
             host.config, model_runner=lambda _: self.fail('legacy model'), retrieval_model_runner=model)
         self.assertEqual(result['status'], 'completed', result)
 
-    def _nested_checkpoint(self, *, invalid=False):
+    def _nested_checkpoint(self, *, invalid=False, generic=False):
         """Input: invalid bool. Output: result/checkpoints; launch a real native worker with static offline Codex."""
         from tests.test_retrieval_start import RetrievalStartTests
         from wqb import ai_checkpoints
@@ -145,6 +166,9 @@ class RetrievalDesktopTests(unittest.TestCase):
         host = RetrievalStartTests()
         host.setUp()
         self.addCleanup(host.doCleanups)
+        if generic:
+            host.config['expression_tool_version'] = 1
+            host.config['research_policy']['expression_tool_version'] = 1
         exe = Path(DESKTOP_EXE).resolve(strict=True)
         isolated = host.fixture.root / 'offline codex'
         isolated.mkdir()
@@ -170,7 +194,18 @@ class RetrievalDesktopTests(unittest.TestCase):
 
         def model(directory, brief):
             """Input: live task Path/brief dict. Output: strict answer from native checkpoint, never a model service."""
-            answer = host.model(directory, brief)
+            if generic:
+                field = host.fixture.resources[0]['field_rows'][0]
+                node = dict(kind='field', dataset_id=field['dataset_id'], field_id=field['field_id'])
+                answer = dict(summary='Offline generic hypothesis. Competing explanation remains unknown.',
+                    selection=[], history_selection=[], data_characteristics=[], designs=[dict(design_version=4,
+                        hypothesis='A multiline hypothesis.\nNo semantic whitelist.', baseline=node,
+                        treatment=dict(kind='binary', operator='*', left=node, right=dict(kind='literal', value=.5)),
+                        repair_recipe=dict(rules=[]))], tree=dict(roots=['r'], nodes=[dict(node_id='r',
+                            parent_id=None, parent_arm_id=None, design_index=0, targets=dict(baseline=[], treatment=[]),
+                            fallback=[], reverse={})]))
+            else:
+                answer = host.model(directory, brief)
             if invalid:
                 answer['unexpected_native_property'] = True
             answers.append(answer)
@@ -236,6 +271,12 @@ class RetrievalDesktopTests(unittest.TestCase):
     def test_nested_native_codex_checkpoint_freezes_strict_tree_once(self):
         """Input: real windowed EXE. Output: completed strict checkpoint and frozen tree without model/network calls."""
         result, checkpoint = self._nested_checkpoint()
+        self.assertEqual(result['status'], 'completed', result)
+        self.assertEqual(checkpoint['status'], 'completed', checkpoint)
+
+    def test_nested_native_generic_ast_checkpoint_freezes_once(self):
+        """Input: static generic AST answer through real EXE. Output: typed frozen tree, no actual model or platform."""
+        result, checkpoint = self._nested_checkpoint(generic=True)
         self.assertEqual(result['status'], 'completed', result)
         self.assertEqual(checkpoint['status'], 'completed', checkpoint)
 

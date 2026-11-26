@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
+import hashlib
 from multiprocessing.connection import Client, Listener
 from multiprocessing import AuthenticationError
 import os
@@ -16,13 +17,41 @@ from wqb.semantic_compilation import _safe
 
 BROKER_PATH = 'runtime/retrieval_research_planning/broker.json'
 PROGRESS_PATH = 'runtime/retrieval_research_planning/progress.json'
+DIAGNOSTICS_PATH = 'runtime/retrieval_research_planning/diagnostics.json'
+MAX_DIAGNOSTIC_RECORDS = 32
+MAX_DIAGNOSTIC_BYTES = 64_000
 MAX_ARGUMENT_BYTES = 64_000
 MAX_RESPONSE_BYTES = 64_000
 DEFAULT_MAX_QUERIES = 64
 DEFAULT_MAX_VALIDATIONS = 24
 DEFAULT_MAX_RETURNED_BYTES = 1_048_576
 CLIENT_WAIT_SECONDS = 30
-OPERATIONS = {'contract', 'fields', 'operators', 'templates', 'experience', 'source', 'resources', 'validate'}
+OPERATIONS = {'contract', 'fields', 'operators', 'templates', 'experience', 'source', 'resources', 'compile', 'validate'}
+
+
+def record_tool_diagnostic(directory: Path, operation: str, arguments: dict,
+                           response: dict, counters: dict, elapsed: float) -> None:
+    """Input: task Path, request/result dicts and elapsed seconds. Output: bounded diagnostic JSON, never raw arguments."""
+    path = _safe(directory, DIAGNOSTICS_PATH)
+    try:
+        records = json.loads(path.read_text(encoding='utf-8')).get('records', [])
+        if not isinstance(records, list):
+            records = []
+    except (OSError, ValueError):
+        records = []
+    result = response.get('result', {})
+    diagnostics = result.get('diagnostics', []) if isinstance(result, dict) else []
+    row = dict(operation=operation if isinstance(operation, str) and operation in OPERATIONS else '',
+        arguments_sha256=hashlib.sha256(_bytes(arguments)).hexdigest(),
+        activity_at=datetime.now(timezone.utc).isoformat(), elapsed_seconds=round(elapsed, 6),
+        status='error' if 'error' in response else ('invalid' if result.get('valid') is False else 'ok'),
+        error_type=str(response.get('error', ''))[:80], counters=counters,
+        diagnostics=[{key: str(item.get(key, ''))[:240] for key in ('code', 'path', 'message')}
+                     for item in diagnostics[:8] if isinstance(item, dict)])
+    records = records[-(MAX_DIAGNOSTIC_RECORDS - 1):] + [row]
+    while len(_bytes(dict(records=records))) > MAX_DIAGNOSTIC_BYTES and len(records) > 1:
+        records.pop(0)
+    _write(path, dict(records=records))
 
 
 def _bytes(value: object) -> bytes:
@@ -56,10 +85,10 @@ class ToolBudget:
             raise ValueError('tool arguments exceed byte bound')
         if self.queries >= self.limits['max_queries']:
             raise ValueError('retrieval_query_budget_exhausted')
-        if operation == 'validate' and self.validations >= self.limits['max_validations']:
+        if operation in ('validate','compile') and self.validations >= self.limits['max_validations']:
             raise ValueError('retrieval_validation_budget_exhausted')
         self.queries += 1
-        self.validations += int(operation == 'validate')
+        self.validations += int(operation in ('validate','compile'))
         started = time.monotonic()
         try:
             result = evaluator(operation, arguments)
@@ -119,6 +148,7 @@ def local_tool_service(directory: Path, task: dict):
                 break
             with connection:
                 request = {}
+                started = time.monotonic()
                 try:
                     if not connection.poll(CLIENT_WAIT_SECONDS):
                         continue
@@ -134,7 +164,7 @@ def local_tool_service(directory: Path, task: dict):
                     if set(request) != {'input_sha256', 'operation', 'arguments'}:
                         raise ValueError('invalid local tool envelope')
                     operation = request['operation'] if isinstance(request['operation'], str) else ''
-                    progress = dict(input_sha256=token, stage='validating' if operation == 'validate' else 'retrieving',
+                    progress = dict(input_sha256=token, stage='validating' if operation in ('validate', 'compile') else 'retrieving',
                         operation=operation if operation in OPERATIONS else '',
                         activity_at=datetime.now(timezone.utc).isoformat(), **budget.snapshot())
                     _write(_safe(directory, PROGRESS_PATH), progress)
@@ -144,6 +174,10 @@ def local_tool_service(directory: Path, task: dict):
                 except Exception as error:
                     response = dict(error=type(error).__name__, message=str(error)[:1000])
                 try:
+                    arguments = request.get('arguments', {})
+                    record_tool_diagnostic(directory, request.get('operation', ''),
+                        arguments if isinstance(arguments, dict) else {}, response,
+                        budget.snapshot(), time.monotonic() - started)
                     progress = dict(input_sha256=token, stage='planning',
                         operation=(request['operation'] if isinstance(request.get('operation'), str)
                                    and request['operation'] in OPERATIONS else ''),

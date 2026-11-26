@@ -259,7 +259,7 @@ def evidence_ref_from_dict(row: dict) -> EvidenceRef:
     return ref
 
 
-def hypothesis_card_from_dict(row: dict) -> HypothesisCard:
+def hypothesis_card_from_dict(row: dict, *, allow_prose: bool = False) -> HypothesisCard:
     """Input: dict. Output: HypothesisCard. Require seven nonempty single sentences."""
     row = _shape(row, HypothesisCard)
     if set(row) != set(CARD_FIELDS):
@@ -267,7 +267,7 @@ def hypothesis_card_from_dict(row: dict) -> HypothesisCard:
     for value in row.values():
         text = _text(value).strip()
         # Sentence separators exclude decimal points and dots inside function names.
-        if "\n" in text or "\r" in text or re.search(r"[.!?\u3002\uff01\uff1f]\s+\S|[\u3002\uff01\uff1f]\S", text):
+        if not allow_prose and ("\n" in text or "\r" in text or re.search(r"[.!?\u3002\uff01\uff1f]\s+\S|[\u3002\uff01\uff1f]\S", text)):
             raise ValueError("each hypothesis card section must be one sentence")
     return HypothesisCard(**row)
 
@@ -319,6 +319,9 @@ def semantic_fields_from_dict(row: dict) -> dict:
     if not isinstance(row, dict):
         raise ValueError("expected semantic record object")
     result = {}
+    expression_mode = row.get('expression_tool_version',0)
+    if type(expression_mode) is not int or expression_mode not in (0,1):
+        raise ValueError('unsupported expression tool contract')
     if "definition_basis" in row:
         result["definition_basis"] = definition_basis_from_dict(row["definition_basis"])
     if "raw_definition" in row:
@@ -340,7 +343,7 @@ def semantic_fields_from_dict(row: dict) -> dict:
     if "hypothesis_id" in row:
         result["hypothesis_id"] = _text(row["hypothesis_id"])
     if "hypothesis_card" in row:
-        result["hypothesis_card"] = hypothesis_card_from_dict(row["hypothesis_card"])
+        result["hypothesis_card"] = hypothesis_card_from_dict(row["hypothesis_card"], allow_prose=expression_mode == 1)
     for key, parser in (("evidence_refs", evidence_ref_from_dict), ("input_slots", input_slot_from_dict),
                         ("operator_roles", operator_role_from_dict)):
         if key in row:
@@ -368,11 +371,16 @@ def semantic_fields_from_dict(row: dict) -> dict:
     return result
 
 
-def operator_definition_from_dict(row: dict) -> dict:
+def operator_definition_from_dict(row: dict, *, technical_only: bool = False) -> dict:
     """Input: dict. Output: JSON-safe dict. Parse explicit types/signature; never infer from names."""
+    if technical_only and isinstance(row, dict):
+        row = dict(row)
+        row.setdefault('description', '')
+        row.setdefault('evidence_refs', [])
     if not isinstance(row, dict) or set(row) != {"description", "input_types", "output_type", "parameters", "evidence_refs"}:
         raise ValueError("definition: unknown or missing fields")
-    _text(row["description"])
+    if not technical_only:
+        _text(row["description"])
     inputs = _strings(row["input_types"])
     if not inputs or any(item not in VALUE_TYPES for item in inputs) or row["output_type"] not in VALUE_TYPES:
         raise ValueError("definition: unknown input/output types")
@@ -397,6 +405,8 @@ def operator_definition_from_dict(row: dict) -> dict:
         raise ValueError("definition: input types disagree with parameter signature")
     if not isinstance(row["evidence_refs"], list):
         raise ValueError("definition: expected evidence references")
+    if technical_only:
+        return dict(row, input_types=inputs, parameters=parameters)
     refs = [evidence_ref_from_dict(ref) for ref in row["evidence_refs"]]
     if not refs or any(ref.kind != "documented" for ref in refs):
         raise ValueError("definition: explicit types require documented evidence")
@@ -406,6 +416,8 @@ def operator_definition_from_dict(row: dict) -> dict:
 def semantic_record_to_dict(record: object) -> dict:
     """Input: record dataclass. Output: JSON-safe dict. Omit absent optional objects for strict reloading."""
     row = asdict(record)
+    if not row.get('expression_tool_version'):
+        row.pop('expression_tool_version',None)
     for key in ("definition", "hypothesis_card", "definition_basis"):
         if row.get(key) is None:
             row.pop(key, None)

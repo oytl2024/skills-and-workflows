@@ -1,0 +1,98 @@
+"""Structural expression construction uses technical contracts, not economic prose admission."""
+from copy import deepcopy
+import unittest
+
+
+SCOPE = dict(instrument_type='EQUITY', region='USA', delay=1, universe='TOP3000')
+
+
+def field(name='signal', dataset='d'):
+    """Input: identity strings. Output: exact field AST leaf."""
+    return dict(kind='field', dataset_id=dataset, field_id=name)
+
+
+def literal(value):
+    """Input: scalar. Output: scalar AST node."""
+    return dict(kind='literal', value=value)
+
+
+def call(name, *args, **kwargs):
+    """Input: operator name/AST args. Output: named-call AST node."""
+    return dict(kind='call', operator=name, args=list(args), kwargs=kwargs)
+
+
+def resources():
+    """Input: none. Output: isolated technical-only fields/operators, with no documented semantic approval."""
+    operators = []
+    for name, inputs, output, parameters in [
+            ('rank', ['MATRIX'], 'MATRIX', [('x','MATRIX')]),
+            ('ts_delta', ['MATRIX'], 'MATRIX', [('x','MATRIX'),('d','INTEGER')]),
+            ('ts_mean', ['MATRIX'], 'MATRIX', [('x','MATRIX'),('d','INTEGER')]),
+            ('vec_sum', ['VECTOR'], 'MATRIX', [('x','VECTOR')]),
+            ('greater', ['MATRIX','FLOAT'], 'MATRIX', [('x','MATRIX'),('y','FLOAT')]),
+            ('if_else', ['MATRIX','MATRIX','FLOAT'], 'MATRIX', [('condition','MATRIX'),('x','MATRIX'),('y','FLOAT')])]:
+        operators.append(dict(operator=name, definition=dict(input_types=inputs,output_type=output,
+            parameters=[dict(name=k,type=t,required=True) for k,t in parameters])))
+    fields=[dict(SCOPE,dataset_id='d',field_id='signal',field_type='MATRIX'),
+        dict(SCOPE,dataset_id='d',field_id='events',field_type='VECTOR')]
+    return dict(field_rows=fields,operator_rows=operators,scope=deepcopy(SCOPE))
+
+
+class ExpressionToolsTests(unittest.TestCase):
+    def test_declared_window_bounds_survive_technical_binding(self):
+        supplied = resources()
+        row = next(row for row in supplied['operator_rows'] if row['operator'] == 'ts_delta')
+        row['definition_basis'] = dict(rule_id='ts_delta_project_window')
+        for window in (0, -5, 2521):
+            self.assertFalse(self.compile(call('ts_delta', field(), literal(window)), supplied)['valid'])
+
+    def compile(self, node, supplied=None):
+        from wqb.expression_tools import compile_expression
+        return compile_expression(node, resources() if supplied is None else supplied, SCOPE)
+
+    def test_nested_kwargs_without_semantic_or_provenance_admission(self):
+        node=call('rank',call('ts_delta',field(),d=literal(22)))
+        result=self.compile(node)
+        self.assertTrue(result['valid'],result)
+        self.assertEqual(result['expression'],'rank(ts_delta(signal, d=22))')
+        self.assertEqual(result['output_type'],'MATRIX')
+        self.assertEqual(result['used_fields'],[dict(dataset_id='d',field_id='signal')])
+        self.assertEqual(result['used_operators'],['rank','ts_delta'])
+
+    def test_vector_and_conditioned_calls_are_not_fixed_feature_families(self):
+        for node in [call('vec_sum',field('events')),call('if_else',
+                call('greater',field(),literal(0)),call('rank',field()),literal(0))]:
+            self.assertTrue(self.compile(node)['valid'])
+        self.assertFalse(self.compile(call('rank',field('events')))['valid'])
+
+    def test_arithmetic_and_no_input_mutation(self):
+        node=dict(kind='binary',operator='/',left=call('ts_delta',field(),literal(5)),right=literal(2))
+        before=deepcopy(node)
+        result=self.compile(node)
+        self.assertTrue(result['valid'],result)
+        self.assertEqual(node,before)
+
+    def test_technical_errors_are_diagnostics(self):
+        for node in [call('rank',field(),literal(2)),call('ts_delta',field(),literal('month')),
+                call('missing',field()),field('absent'),dict(kind='python',code='import os'),
+                dict(kind='literal',value=float('nan'))]:
+            result=self.compile(node)
+            self.assertFalse(result['valid'],result)
+            self.assertTrue(result['diagnostics'][0]['path'])
+
+    def test_scope_and_duplicate_identity_are_still_rejected(self):
+        original=resources()
+        original['field_rows'][0]['region']='EUR'
+        self.assertFalse(self.compile(field(),original)['valid'])
+
+    def test_many_field_slots_do_not_alias_token_prefixes(self):
+        supplied=resources()
+        supplied['field_rows']=[dict(SCOPE,dataset_id='d',field_id='x'+str(i),field_type='MATRIX') for i in range(12)]
+        node=field('x0')
+        for i in range(1,12):
+            node=dict(kind='binary',operator='+',left=node,right=field('x'+str(i)))
+        result=self.compile(node,supplied)
+        self.assertTrue(result['valid'],result)
+        original=resources()
+        original['field_rows'].append(deepcopy(original['field_rows'][0]))
+        self.assertFalse(self.compile(field(),original)['valid'])

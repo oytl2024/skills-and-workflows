@@ -570,6 +570,9 @@ def _sources(refs: object, kind: str) -> bool:
 
 def _policy(policy: dict) -> dict:
     """Input: policy dict. Output: canonical copy or ValueError; validate finite rules before planning."""
+    if isinstance(policy,dict) and policy.get('schema_version') == 3:
+        from wqb.expression_repair import validate_policy
+        return validate_policy(policy)
     if (not isinstance(policy, dict) or type(policy.get('schema_version')) is not int
             or policy['schema_version'] not in (1, 2)
             or set(policy) - ({'schema_version', 'rules', 'traits', 'stop', 'resources'}
@@ -847,6 +850,9 @@ def prepare_search(run: Path, parent: dict, history: list, allowance: int, polic
     Variants retain expression/settings/CLI identity/parent lineage plus a sourced
     decision. No files are read/written and no receipt or authority is invented.
     """
+    if isinstance(policy,dict) and policy.get('schema_version') == 3:
+        from wqb.expression_repair import prepare_search as prepare_expression_search
+        return prepare_expression_search(parent,history,allowance,policy)
     result = dict(schema_version=1, planner_kind='deterministic', planner_version=PLANNER_VERSION,
                   status='blocked', variants=[], skipped=[], stop_reason='')
     if type(allowance) is not int or not 0 <= allowance <= MAX_VARIANTS:
@@ -1049,6 +1055,22 @@ def _frozen_policy(run: Path) -> tuple[dict, str]:
     if not context:
         raise ValueError('deterministic Repair requires verified operational resources')
     policy = _policy(snapshot['repair_search_policy'])
+    if policy['schema_version'] == 3:
+        if snapshot.get('research_policy',{}).get('expression_tool_version') != 1:
+            raise ValueError('expression Repair requires owning frozen expression-tool policy')
+        resources=policy['resources']
+        if resources['scope'] != snapshot['selected_scope']:
+            raise ValueError('expression Repair scope differs from frozen Start')
+        for row in resources['field_rows']:
+            matches=[candidate for candidate in snapshot.get('data_ledger_rows',[])
+                if (candidate.get('dataset_id'),candidate.get('field_id'))==(row['dataset_id'],row['field_id'])]
+            if len(matches)!=1 or any(matches[0].get(key)!=value for key,value in row.items()):
+                raise ValueError('expression Repair field differs from frozen context')
+        for row in resources['operator_rows']:
+            matches=[candidate for candidate in snapshot.get('operator_rows',[]) if candidate.get('operator')==row['operator']]
+            if len(matches)!=1 or any(matches[0].get(key)!=row.get(key) for key in ('definition','definition_basis')):
+                raise ValueError('expression Repair signature differs from frozen context')
+        return policy,hashlib.sha256(raw).hexdigest()
     resources = policy.get('resources', {})
     if _catalog_admission(resources) and not knowledge_catalog_admission(context):
         raise ValueError('Repair resource admission differs from owning frozen context')

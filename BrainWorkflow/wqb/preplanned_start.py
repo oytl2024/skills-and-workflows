@@ -170,6 +170,16 @@ def _catalog_field_sources(root: Path, row: dict, scope: dict, texts: dict, inde
 
 def _validate_resource(root: Path, resource: dict, scope: dict, ledger: list[dict], index: dict) -> dict:
     """Input: vault/resource/scope/canonical ledger/index. Output: validated copied compiler resources dict."""
+    if resource.get('expression_tool_version') == 1:
+        from wqb.hypothesis_template_compiler import _settings
+        _settings(resource['settings'],scope)
+        for row in resource['field_rows']:
+            actual={key:value for key,value in row.items() if key != 'direct_knowledge_version'}
+            matches=[item for item in ledger if _scope_matches(item,scope)
+                and (item.get('dataset_id'),item.get('field_id'))==(row['dataset_id'],row['field_id'])]
+            if len(matches)!=1 or matches[0]!=actual:
+                raise ValueError('technical field identity/type/scope changed')
+        return deepcopy(resource)
     resource, _ = _resources(resource, scope)
     from wqb.direct_knowledge import direct_knowledge_enabled, read_direct_source
     if direct_knowledge_enabled(resource):
@@ -408,6 +418,14 @@ def _repair_policy(resource: dict, supplied: dict | None = None, *, rulebook: di
     repurpose raw as a project policy store or invent documented rule references.
     Project setting hypotheses are separate from official data facts.
     """
+    if resource.get('expression_tool_version') == 1:
+        from wqb.expression_repair import compile_policy
+        from wqb.repair_rulebook import load_repair_rulebook
+        catalog=load_repair_rulebook() if rulebook is None else deepcopy(rulebook)
+        rules=[dict(deepcopy(rule),grid=deepcopy(catalog[rule['edit']+'_grid'])) for rule in catalog['rules']]
+        if supplied is not None:
+            rules=deepcopy(supplied['rules'])
+        return compile_policy(resource,resource.get('expression_repair_recipes',[]),dict(rules=rules))
     from wqb.repair_search import _policy, compile_repair_search_policy
     if knowledge_catalog_admission(resource):
         resource = _technical_repair_resources(resource)
@@ -540,6 +558,8 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
         settings = {k: config[k] for k in ('instrument_type', 'region', 'delay', 'universe', 'decay',
             'neutralization', 'truncation', 'pasteurization', 'unit_handling', 'nan_handling', 'language') if k in config}
         supplied_repair = deepcopy(config.get('repair_search_policy'))
+        from wqb.expression_planning import expression_mode
+        generic=expression_mode(config)
         default_rulebook = None
         if supplied_repair is None:
             from wqb.repair_rulebook import load_repair_rulebook
@@ -549,6 +569,8 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
                         repair_search_policy=supplied_repair)
         if retrieval:
             identity['retrieval_design_version'] = retrieval
+        if generic:
+            identity['expression_tool_version']=1
         if direct:
             identity['direct_knowledge_version'] = 1
             identity['resource_admission_policy'] = DIRECT_POLICY
@@ -608,7 +630,8 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
                     plan_depth=policy['plan_depth'], initial_hypotheses=policy['initial_hypotheses'],
                     **({'execution_package_version': PACKAGE_VERSION} if use_package else {}),
                     **({'direct_knowledge_version': 1} if direct else {}),
-                    **({'retrieval_design_version': retrieval} if retrieval else {}))
+                    **({'retrieval_design_version': retrieval} if retrieval else {}),
+                    **({'expression_tool_version': 1} if generic else {}))
                 group = prepared['group']
                 state = dict(identity=identity, resources=resources, receipts=receipts,
                     diagnostics=diagnostics, group_dir=group['group_dir'], request_revision=group['request_revision'],

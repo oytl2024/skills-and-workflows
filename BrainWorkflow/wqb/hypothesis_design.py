@@ -437,6 +437,9 @@ def compile_hypothesis_design(design: dict, resources: dict, scope: dict) -> dic
     Exact resource/experiment contracts live in hypothesis_template_compiler's
     module docstring. Compilation grants no review, measurement or publication.
     """
+    if design.get('design_version') == 4:
+        from wqb.expression_planning import compile_design
+        return compile_design(design, resources, scope)
     from wqb.hypothesis_template_compiler import compile_design
     return compile_design(design, resources, scope)
 

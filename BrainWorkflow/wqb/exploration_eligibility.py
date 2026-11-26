@@ -124,6 +124,9 @@ def _run_context(run: Path, knowledge_root: Path, scope: dict) -> tuple[dict, di
 def _resource_certificate(run: Path, knowledge_root: Path, resources: dict, scope: dict) -> dict:
     """Input: run/vault Paths, resource/scope dicts. Output: raw-verified bound certificate dict, no writes."""
     owner, policy = _run_context(run, knowledge_root, scope)
+    from wqb.expression_planning import expression_mode
+    if expression_mode(resources) != expression_mode(policy):
+        raise ValueError('expression resources require matching frozen new-start policy')
     from wqb.direct_knowledge import direct_knowledge_enabled
     if direct_knowledge_enabled(resources) != direct_knowledge_enabled(policy):
         raise ValueError('DIRECT resources require matching frozen new-start policy')

@@ -143,12 +143,15 @@ def _annotation_context(resources: dict, manifest: dict) -> dict:
     identities = [(row['dataset_id'], row['field_id']) for row in fields]
     if len(set(identities)) != len(identities):
         raise ValueError('ambiguous annotation field identity')
-    return dict(schema_version=1, fields=fields, repair_rule_ids=sorted(rules),
+    result = dict(schema_version=1, fields=fields, repair_rule_ids=sorted(rules),
         repair_resources=[dict(rule_id=rule['rule_id'], edit=rule['edit'],
             target_metric=rule['target_metric'], requires=deepcopy(rule['requires']),
             purpose='documentation_only') for rule in frozen['rules']],
         compilation_settings=deepcopy(resources['settings']),
         repair_search_policy_sha256=_digest(manifest['start_snapshot']['repair_search_policy']))
+    if resources.get('expression_tool_version') == 1:
+        result['expression_tool_version']=1
+    return result
 
 
 def _annotation_schema() -> dict:
@@ -167,6 +170,18 @@ def _annotation_fields(answer: dict, brief: dict, used: set) -> list:
     context = brief['annotation_context']
     available = {(row['dataset_id'], row['field_id']): row for row in context['fields']}
     annotations = answer['data_characteristics']
+    if context.get('expression_tool_version') == 1 or (answer.get('designs') and
+            all(design.get('design_version') == 4 for design in answer['designs'])):
+        supplied={(row['dataset_id'],row['field_id']):row for row in annotations}
+        result=[]
+        for pair in sorted(used):
+            facts=available[pair]
+            proposed=supplied.get(pair,{})
+            suggestions=[rule for rule in proposed.get('suggested_repair_rule_ids',[]) if rule in context['repair_rule_ids']]
+            result.append(dict(deepcopy(facts),referenced_trait_keys=list(facts['known_facts']),
+                hypotheses=deepcopy(proposed.get('hypotheses',[])),suggested_repair_rule_ids=suggestions,
+                repair_resource_hints=[deepcopy(rule) for rule in context.get('repair_resources',[]) if rule['rule_id'] in suggestions]))
+        return result
     if not 1 <= len(annotations) <= MAX_ANNOTATION_FIELDS:
         raise ValueError('annotation field count exceeds bounds')
     seen, result = set(), []
@@ -240,10 +255,13 @@ def _policy(policy: dict) -> dict:
 
 def _brief(resources: dict, manifest: dict, certificate: dict, receipts: list, policy: dict) -> dict:
     """Input: certified resource/owner/policy dicts and trusted receipts. Output: bounded model brief dict."""
-    pack = _pack(resources['evidence_pack'])
-    if (pack['scope'] != certificate['scope'] or pack['source_index'] != resources['source_index']
-            or resources['evidence_pack'].get('source_texts') != resources['source_texts']):
-        raise ValueError('model pack differs from certified resource context')
+    from wqb.expression_planning import expression_mode
+    generic=expression_mode(manifest['start_snapshot'])
+    if not generic:
+        pack = _pack(resources['evidence_pack'])
+        if (pack['scope'] != certificate['scope'] or pack['source_index'] != resources['source_index']
+                or resources['evidence_pack'].get('source_texts') != resources['source_texts']):
+            raise ValueError('model pack differs from certified resource context')
     if type(receipts) is not list:
         raise ValueError('template_receipts must be a trusted local list')
     compatible = []
@@ -270,11 +288,25 @@ def _brief(resources: dict, manifest: dict, certificate: dict, receipts: list, p
         composition_contract=composition,
         output_schema=_output_schema(resources.get('resource_contract_version', 1),
             include_vector=manifest['start_snapshot'].get('research_policy', {}).get('retrieval_design_version') == 1))
+    from wqb.expression_planning import expression_mode, output_schema, COMPOSITION_CONTRACT
+    if expression_mode(manifest['start_snapshot']):
+        brief['output_schema']=output_schema()
+        brief['composition_contract']=COMPOSITION_CONTRACT
     if _annotation_mode(manifest):
         brief['annotation_context'] = _annotation_context(resources, manifest)
         brief['output_schema']['properties']['data_characteristics'] = _annotation_schema()
+        if generic:
+            item=brief['output_schema']['properties']['data_characteristics']['items']['properties']
+            item['known_trait_keys']['items']={'type':'string'}
+            item['unknown_trait_keys']['items']={'type':'string'}
+            item['hypotheses']['items']['properties']['trait_key']={'type':'string'}
         brief['output_schema']['required'].append('data_characteristics')
-        brief['composition_contract'] += ('\nNew package mode: data_characteristics must annotate every USED '
+        if generic:
+            brief['composition_contract'] += ('\nScripts derive used field identities and factual characteristics. '
+                'data_characteristics may be empty; supplied hypotheses remain explicitly uncertain. '
+                'repair_recipe declares finite technical edits, not economic certification.\n')
+        else:
+            brief['composition_contract'] += ('\nNew package mode: data_characteristics must annotate every USED '
             'canonical dataset_id/field_id exactly once. Reference only known trait KEYS from annotation_context; '
             'never supply factual values. Label unknown keys and hypotheses explicitly. Suggest only frozen '
             'repair_rule_ids. Suggestions are documentation only; metric rules still select actual Repair. '
@@ -292,8 +324,13 @@ def _compiled_graph(answer: dict, resources: dict, scope: dict, brief: dict) -> 
         raise ValueError('root count exceeds initial_hypotheses')
     # Layer variants may share a mechanism/condition while changing a horizon.
     # Validate each design independently; apply cross-hypothesis dedup to roots.
-    normalized = [validate_hypothesis_design(dict(summary=answer['summary'], designs=[design]),
-        resources['evidence_pack'], SemanticPolicy())['designs'][0] for design in answer['designs']]
+    generic = all(design.get('design_version') == 4 for design in answer['designs'])
+    if generic:
+        from wqb.expression_planning import normalize_design
+        normalized = [normalize_design(design) for design in answer['designs']]
+    else:
+        normalized = [validate_hypothesis_design(dict(summary=answer['summary'], designs=[design]),
+            resources['evidence_pack'], SemanticPolicy())['designs'][0] for design in answer['designs']]
     nodes = {node['node_id']: node for node in graph['nodes']}
     if len(nodes) != len(graph['nodes']) or any(root not in nodes for root in graph['roots']):
         raise ValueError('duplicate nodes or missing roots')
@@ -311,8 +348,9 @@ def _compiled_graph(answer: dict, resources: dict, scope: dict, brief: dict) -> 
         index = nodes[root]['design_index']
         reference(index)
         root_designs.append(answer['designs'][index])
-    validate_hypothesis_design(dict(summary=answer['summary'], designs=root_designs),
-        resources['evidence_pack'], SemanticPolicy(max_mechanisms=MAX_ROOTS))
+    if not generic:
+        validate_hypothesis_design(dict(summary=answer['summary'], designs=root_designs),
+            resources['evidence_pack'], SemanticPolicy(max_mechanisms=MAX_ROOTS))
     receipts, origins = [], []
     for design in normalized:
         receipt = match_exploration(brief['compatible_template_receipts'], design, scope, resources)
@@ -336,6 +374,16 @@ def _compiled_graph(answer: dict, resources: dict, scope: dict, brief: dict) -> 
         for arm_id, reverse in node['reverse'].items():
             reverse_ref = reference(reverse.pop('design_index'))
             primary = normalized[int(ref)]
+            if generic:
+                import ast
+                for arm in ARMS:
+                    original_expression = pairs[ref]['experiment']['arms'][ARMS.index(arm)]['binding']['bound_expression']
+                    reversed_expression = pairs[reverse_ref]['experiment']['arms'][ARMS.index(arm)]['binding']['bound_expression']
+                    expected = ast.UnaryOp(op=ast.USub(),operand=ast.parse(original_expression,mode='eval').body)
+                    if ast.dump(expected) != ast.dump(ast.parse(reversed_expression,mode='eval').body):
+                        raise ValueError('reverse must negate the same planned expression')
+                reverse.update(pair_ref=reverse_ref,simulation_identity=identity(reverse_ref,reverse['arm_id']))
+                continue
             opposite = deepcopy(primary)
             opposite['prediction_direction'] = ('negative' if primary['prediction_direction'] == 'positive' else 'positive')
             # Prose/IDs may differ, but executable economic roles, features,

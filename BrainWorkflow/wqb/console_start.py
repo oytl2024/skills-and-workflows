@@ -32,11 +32,11 @@ START_CONFIG_FIELDS = (
     'request_timeout_seconds', 'max_retries', 'base_backoff_seconds', 'max_alphas_per_round',
     'max_rounds', 'runtime_max_steps', 'runtime_no_progress_limit', 'max_runtime_seconds',
     'max_recoveries', 'live_api_enabled', 'parallel_workflows', 'plan_depth', 'initial_hypotheses',
-    'retrieval_max_queries', 'retrieval_max_validations', 'retrieval_max_returned_bytes',
+    'retrieval_max_queries', 'retrieval_max_validations', 'retrieval_max_returned_bytes', 'expression_tool_version',
 )
 START_POLICY_FIELDS = ('preplanned_tree_version', 'paired_scout', 'exploration_scout',
     'exploration_policy_version', 'parallel_workflows', 'plan_depth', 'initial_hypotheses',
-    'execution_package_version', 'multiplier_scope_version', 'retrieval_design_version', 'direct_knowledge_version')
+    'execution_package_version', 'multiplier_scope_version', 'retrieval_design_version', 'direct_knowledge_version', 'expression_tool_version')
 
 
 def load_start_config(paths) -> dict:
@@ -63,6 +63,10 @@ def load_start_config(paths) -> dict:
     if type(version) is not int or version not in (0, 1):
         raise ValueError('preplanned_tree_version must be integer 0 or 1')
     clean['research_policy'] = {key: policy[key] for key in START_POLICY_FIELDS if key in policy}
+    from wqb.expression_planning import expression_mode
+    if expression_mode(dict(config,research_policy=policy)):
+        clean['expression_tool_version']=1
+        clean['research_policy']['expression_tool_version']=1
     if 'direct_knowledge_version' in policy:
         from wqb.direct_knowledge import direct_knowledge_enabled, DIRECT_POLICY
         direct_knowledge_enabled(dict(direct_knowledge_version=policy['direct_knowledge_version']))

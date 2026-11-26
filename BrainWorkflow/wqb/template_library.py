@@ -67,6 +67,7 @@ class TemplateRecord:
     binding_version: int = 1
     hypothesis_id: str = ""
     hypothesis_version: int = 1
+    expression_tool_version: int = 0
 
 
 def template_record_to_dict(record: TemplateRecord) -> dict[str, Any]:
@@ -78,6 +79,7 @@ def template_record_from_dict(row: dict[str, Any]) -> TemplateRecord:
     """Input: dict row. Output: TemplateRecord. Normalize one JSON-safe template row."""
     check_semantic_record_fields(row, TemplateRecord)
     return TemplateRecord(
+        expression_tool_version=row.get('expression_tool_version',0),
         template_id=str(row.get("template_id", "")),
         hypothesis=str(row.get("hypothesis", "")),
         skeleton=str(row.get("skeleton", "")),
