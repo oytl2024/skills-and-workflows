@@ -202,3 +202,11 @@ application processes. No broad output/runs/knowledge cleanup is authorized by
 this installation. Retain the two frozen trees and all submission/accounting
 evidence:actual recovery established an invalid platform REGULAR scope,not a
 successful simulation. Scope rebinding still requires user selection.
+
+Installed outcome:source a117132 was pushed with remote equality before swapping
+the installed binary. Targeted120tests and3native EXE tests passed. Installer
+removed only the audited previous binary bundle;retained source build/evidence.
+Installed source revision2e2abba72e67976d8c9ec0ab199e8eda54b2e0c707acedc77a081e49cb3211f3
+was verified through the actual application's health endpoint. The task card
+shows the exact platform scope rejection and its refreshed report. No knowledge,
+research history,accounting,browser sessions or credentials were deleted.
