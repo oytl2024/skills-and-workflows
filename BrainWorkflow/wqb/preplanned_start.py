@@ -580,7 +580,11 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
             identity['execution_package_version'] = PACKAGE_VERSION
         if default_rulebook is not None:
             identity['repair_rulebook'] = deepcopy(default_rulebook)
-        directory = _safe(runs, 'start_preflight/preplanned/' + _digest(identity))
+        from wqb.research_tasks import task_for_root
+        preparation_key = _digest(identity)
+        if task_for_root(runs):
+            preparation_key = preparation_key[:16]
+        directory = _safe(runs, 'start_preflight/preplanned/' + preparation_key)
         directory.mkdir(parents=True, exist_ok=True)
         path = _safe(directory, 'preparation.json')
         with json_lock_transition_guard(directory / 'guard', LOCK_SECONDS, LOCK_POLL_SECONDS, 'Start composer busy'):

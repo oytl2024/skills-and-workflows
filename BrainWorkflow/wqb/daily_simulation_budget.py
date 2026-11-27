@@ -44,7 +44,8 @@ def _safe(path: Path) -> Path:
 
 def _store(runs_root: Path) -> Path:
     """Input: canonical runs Path. Output: shared store Path. Keep accounting out of source subruns."""
-    return _safe(_safe(runs_root) / STORE_NAME)
+    from wqb.research_tasks import canonical_runs_root
+    return _safe(canonical_runs_root(_safe(runs_root)) / STORE_NAME)
 
 
 def _clock(now: str | None) -> datetime:

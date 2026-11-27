@@ -8,6 +8,18 @@ import { fixtureSnapshot, multiplierSnapshot } from './fixtures';
 afterEach(cleanup);
 
 describe('research workspace (explicit offline fixtures)', () => {
+  it('lists separate task cards and switches the selected task view', () => {
+    const snapshot = { ...fixtureSnapshot(), task_mode: 1 as const, selected_task_id: 'ALL_LARGE_D1_first', tasks: [
+      { task_id: 'ALL_LARGE_D1_first', status: 'failed', reason: 'Unknown parameter', selection: {}, created_at: '', ended_at: '', report_path: '' },
+      { task_id: 'USA_TOP3000_D1_second', status: 'running', reason: '', selection: {}, created_at: '', ended_at: '', report_path: '' },
+    ] };
+    const client = ApplicationClient.fixture(snapshot);
+    const select = vi.spyOn(client, 'selectTask');
+    render(<App client={client} />);
+    fireEvent.click(screen.getByRole('button', { name: /USA_TOP3000_D1_second/ }));
+    expect(select).toHaveBeenCalledWith('USA_TOP3000_D1_second');
+    expect(screen.getByText('Unknown parameter')).toBeTruthy();
+  });
   it('requires explicit Region/Delay without fields and reuses a valid saved Universe across delays', async () => {
     const snapshot = multiplierSnapshot();
     const client = new ApplicationClient({ fetcher: vi.fn().mockResolvedValue({ ok: true, json: async () => snapshot }), eventSource: null, storage: null });

@@ -249,7 +249,7 @@ def generate_hypothesis_candidates(snapshot: dict, scheduled_hypotheses: list[di
     from wqb.hypothesis_selection import select_hypothesis_batch
     result = select_hypothesis_batch(snapshot, scheduled_hypotheses, maximum)
     if snapshot.get('research_policy', {}).get('paired_scout') and len(result['selected']) != len(scheduled_hypotheses):
-        raise TemplateBindingError('paired plan cannot be truncated into an unfunded half-pair')
+        raise TemplateBindingError('paired plan cannot be truncated into an unfunded half-pair: ' + str(result['reasons'])[:1000])
     if any(row['code'] not in ('selected', 'batch_limit') for row in result['reasons']):
         raise TemplateBindingError('scheduled hypothesis binding invalid: ' + str(result['reasons']))
     return [AlphaCandidate(row['bound_expression'], dict(row['settings']), 0,

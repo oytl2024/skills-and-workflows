@@ -175,9 +175,10 @@ def local_tool_service(directory: Path, task: dict):
                     response = dict(error=type(error).__name__, message=str(error)[:1000])
                 try:
                     arguments = request.get('arguments', {})
-                    record_tool_diagnostic(directory, request.get('operation', ''),
-                        arguments if isinstance(arguments, dict) else {}, response,
-                        budget.snapshot(), time.monotonic() - started)
+                    if config.get('independent_tasks_version') != 1:
+                        record_tool_diagnostic(directory, request.get('operation', ''),
+                            arguments if isinstance(arguments, dict) else {}, response,
+                            budget.snapshot(), time.monotonic() - started)
                     progress = dict(input_sha256=token, stage='planning',
                         operation=(request['operation'] if isinstance(request.get('operation'), str)
                                    and request['operation'] in OPERATIONS else ''),

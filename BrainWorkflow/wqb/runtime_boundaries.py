@@ -54,6 +54,9 @@ def record_runtime_boundary(run: Path, kind: str, evidence: dict, now: str) -> d
 
 def dispatch_boundary_notice(run: Path, boundary: dict, now: str) -> dict:
     """Input: run/receipt/time. Output: refreshed receipt. Send one event-only notice with bounded transport."""
+    from wqb.research_tasks import task_for_root
+    if task_for_root(Path(run).parent):
+        return boundary
     root = Path(run) / 'runtime/boundaries'
     identity = str(boundary.get('boundary_id', ''))
     if len(identity) != 24 or any(c not in '0123456789abcdef' for c in identity):

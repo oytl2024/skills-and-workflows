@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { Activity, ArrowUpRight, CircleAlert, FlaskConical, GitBranch, Play, Radio, Sprout, Square, Wrench } from 'lucide-react';
+import { Activity, ArrowUpRight, CircleAlert, FileText, FlaskConical, GitBranch, Play, Radio, Sprout, Square, Wrench, X } from 'lucide-react';
 import { ApplicationClient } from './api';
 import type { ApplicationState, Lane, LaneView, ResearchScope, Stage, TrackedCommand } from './types';
 import { WorkflowNavigation } from './components/WorkflowNavigation';
@@ -15,6 +15,7 @@ const STAGES = [
   { id: 'repair', name: 'Repair', label: '修复实验', icon: Wrench },
 ] as const;
 const CONNECTION_NAMES = { connecting: '正在连接', live: '实时连接', reconnecting: '重连中 · 轮询备用', polling: '轮询更新 · 实时连接待恢复', offline: '离线 · 自动重试', fixture: '离线测试 · 非实时数据' };
+const TASK_NAMES: Record<string, string> = { accepted: '已创建', preparing: '准备中', planning: '规划中', queued: '排队中', running: '运行中', stopped: '已停止', failed: '已结束 · 失败', stalled: '已结束 · 卡死', awaiting_submission: '待提交', completed_no_candidate: '研究完成' };
 
 // Input: lane (Lane). Output: new local-only LaneView, initialized to an inspectable server stage.
 function initialView(lane: Lane): LaneView {
@@ -101,6 +102,18 @@ export function App({ client }: { client: ApplicationClient }) {
   const [selectedOption, setSelectedOption] = useState('');
   const [scopeChoice, setScopeChoice] = useState({ key: '', region: '', delay: '', universe: '' });
   const [views, setViews] = useState<Record<string, LaneView>>({});
+  const [report, setReport] = useState<{ title: string; body: string } | null>(null);
+  const reportDialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => { if (report) reportDialog.current?.showModal?.(); else reportDialog.current?.close?.(); }, [report]);
+  // Input: selected task ID. Output: Promise<void>; read its existing Markdown, never run knowledge summary.
+  const openReport = async (taskId: string): Promise<void> => {
+    setReport({ title: taskId, body: '正在读取报告…' });
+    try {
+      const response = await fetch(`/api/application/report?task_id=${encodeURIComponent(taskId)}`, { credentials: 'same-origin', cache: 'no-store' });
+      const result = await response.json();
+      setReport(current => current?.title === taskId ? { title: taskId, body: response.ok ? result.body : result.error } : current);
+    } catch { setReport(current => current?.title === taskId ? { title: taskId, body: '报告读取失败；研究任务状态未改变。' } : current); }
+  };
   useEffect(() => { client.start(); return () => client.dispose(); }, [client]);
   const optionId = snapshot?.options.some(o => o.option_id === selectedOption && o.startable !== false) ? selectedOption : snapshot?.options.find(o => o.startable !== false)?.option_id ?? '';
   const option = snapshot?.options.find(o => o.option_id === optionId);
@@ -122,9 +135,11 @@ export function App({ client }: { client: ApplicationClient }) {
   const selectedScope: ResearchScope | undefined = choice.region && choice.delay !== '' && universes.includes(universe) ?
     { region: choice.region, delay: Number(choice.delay), universe } : undefined;
   const currentLane = snapshot?.lanes.some(l => l.lane_id === selectedLane) ? selectedLane : null;
-  const relevantCommands = commands.filter(c => c.group_id === snapshot?.group.group_id);
+  const relevantCommands = commands.filter(c => snapshot?.task_mode === 1 ?
+    (c.task_id && c.task_id === snapshot.selected_task_id) || c.status === 'pending' : c.group_id === snapshot?.group.group_id);
   const unresolved = relevantCommands.filter(c => ['pending', 'unknown'].includes(c.status));
-  const actionBlocked = (action: 'start' | 'stop'): boolean => relevantCommands.some(c =>
+  const actionBlocked = (action: 'start' | 'stop'): boolean => snapshot?.task_mode === 1 ? commands.some(c => c.status === 'pending' &&
+    (action === 'start' || (c.action === 'stop' && c.task_id === snapshot.selected_task_id))) : relevantCommands.some(c =>
     (action === 'start' || c.action === 'stop') && (['pending', 'unknown'].includes(c.status) ||
       (['accepted', 'queued', 'running'].includes(c.status) && c.expected_revision === snapshot?.request_revision)));
   const latest = relevantCommands.at(-1);
@@ -136,6 +151,22 @@ export function App({ client }: { client: ApplicationClient }) {
       </select><button className="start-button" disabled={!snapshot?.allowed_actions.start || (newResearch && (!optionId || option?.startable === false)) || (manualScope && !selectedScope) || actionBlocked('start') || !['live', 'polling'].includes(connection) || connection === 'fixture'} onClick={() => { if (manualScope) void client.command('start', optionId, selectedScope); else void client.command('start', newResearch ? optionId : undefined); }}><Play size={15} fill="currentColor" />Start</button>
         <button className="stop-button" disabled={!snapshot?.allowed_actions.stop || actionBlocked('stop') || connection === 'fixture'} onClick={() => { void client.command('stop'); }}><Square size={14} fill="currentColor" />Stop</button></div>
     </header>
+    {snapshot?.task_mode === 1 && <section className="task-list" aria-label="研究任务">
+      <div className="task-list-heading"><h2>研究任务</h2><span className="muted">{snapshot.tasks?.length ?? 0}</span></div>
+      {!snapshot.tasks?.length && <p className="muted">尚无研究任务</p>}
+      <div className="task-list-scroll">{snapshot.tasks?.map(task => <div className="task-row" key={task.task_id}>
+        <button className="task-select" aria-pressed={task.task_id === snapshot.selected_task_id} onClick={() => client.selectTask(task.task_id)}>
+          <span className="task-name">{task.task_id}</span><span className={`task-status task-${task.status}`}>{TASK_NAMES[task.status] ?? task.status}</span>
+          {task.reason && <span className="task-reason">{task.reason}</span>}
+          {task.report_error && <span className="task-reason">报告保存失败：{task.report_error}</span>}
+        </button>
+        {task.report_path && <button className="task-report" title="查看研究报告" aria-label={`查看 ${task.task_id} 的研究报告`} onClick={() => { void openReport(task.task_id); }}><FileText size={17} /></button>}
+      </div>)}</div>
+    </section>}
+    <dialog className="report-dialog" ref={reportDialog} onCancel={() => setReport(null)}>
+      <header><h2>{report?.title}</h2><button aria-label="关闭报告" title="关闭报告" onClick={() => setReport(null)}><X size={18} /></button></header>
+      <pre tabIndex={0}>{report?.body}</pre>
+    </dialog>
     {manualScope && <div className="evidence-bar scope-selection">
       <label>Region<select aria-label="Region" value={choice.region} disabled={actionBlocked('start') || !snapshot?.allowed_actions.start} onChange={event => setScopeChoice({ key: scopeKey, region: event.target.value, delay: '', universe: '' })}>
         <option value="">请选择 Region</option>{regions.map(region => <option key={region} value={region}>{region}</option>)}

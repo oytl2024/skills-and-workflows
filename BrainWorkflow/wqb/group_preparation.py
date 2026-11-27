@@ -68,6 +68,10 @@ def prepare_group_lanes(paths, resources: list[dict], scope: dict, selected_opti
         if not expression_mode(dict(expression_tool_version=expression_tool_version)):
             raise ValueError('expression tools require version1')
         policy['expression_tool_version']=1
+    if any(resource.get('technical_exploration_version') == 1 for resource in resources):
+        if not all(type(resource.get('technical_exploration_version')) is int and resource['technical_exploration_version'] == 1 for resource in resources):
+            raise ValueError('mixed technical exploration contracts')
+        policy['technical_exploration_version']=1
     plans = [dict(run_id='lane-' + uuid4().hex, plan_digest=_digest(item)) for item in resources]
     group = create_group(paths.run_root, plans, authority)
     certificates = []

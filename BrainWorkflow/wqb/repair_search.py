@@ -1059,6 +1059,8 @@ def _frozen_policy(run: Path) -> tuple[dict, str]:
         if snapshot.get('research_policy',{}).get('expression_tool_version') != 1:
             raise ValueError('expression Repair requires owning frozen expression-tool policy')
         resources=policy['resources']
+        if resources.get('technical_exploration_version', 0) != snapshot.get('research_policy',{}).get('technical_exploration_version', 0):
+            raise ValueError('Repair technical exploration differs from frozen policy')
         if resources['scope'] != snapshot['selected_scope']:
             raise ValueError('expression Repair scope differs from frozen Start')
         for row in resources['field_rows']:

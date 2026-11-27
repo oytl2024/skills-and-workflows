@@ -67,7 +67,7 @@ def _read(path: Path) -> dict[str, Any]:
 def _write(path: Path, row: dict[str, Any]) -> None:
     """Input: Path and dict. Output: none. Atomically publish JSON without partial reads."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + "." + uuid4().hex + ".tmp")
+    temporary = path.with_name(uuid4().hex + ".tmp")
     try:
         temporary.write_text(json.dumps(row, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(temporary, path)

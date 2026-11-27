@@ -124,11 +124,18 @@ def compile_expression(request: dict, resources: dict, scope: dict) -> dict:
         node = build(request)
         skeleton = ast.unparse(ast.fix_missing_locations(node))
         template = dict(binding_version=2,skeleton=skeleton,input_slots=slots)
-        binding = bind_technical_template(template,resources['field_rows'],resources['operator_rows'],scope)
+        exploratory = type(resources.get('technical_exploration_version')) is int and resources['technical_exploration_version'] == 1
+        binding = bind_technical_template(template,resources['field_rows'],resources['operator_rows'],scope, allow_unknown=exploratory)
         result = dict(valid=True,expression_tool_version=EXPRESSION_TOOL_VERSION,expression=binding['bound_expression'],
-            ast=deepcopy(request),output_type='MATRIX',template=template,binding=binding,
+            ast=deepcopy(request),output_type=binding.get('output_type','MATRIX'),template=template,binding=binding,
             used_fields=[dict(dataset_id=pair[0],field_id=pair[1]) for pair in selected],
             used_operators=sorted({row['operator'] for row in binding['operator_provenance']}),warnings=[],diagnostics=[])
+        if exploratory:
+            result['warnings'] = [dict(code='unverified_signature', operator=row['operator'], message='Platform behavior and output type remain unverified.')
+                for row in binding['operator_provenance'] if row.get('signature_status') == 'unknown']
+            result.update(syntax_valid=True, type_status='unknown' if result['warnings'] else 'checked')
+            if result['warnings']:
+                result['output_type']='UNKNOWN'
         result['receipt_sha256'] = expression_digest(result)
         return result
     except ExpressionConstructionError as error:

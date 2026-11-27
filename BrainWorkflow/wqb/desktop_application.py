@@ -246,6 +246,21 @@ def self_test() -> dict:
         expression_ready = compiled['valid'] and compiled['expression'] == 'offline_signal' and compile_policy(resources, [])['schema_version'] == 3
     except (ImportError, ValueError, TypeError, KeyError):
         expression_ready = False
+    try:
+        from tempfile import TemporaryDirectory
+        from wqb.research_tasks import create_task, task_runs_root, update_task, canonical_runs_root
+        from wqb.research_task_report import publish_report
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            test_scope = dict(region='USA', universe='TOP3000', delay=1)
+            first = create_task(workspace / 'runs', 'offline-first', dict(scope=test_scope))
+            second = create_task(workspace / 'runs', 'offline-second', dict(scope=test_scope))
+            update_task(workspace / 'runs', first['task_id'], status='stopped', reason='Offline native self-test')
+            report = publish_report(workspace / 'runs', first['task_id'], workspace / 'knowledge')
+            tasks_ready = first['task_id'] != second['task_id'] and report.is_file() and canonical_runs_root(
+                task_runs_root(workspace / 'runs', second['task_id'])) == workspace / 'runs'
+    except (ImportError, OSError, ValueError, TypeError, KeyError):
+        tasks_ready = False
     return {"schema_version": 1, "frozen": bool(getattr(sys, "frozen", False)),
             "code_revision": LOADED_CODE_REVISION, "source_file_count": len(sources),
             "source_identity_valid": bool(sources) and LOADED_CODE_REVISION != hashlib.sha256(b"").hexdigest(),
@@ -253,6 +268,7 @@ def self_test() -> dict:
             "repair_rulebook_id": rulebook_id, "repair_rulebook_ready": rulebook_ready,
             "learn_rendering_ready": learn_ready,
             "expression_tools_ready": expression_ready,
+            "independent_tasks_ready": tasks_ready,
             "backend_started": False, "native_bridge": False,
             "worker_modules": sorted(WORKER_MODULES)}
 
@@ -282,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
         if sys.stdout is not None:
             print(payload, end="")
         return 0 if (diagnostics["source_identity_valid"] and diagnostics['repair_rulebook_ready']
-                     and diagnostics['learn_rendering_ready'] and diagnostics['expression_tools_ready']) else 1
+                     and diagnostics['learn_rendering_ready'] and diagnostics['expression_tools_ready'] and diagnostics['independent_tasks_ready']) else 1
     config = None
     try:
         workspace = (args.workspace_root or default_workspace()).resolve()

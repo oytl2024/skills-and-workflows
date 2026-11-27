@@ -198,6 +198,9 @@ def transition_notification(run_dir: Path, case_id: str, action: str, now: str) 
 
 def dispatch_notification(run_dir: Path, case: dict, now: str) -> dict:
     """Input: run Path/case dict/time str. Output: fresh case dict. Enqueue one event, never launch a repair worker."""
+    from wqb.research_tasks import task_for_root
+    if task_for_root(Path(run_dir).parent):
+        return case
     if case.get("status") != "awaiting_maintenance_confirmation":
         return case
     case_id = str(case.get("case_id", ""))

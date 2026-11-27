@@ -32,7 +32,7 @@ START_CONFIG_FIELDS = (
     'request_timeout_seconds', 'max_retries', 'base_backoff_seconds', 'max_alphas_per_round',
     'max_rounds', 'runtime_max_steps', 'runtime_no_progress_limit', 'max_runtime_seconds',
     'max_recoveries', 'live_api_enabled', 'parallel_workflows', 'plan_depth', 'initial_hypotheses',
-    'retrieval_max_queries', 'retrieval_max_validations', 'retrieval_max_returned_bytes', 'expression_tool_version',
+    'retrieval_max_queries', 'retrieval_max_validations', 'retrieval_max_returned_bytes', 'expression_tool_version', 'independent_tasks_version',
 )
 START_POLICY_FIELDS = ('preplanned_tree_version', 'paired_scout', 'exploration_scout',
     'exploration_policy_version', 'parallel_workflows', 'plan_depth', 'initial_hypotheses',
@@ -479,6 +479,9 @@ def _blocked_request(paths, row: dict, receipt: dict, error: str) -> dict:
 
 def _notify_blocked_request(paths, row: dict) -> dict:
     """Input: ConsolePaths and blocked dict. Output: current dict. Notify unlocked, then CAS without undoing Stop."""
+    from wqb.research_tasks import task_for_root
+    if task_for_root(paths.runs_root):
+        return row
     binding = row.get('retrieval_design_task')
     if binding:
         from wqb.console_api import _safe

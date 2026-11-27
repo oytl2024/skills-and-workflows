@@ -19,6 +19,9 @@ def _append(path: Path, text: str) -> None:
 
 def record_console_job_context(paths: ConsolePaths, job: ConsoleJob, next_command: str = "") -> None:
     """Input: console paths and job. Output: none. Update durable context anchors after a UI job."""
+    from wqb.research_tasks import task_for_root
+    if task_for_root(paths.runs_root):
+        return
     milestone_text = (
         "\n## Console Job Context\n\n"
         f"- Job ID: `{job.job_id}`\n"

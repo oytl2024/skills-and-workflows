@@ -28,7 +28,9 @@ COMPOSITION_CONTRACT = (
     'Settings edits are decay,truncation,neutralization, with legal finite grids. Example wrapper rule: '
     '{edit:wrap,template:{kind:call,operator:ts_delta,args:[{kind:parent},{kind:parameter}],kwargs:{}},'
     'grid:[5,22],target_metric:fitness,target_direction:increase}. '
-    'Use only technically supported operations. Validate the full answer and correct technical diagnostics. '
+    'When technical_exploration_version1 is script-enabled, unknown signatures may be tested as explicit '
+    'uncertainty: syntax_valid is not proof of platform behavior or type. Otherwise use supported signatures. '
+    'Known syntax/type conflicts remain diagnostics. Validate the full answer and correct technical diagnostics. '
     'Stop/budgets/final submission remain independent. No network or late model decisions after sealing.')
 
 

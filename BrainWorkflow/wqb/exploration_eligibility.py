@@ -127,6 +127,8 @@ def _resource_certificate(run: Path, knowledge_root: Path, resources: dict, scop
     from wqb.expression_planning import expression_mode
     if expression_mode(resources) != expression_mode(policy):
         raise ValueError('expression resources require matching frozen new-start policy')
+    if resources.get('technical_exploration_version', 0) != policy.get('technical_exploration_version', 0):
+        raise ValueError('technical exploration requires matching owning policy')
     from wqb.direct_knowledge import direct_knowledge_enabled
     if direct_knowledge_enabled(resources) != direct_knowledge_enabled(policy):
         raise ValueError('DIRECT resources require matching frozen new-start policy')

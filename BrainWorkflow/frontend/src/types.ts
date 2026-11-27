@@ -73,10 +73,25 @@ export interface CommandReply {
   status: string;
   job_id?: string;
   message?: string;
+  task_id?: string;
+}
+
+export interface ResearchTask {
+  task_id: string;
+  status: string;
+  reason: string;
+  selection: { selected_option_id?: string; scope?: Partial<ResearchScope> };
+  created_at: string;
+  ended_at: string;
+  report_path: string;
+  report_error?: string;
 }
 
 export interface ApplicationSnapshot {
   schema_version: 1;
+  task_mode?: 1;
+  tasks?: ResearchTask[];
+  selected_task_id?: string | null;
   server_epoch: string;
   sequence: number;
   evidence_at: string | null;

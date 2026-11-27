@@ -139,17 +139,22 @@ def append_research_record_jsonl(
 def load_research_record_ledger(knowledge_root: str | Path) -> list[dict[str, Any]]:
     """Input: knowledge root. Output: research record rows. Load the machine research-record ledger."""
     path = machine_resource_path(knowledge_root, "research_records")
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()] if path.exists() else []
+    from wqb.research_task_report import load_report_records
+    return rows + load_report_records(Path(knowledge_root))
 
 
 def sync_research_record_to_machine(
     record: ResearchRecord,
     knowledge_root: str | Path,
     synced_at: str | None = None,
+    *, run_dir: Path | None = None,
 ) -> Path:
     """Input: record, knowledge root, timestamp. Output: machine path. Sync one research record into the machine ledger."""
+    from wqb.research_tasks import task_for_root
+    owner = task_for_root(run_dir.parent) if run_dir is not None else None
+    if owner:
+        return run_dir / 'research_record.json'
     generated = synced_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     return append_research_record_jsonl(knowledge_root, record, generated)
 
@@ -538,8 +543,12 @@ def render_research_record_markdown(record: ResearchRecord) -> str:
     return "\n".join(lines) + "\n"
 
 
-def sync_research_record_to_raw(record: ResearchRecord, raw_root: str | Path) -> Path:
+def sync_research_record_to_raw(record: ResearchRecord, raw_root: str | Path, *, run_dir: Path | None = None) -> Path:
     """Input: record and raw root. Output: Markdown path. Write raw research record into knowledge raw."""
+    from wqb.research_tasks import task_for_root
+    owner = task_for_root(run_dir.parent) if run_dir is not None else None
+    if owner:
+        return run_dir / 'research_record.json'
     raw = Path(raw_root)
     knowledge_root = raw.parent
     path = raw / "research" / "runs" / record.run_id / "research_record.md"

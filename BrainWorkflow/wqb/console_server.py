@@ -1033,6 +1033,15 @@ def _active_start_job(paths: ConsolePaths) -> ConsoleJob | None:
 
 
 def _complete_start_job(paths: ConsolePaths, completed: ConsoleJob) -> None:
+    """Input: paths/job. Output: None; preserve existing dispatch and then update only its owning task."""
+    try:
+        _complete_start_job_existing(paths, completed)
+    finally:
+        from wqb.research_task_console import complete_preparation
+        complete_preparation(paths, completed)
+
+
+def _complete_start_job_existing(paths: ConsolePaths, completed: ConsoleJob) -> None:
     """Input: ConsolePaths and terminal job. Output: None. Continue only a successful, current Start receipt."""
     from wqb.console_start import (
         read_start_request, start_request_guard, _blocked_request, _notify_blocked_request, PREPARING_STATUSES,
@@ -1349,13 +1358,13 @@ def _load_runtime_snapshot(server: Any, paths: ConsolePaths) -> dict[str, Any]:
         return state
 
 
-def _application_snapshot(server: Any, paths: ConsolePaths) -> dict[str, Any]:
+def _application_snapshot(server: Any, paths: ConsolePaths, task_id=None) -> dict[str, Any]:
     """Input: server/ConsolePaths. Output: whole sequenced dict; serialize projection across readers."""
     from wqb.console_api import project_application, project_command_statuses
     with server.application_snapshot_lock:
         server.application_sequence += 1
         payload = project_application(paths, _load_runtime_snapshot(server, paths),
-                                      server.application_epoch, server.application_sequence)
+                                      server.application_epoch, server.application_sequence, task_id)
         payload['command_statuses'] = project_command_statuses(paths)
         return payload
 
@@ -1378,6 +1387,16 @@ def _fresh_application_state(server: Any, paths: ConsolePaths) -> dict[str, Any]
 def _run_application_command(server: Any, paths: ConsolePaths, command: dict, state: dict) -> dict:
     """Input: server/paths/command/observed state. Output: existing action job acknowledgement dict."""
     from wqb.console_api import project_application
+    from wqb.research_task_console import enabled, start_task, stop_task
+    if enabled(paths):
+        if command['action'] == 'start':
+            result = start_task(paths, command)
+        else:
+            if not command.get('task_id'):
+                return dict(status='refused', message='Select the task to stop')
+            result = stop_task(paths, command['task_id'])
+        _invalidate_cached_console_state(server)
+        return result
     fresh = _fresh_application_state(server, paths)
     current = project_application(paths, fresh, '', 0)
     if (command['expected_revision'] != current['request_revision']
@@ -1465,7 +1484,8 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
         try:
             while time.monotonic() - started < CONSOLE_STREAM_SECONDS:
                 try:
-                    payload = _application_snapshot(self.server, paths)
+                    task_id = parse_qs(urlparse(self.path).query).get('task_id', [None])[0]
+                    payload = _application_snapshot(self.server, paths, task_id)
                     signature = _state_hash({key: value for key, value in payload.items()
                                              if key not in {'sequence', 'evidence_at'}})
                     event = 'snapshot' if signature != last_hash else 'heartbeat'
@@ -1617,9 +1637,22 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == '/app' or parsed.path.startswith('/app/'):
             self._send_application_static(parsed.path, paths)
             return
+        if parsed.path == '/api/application/report':
+            from wqb.research_tasks import read_task
+            from wqb.console_api import _safe
+            try:
+                task_id = parse_qs(parsed.query).get('task_id', [''])[0]
+                row = read_task(paths.runs_root, task_id)
+                report = _safe(paths.knowledge_root, paths.knowledge_root / 'machine/researchreport' / (task_id + '.md'))
+                if row.get('report_path') != str(report):
+                    raise ValueError('Task has no published report')
+                self._send_json(dict(body=report.read_text(encoding='utf-8')))
+            except (OSError, ValueError, KeyError) as error:
+                self._send_json(dict(error=str(error)), status=404)
+            return
         if parsed.path == '/api/application/snapshot':
             try:
-                payload = _application_snapshot(self.server, paths)
+                payload = _application_snapshot(self.server, paths, parse_qs(parsed.query).get('task_id', [None])[0])
             except Exception:
                 self._send_json(_application_runtime_error(self.server), status=503)
                 return
@@ -1746,12 +1779,16 @@ def run_console(
     """Input: server config. Output: startup summary. Run the local console until interrupted."""
     paths = paths if paths is not None else default_console_paths(knowledge_root, runs_root)
     server = make_console_server(host, port, paths)
-    from wqb.maintenance_notifications import dispatch_startup_notifications
-    threading.Thread(target=dispatch_startup_notifications, args=(paths.runs_root,),
-                     name="maintenance-startup-notice", daemon=True).start()
-    from wqb.preflight_notifications import dispatch_pending_start_contract_notices
-    threading.Thread(target=dispatch_pending_start_contract_notices, args=(paths.runs_root,),
-                     name='start-contract-pending-notices', daemon=True).start()
+    from wqb.research_task_console import enabled, restore_task_watchers
+    if enabled(paths):
+        restore_task_watchers(paths)
+    else:
+        from wqb.maintenance_notifications import dispatch_startup_notifications
+        threading.Thread(target=dispatch_startup_notifications, args=(paths.runs_root,),
+                         name="maintenance-startup-notice", daemon=True).start()
+        from wqb.preflight_notifications import dispatch_pending_start_contract_notices
+        threading.Thread(target=dispatch_pending_start_contract_notices, args=(paths.runs_root,),
+                         name='start-contract-pending-notices', daemon=True).start()
     actual_host, actual_port = server.server_address
     url = f"http://{actual_host}:{actual_port}"
     if open_browser:

@@ -39,6 +39,18 @@ def resources():
 
 
 class ExpressionToolsTests(unittest.TestCase):
+    def test_unknown_signature_is_explorable_without_claiming_type_proof(self):
+        supplied = resources()
+        supplied['technical_exploration_version'] = 1
+        supplied['operator_rows'].append(dict(operator='untried_operator'))
+        result = self.compile(call('untried_operator', field()), supplied)
+        self.assertTrue(result['valid'], result)
+        self.assertEqual(result['type_status'], 'unknown')
+        self.assertTrue(result['warnings'])
+        self.assertEqual(result['expression'], 'untried_operator(signal)')
+        self.assertFalse(self.compile(call('untried_operator', call('ts_delta', field(), literal('bad'))), supplied)['valid'])
+        self.assertFalse(self.compile(call('untried_operator', field()))['valid'])
+
     def test_declared_window_bounds_survive_technical_binding(self):
         supplied = resources()
         row = next(row for row in supplied['operator_rows'] if row['operator'] == 'ts_delta')

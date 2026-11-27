@@ -39,7 +39,9 @@ def compile_policy(resources: dict, recipes: list, base_policy: dict | None = No
         field_rows=[{key:deepcopy(row[key]) for key in ('dataset_id','field_id','field_type','region','delay','universe','instrument_type') if key in row}
                     for row in resources['field_rows']],
         operator_rows=[{key:deepcopy(row[key]) for key in ('operator','definition','definition_basis') if key in row}
-                       for row in resources['operator_rows'] if isinstance(row.get('definition'),dict)])
+                       for row in resources['operator_rows'] if isinstance(row.get('definition'),dict) or resources.get('technical_exploration_version') == 1])
+    if resources.get('technical_exploration_version') == 1:
+        context['technical_exploration_version']=1
     return validate_policy(dict(schema_version=POLICY_VERSION,expression_tool_version=1,rulebook_id='frozen-expression-search-v1',
         rules=rules,traits={},resources=context))
 

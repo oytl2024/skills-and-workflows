@@ -993,6 +993,10 @@ def run_root_expression_hashes(run_root: str | Path) -> set[str]:
     """Input: run root path. Output: preserved compact identities plus current submitted/checked hashes."""
     root = Path(run_root)
     hashes: set[str] = set()
+    from wqb.research_tasks import canonical_runs_root
+    canonical = canonical_runs_root(root)
+    if canonical != root.absolute():
+        hashes.update(run_root_expression_hashes(canonical))
     if not root.exists():
         return hashes
     history_path = root / 'simulation_identity_history.json'

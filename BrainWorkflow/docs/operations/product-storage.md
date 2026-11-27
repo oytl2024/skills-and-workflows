@@ -1,10 +1,10 @@
 # Minimum Product Storage
 
-## Nov26 Installation Audit
+## Nov27 Installation Audit
 
 After verified Git sync, the existing desktop installer replaces only
 `BrainWorkflow/output/desktop-application/installed/BrainWorkflow` with the
-accepted `20261126-095101-3662/dist space 中文/BrainWorkflow` bundle. Installer
+accepted `20261127-101517-9885/dist space 中文/BrainWorkflow` bundle. Installer
 verifies literal containment, no links, no owning processes, copied hashes and
 acceptance revision before retiring its temporary `.previous` bundle. This is
 reproducible public product output, not research/session evidence. Preserve the

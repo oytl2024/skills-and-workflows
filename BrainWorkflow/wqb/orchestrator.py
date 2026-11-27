@@ -273,7 +273,7 @@ class WorkflowOrchestrator:
         try:
             record = self._load_or_create_research_record(state)
             write_research_record(Path(state.run_dir) / "research_record.json", record)
-            synced_path = sync_research_record_to_raw(record, self.paths.knowledge_root / "raw")
+            synced_path = sync_research_record_to_raw(record, self.paths.knowledge_root / "raw", run_dir=Path(state.run_dir))
             raw_path = str(synced_path)
             state = replace(state, research_record_synced=True, updated_at=aborted_at)
             append_workflow_event(
@@ -1006,8 +1006,8 @@ class WorkflowOrchestrator:
         write_research_record(run_dir / "research_record.json", record)
         advance_stage = state.current_stage == "research_record_sync"
         try:
-            raw_path = sync_research_record_to_raw(record, self.paths.knowledge_root / "raw")
-            sync_research_record_to_machine(record, self.paths.knowledge_root, now)
+            raw_path = sync_research_record_to_raw(record, self.paths.knowledge_root / "raw", run_dir=run_dir)
+            sync_research_record_to_machine(record, self.paths.knowledge_root, now, run_dir=run_dir)
         except Exception as exc:
             if not advance_stage:
                 raise
@@ -1080,8 +1080,8 @@ class WorkflowOrchestrator:
         """Input: WorkflowRunState, ResearchRecord-like object, timestamp str. Output: None. Sync raw record or persist warning state."""
         run_dir = Path(state.run_dir)
         try:
-            raw_path = sync_research_record_to_raw(record, self.paths.knowledge_root / "raw")
-            sync_research_record_to_machine(record, self.paths.knowledge_root, now)
+            raw_path = sync_research_record_to_raw(record, self.paths.knowledge_root / "raw", run_dir=run_dir)
+            sync_research_record_to_machine(record, self.paths.knowledge_root, now, run_dir=run_dir)
         except Exception as exc:
             warning = f"{type(exc).__name__}: {exc}"
             warning_state = self._set_stage(

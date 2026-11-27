@@ -402,8 +402,12 @@ def project_group(group: Path) -> dict:
     return result
 
 
-def project_application(paths, state: dict, server_epoch: str, sequence: int) -> dict:
+def project_application(paths, state: dict, server_epoch: str, sequence: int, selected_task_id=None) -> dict:
     """Input: Console paths/state, server epoch str/sequence int. Output: versioned read model dict."""
+    from wqb.research_task_console import enabled, project_tasks
+    from wqb.research_tasks import task_for_root
+    if enabled(paths) and task_for_root(paths.runs_root) is None:
+        return project_tasks(paths, state, server_epoch, sequence, selected_task_id)
     # Reuse existing pure action predicates; handlers still recheck authoritative gates.
     from wqb.console_server import _workflow_action_state, _workflow_action_hash
     result = {'schema_version': 1, 'server_epoch': server_epoch, 'sequence': sequence,
@@ -519,13 +523,15 @@ def submit_command(paths, command: dict, *, action_runner, state_reader) -> dict
     try:
         if (not isinstance(command, dict) or not isinstance(command_id, str)
                 or not SAFE_ID.fullmatch(command_id)
-                or set(command) - {'command_id', 'action', 'expected_revision', 'selected_option_id', 'group_id', 'selected_scope'}
+                or set(command) - {'command_id', 'action', 'expected_revision', 'selected_option_id', 'group_id', 'selected_scope', 'task_id'}
                 or command.get('action') not in {'start', 'stop'}
                 or ('group_id' in command and (not isinstance(command['group_id'], str)
                     or not SAFE_ID.fullmatch(command['group_id'])))
                 or not isinstance(command.get('expected_revision'), str)
                 or not command['expected_revision']):
             raise ValueError('invalid command schema or identity')
+        if 'task_id' in command and (not isinstance(command['task_id'], str) or not PATH_ID.fullmatch(command['task_id'])):
+            raise ValueError('invalid selected task identity')
         if 'selected_scope' in command:
             selected = command['selected_scope']
             if (command['action'] != 'start' or not command.get('selected_option_id')
@@ -557,7 +563,7 @@ def submit_command(paths, command: dict, *, action_runner, state_reader) -> dict
                     return _reply(command_id, 'unknown', 'Invalid receipt; action will not be replayed')
                 return response
             state = state_reader()
-            current = project_application(paths, state, '', 0)
+            current = project_application(paths, state, '', 0, command.get('task_id'))
             response = None
             if command['expected_revision'] != current['request_revision']:
                 response = _reply(command_id, 'refused', 'Stale expected_revision; resnapshot required')
@@ -600,6 +606,8 @@ def submit_command(paths, command: dict, *, action_runner, state_reader) -> dict
             'Dispatch acknowledged; inspect authoritative state for completion' if status == 'accepted'
             else 'Action outcome requires reconciliation; never automatically replay')),
             outcome.get('job_id'), execution)
+        if outcome.get('task_id'):
+            response['task_id'] = outcome['task_id']
         _canonical(response)
         if len(_canonical(response).encode()) > MAX_COMMAND_BYTES:
             raise ValueError('action response exceeds receipt limit')

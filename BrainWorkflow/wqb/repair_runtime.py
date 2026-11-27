@@ -19,6 +19,12 @@ REPAIR_PROGRESS_WAIT_FILE = 'progress_wait.json'
 REPAIR_CHECK_MAX_ATTEMPTS = 3
 
 
+def _iteration_key(root: Path, digest: str) -> str:
+    """Input: owning run Path/full sealed digest. Output: task-local short folder key; full identity remains in receipts."""
+    from wqb.research_tasks import task_for_root
+    return digest[:16] if task_for_root(Path(root).parent) else digest
+
+
 def _checks_need_recovery(row: dict) -> bool:
     """Input: checked row dict. Output: bool. Keep baseline-pending or otherwise unqualified checks resumable."""
     from wqb.checker import SUBMISSION_ONLY_CHECKS
@@ -205,7 +211,7 @@ class RepairRuntimeExecutor:
         if not self.enable_live_api:
             raise ValueError("live repair API permission is required")
         subrun = Path(root) / "stages" / "repair" / "parents" / (str(parent["alpha_id"]) + "-" + str(parent["expression_hash"])[:12])
-        unknown_source = subrun if original_plan is None else subrun / 'iterations' / str(original_plan.get('evidence_digest', ''))
+        unknown_source = subrun if original_plan is None else subrun / 'iterations' / _iteration_key(root, str(original_plan.get('evidence_digest', '')))
         if (unknown_source / 'result_unknown.json').exists():
             from wqb.runtime_control import check_submission_allowed
             from wqb.repair_unknown import quarantine_source
@@ -256,7 +262,7 @@ class RepairRuntimeExecutor:
             if any(row.get('parent_alpha_id') != parent['alpha_id'] or
                    row.get('parent_expression_hash') != parent['expression_hash'] for row in variants):
                 raise ValueError('Repair search plan parent mismatch')
-            subrun = subrun / 'iterations' / str(search_plan['evidence_digest'])
+            subrun = subrun / 'iterations' / _iteration_key(root, str(search_plan['evidence_digest']))
         else:
             variants = _planned_variants(parent, actions, maximum)
         from wqb import cli

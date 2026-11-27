@@ -27,6 +27,32 @@ REPAIR_GRID = [8, 16]
 
 
 class RetrievalLifecycleTests(unittest.TestCase):
+    def test_independent_task_drives_to_candidate_and_one_report(self):
+        from wqb.research_tasks import create_task, task_runs_root, update_task
+        from wqb.research_task_console import refresh_task
+        from wqb.console_state import ConsolePaths
+        root = self.fixture.paths.run_root
+        task = create_task(root, 'offline-task', dict(scope=self.retrieval.config.get('selected_scope', {})))
+        self.fixture.paths.run_root = task_runs_root(root, task['task_id'])
+        self.retrieval.config['independent_tasks_version'] = 1
+        run = self.prepare(generic=True, qualified=True)
+        result = self.driver.drive(run)
+        self.assertEqual(result['runtime_status'], 'waiting_for_user', result)
+        group_id = json.loads((run / 'research_group_binding.json').read_text())['group_id']
+        group = run.parent / 'research_groups' / group_id
+        update_task(root, task['task_id'], status='running', group_dir=str(group))
+        project = self.fixture.paths.project_root
+        paths = ConsolePaths(project, self.fixture.paths.workflow_root, self.fixture.paths.knowledge_root,
+            root, project / 'milestone.md', project / 'todo.md', root / 'console_jobs')
+        ended = refresh_task(paths, task['task_id'])
+        self.assertEqual(ended['status'], 'awaiting_submission', ended)
+        self.assertTrue(Path(ended['report_path']).is_file(), ended)
+        body = Path(ended['report_path']).read_text(encoding='utf-8')
+        self.assertIn('Point 1', body)
+        self.assertIn('Repair Decisions And Rollbacks', body)
+        self.assertFalse((self.fixture.paths.knowledge_root / 'raw/research/runs' / run.name).exists())
+        self.assertFalse(any(method == 'POST' and '/alphas/' in path for method, path in self.transport.calls))
+
     def setUp(self):
         """Input: TestCase. Output: source-backed temporary VECTOR retrieval fixture and offline fences."""
         self.retrieval = retrieval.RetrievalStartTests()

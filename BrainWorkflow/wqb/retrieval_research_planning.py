@@ -27,7 +27,7 @@ CONFIG_KEYS = ('instrument_type', 'region', 'delay', 'universe', 'decay', 'neutr
     'truncation', 'pasteurization', 'unit_handling', 'nan_handling', 'language',
     'measurement_period', 'research_policy', 'repair_search_policy', 'direct_knowledge_version',
     'retrieval_excluded_selections', 'retrieval_owner', 'retrieval_max_queries',
-    'retrieval_max_validations', 'retrieval_max_returned_bytes', 'expression_tool_version')
+    'retrieval_max_validations', 'retrieval_max_returned_bytes', 'expression_tool_version', 'independent_tasks_version')
 TOOL_CONTRACTS = {
     'compile': dict(arguments=dict(expression='structural AST object, not a formula string'),
         purpose='New expression-tool mode: build/type-check a scoped expression and return its receipt/diagnostics.'),
@@ -202,6 +202,8 @@ def _resolved_context(task: dict, selection: list[tuple[str, str]], refs: list[d
     from wqb.expression_planning import expression_mode
     if expression_mode(config):
         resources['expression_tool_version']=1
+        if config.get('independent_tasks_version') == 1:
+            resources['technical_exploration_version']=1
     if refs:
         resources = _attach_cited_sources(Path(identity['knowledge_root']), resources, refs)
     repair = _repair_policy(resources, config.get('repair_search_policy'))

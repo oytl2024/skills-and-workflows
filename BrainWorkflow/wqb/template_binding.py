@@ -229,7 +229,7 @@ def bind_template(template: dict, field_rows: list[dict], operator_rows: list[di
 
 
 def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[dict], scope: dict,
-                   resource_version: int = 1, evidence_context: dict | None = None, *, technical_only: bool = False) -> dict:
+                   resource_version: int = 1, evidence_context: dict | None = None, *, technical_only: bool = False, allow_unknown: bool = False) -> dict:
     """Input: snapshot dictionaries. Output: dict. Validate version and perform conservative typed AST binding."""
     version = template.get('binding_version', 1)
     if type(version) is not int or version not in (1, 2):
@@ -273,6 +273,9 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
             return definitions[name]
         matches = [row for row in operator_rows if row.get('operator') == name]
         if len(matches) != 1 or not isinstance(matches[0].get('definition'), dict):
+            if technical_only and allow_unknown:
+                definitions[name] = None
+                return None
             raise TemplateBindingError(f'{name}: missing or ambiguous documented definition')
         row = matches[0]
         basis = row.get('definition_basis')
@@ -287,7 +290,13 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
             if result['status'] != 'supported':
                 raise TemplateBindingError(f'{name}: unsupported definition basis: {result["rejections"]}')
             receipts[name] = result['value']
-        definitions[name] = operator_definition_from_dict(row['definition'], technical_only=technical_only)
+        try:
+            definitions[name] = operator_definition_from_dict(row['definition'], technical_only=technical_only)
+        except ValueError:
+            if not (technical_only and allow_unknown):
+                raise
+            definitions[name] = None
+            return None
         if catalog_mode and not technical_only:
             if isinstance(evidence_context, dict) and {'source_index', 'source_texts'} <= evidence_context.keys():
                 definitions[name] = catalog_operator_definition(row, evidence_context['source_index'], evidence_context['source_texts'])
@@ -339,20 +348,25 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
             return item, kind
         if isinstance(item, ast.UnaryOp):
             operand, kind = render(item.operand)
-            if kind not in ('MATRIX', 'INTEGER', 'FLOAT'):
+            if kind not in ('MATRIX', 'INTEGER', 'FLOAT') and not (allow_unknown and kind == 'UNKNOWN'):
                 raise TemplateBindingError('unary arithmetic requires numeric type')
             return ast.UnaryOp(op=item.op, operand=operand), kind
         if isinstance(item, ast.BinOp):
             left, left_type = render(item.left)
             right, right_type = render(item.right)
-            if left_type not in ('MATRIX', 'INTEGER', 'FLOAT') or right_type not in ('MATRIX', 'INTEGER', 'FLOAT'):
+            allowed = ('MATRIX', 'INTEGER', 'FLOAT', 'UNKNOWN') if allow_unknown else ('MATRIX', 'INTEGER', 'FLOAT')
+            if left_type not in allowed or right_type not in allowed:
                 raise TemplateBindingError('binary arithmetic requires numeric matrix/scalar types')
-            kind = 'MATRIX' if 'MATRIX' in (left_type, right_type) else 'FLOAT'
+            kind = 'UNKNOWN' if 'UNKNOWN' in (left_type, right_type) else 'MATRIX' if 'MATRIX' in (left_type, right_type) else 'FLOAT'
             return ast.BinOp(left=left, op=item.op, right=right), kind
         if not isinstance(item, ast.Call):
             raise TemplateBindingError('unsupported expression branch')
         name = item.func.id
         contract = definition(name)
+        if contract is None:
+            provenance.append(dict(operator=name, evidence_refs=[], signature_status='unknown'))
+            return ast.Call(func=ast.Name(id=name, ctx=ast.Load()), args=[render(arg)[0] for arg in item.args],
+                keywords=[ast.keyword(arg=kw.arg, value=render(kw.value)[0]) for kw in item.keywords]), 'UNKNOWN'
         parameters = contract['parameters']
         if len(item.args) > len(parameters):
             raise TemplateBindingError(f'{name}: too many positional parameters')
@@ -378,7 +392,7 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
                 continue
             arg = supplied[key]
             value, actual = render(arg, parameter['type'])
-            if not _accepts(actual, parameter['type']):
+            if not _accepts(actual, parameter['type']) and not (allow_unknown and actual == 'UNKNOWN'):
                 raise TemplateBindingError(f'{name}.{key}: type {actual} does not match {parameter["type"]}')
             if policy is not None and key == policy['parameter']:
                 _check_project_parameter(value, policy)
@@ -401,7 +415,7 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
     bound, output_type = render(node)
     if consumed != set(by_slot):
         raise TemplateBindingError('kernel must consume every input slot as an actual field reference')
-    if output_type != 'MATRIX':
+    if output_type != 'MATRIX' and not (allow_unknown and output_type == 'UNKNOWN'):
         raise TemplateBindingError('kernel must produce MATRIX output')
     bindings = {}
     for slot in slots:
@@ -418,14 +432,15 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
                                    reduction=copy.deepcopy(slot.reduction))
         if timing.get(slot.name) is not None:
             bindings[slot.name]['timing_receipt'] = timing[slot.name]
-    return dict(bound_expression=ast.unparse(ast.fix_missing_locations(bound)), bindings=bindings,
+    result = dict(bound_expression=ast.unparse(ast.fix_missing_locations(bound)), bindings=bindings,
                 operator_provenance=provenance, operator_call_count=len(provenance))
+    return result
 
 
-def bind_technical_template(template: dict, field_rows: list[dict], operator_rows: list[dict], scope: dict) -> dict:
+def bind_technical_template(template: dict, field_rows: list[dict], operator_rows: list[dict], scope: dict, *, allow_unknown: bool = False) -> dict:
     """Input: script-constructed v2 template/technical resources/scope. Output: typed binding, without semantic publication gates."""
     try:
-        return _bind_template(template, field_rows, operator_rows, scope, 2, technical_only=True)
+        return _bind_template(template, field_rows, operator_rows, scope, 2, technical_only=True, allow_unknown=allow_unknown)
     except TemplateBindingError:
         raise
     except (ValueError, TypeError, KeyError, AttributeError, SyntaxError, RecursionError) as error:

@@ -208,6 +208,11 @@ def group_for_run(run: Path) -> dict | None:
 
 def require_group_running(run: Path) -> None:
     """Input: child run Path. Output: None or RuntimePaused; apply shared Stop/time authority."""
+    from wqb.research_tasks import task_for_root, TERMINAL
+    owner = task_for_root(Path(run).parent)
+    if owner and owner[1]['status'] in TERMINAL:
+        from wqb.runtime_control import RuntimePaused
+        raise RuntimePaused('research task ended; no late submissions')
     row = group_for_run(run)
     if row is None:
         return
@@ -272,6 +277,23 @@ def _live_submission_waiters(group: Path, row: dict, own: str) -> dict:
     return waiting
 
 
+def _shared_directory(group: Path) -> Path:
+    """Input: verified group Path. Output: canonical workspace group-accounting directory shared across independent tasks."""
+    from wqb.research_tasks import canonical_runs_root
+    return canonical_runs_root(group.parent.parent) / 'research_groups'
+
+
+@contextmanager
+def _account_submission_gate(group: Path):
+    """Input: group Path. Output: shared nonblocking POST slot for task mode; legacy groups retain their fence."""
+    directory = _shared_directory(group)
+    if directory == group.parent:
+        yield
+    else:
+        with json_lock_transition_guard(directory / 'task_submission_fence', 0, 0, 'account POST fence busy'):
+            yield
+
+
 def reserve_identity(group: Path, run_id: str, identity: str) -> bool:
     """Input: group Path, member ID and simulation digest strings. Output: bool global claim/replay result."""
     return _reserve_identities(group, run_id, [identity], submission=False)
@@ -285,7 +307,11 @@ def _reserve_identities(group: Path, run_id: str, identities: list[str], *, subm
             or len(set(identities)) != len(identities)
             or any(not DIGEST.fullmatch(identity) for identity in identities)):
         raise ValueError('invalid simulation reservation owner or identity')
-    directory = group.parent
+    directory = _shared_directory(group)
+    if directory != group.parent:
+        from wqb.cli import run_root_expression_hashes
+        if set(identities) & run_root_expression_hashes(directory.parent):
+            return False
     path = directory / 'simulation_reservations.json'
     with json_lock_transition_guard(directory / 'identity_guard', 5.0, 0.05, 'group identity busy'):
         claims = _read(path) if path.exists() else {}
@@ -325,7 +351,7 @@ def record_payload_outcome(run: Path, identities: list[str], response) -> None:
     if not identities:
         return
     row = group_for_run(run)
-    directory = Path(row['group_dir']).parent
+    directory = _shared_directory(Path(row['group_dir']))
     path = directory / 'simulation_reservations.json'
     with json_lock_transition_guard(directory / 'identity_guard', 5.0, 0.05, 'group identity busy'):
         claims = _read(path)
@@ -343,7 +369,7 @@ def record_payload_outcome(run: Path, identities: list[str], response) -> None:
 def account_cooldown_source(run: Path) -> Path | None:
     """Input: child Path. Output: account-shared rate state directory Path, or None for legacy."""
     row = group_for_run(run)
-    return Path(row['group_dir']).parent / 'account_cooldown' if row else None
+    return _shared_directory(Path(row['group_dir'])) / 'account_cooldown' if row else None
 
 
 def check_account_cooldown(source: Path, *, submission: bool = False) -> None:
@@ -408,9 +434,9 @@ def authorize_group_retry(run: Path, source: Path, now: str) -> None:
         intent = _read(group / 'group_intent.json')
         _write(group / 'group_intent.json', {**intent, 'recoveries_used': row['recoveries_used'] + 1})
         # Never wait for the POST fence while holding intent; admission briefly takes fence -> intent.
-        with json_lock_transition_guard(group.parent / 'cooldown_guard', 5.0, 0.05, 'account cooldown busy'):
+        with json_lock_transition_guard(_shared_directory(group) / 'cooldown_guard', 5.0, 0.05, 'account cooldown busy'):
             authorize_bounded_retry(source, now)
-            shared = group.parent / 'account_cooldown'
+            shared = _shared_directory(group) / 'account_cooldown'
             state = read_rate_limit_state(shared / 'rate_limit_state.json')
             if (source.resolve() != shared.resolve() and state.get('status') == 'cooldown'
                     and int(state.get('consecutive_429_count', 0)) >= MAX_CONSECUTIVE_429 - 1
@@ -460,7 +486,7 @@ def group_submission_gate(run: Path, *, fair: bool = False):
                     raise RuntimePaused('group POST admission revision changed')
                 admitted = False
                 try:
-                    with json_lock_transition_guard(group / 'submission_fence', 0, 0, 'group POST fence busy'):
+                    with json_lock_transition_guard(group / 'submission_fence', 0, 0, 'group POST fence busy'), _account_submission_gate(group):
                         with json_lock_transition_guard(group / 'intent_guard', 0, 0, 'group intent busy'):
                             require_group_running(run)
                             row = read_group(group)
@@ -479,7 +505,7 @@ def group_submission_gate(run: Path, *, fair: bool = False):
                             yield
                             return
                 except ValueError as error:
-                    if admitted or str(error) not in {'group POST fence busy', 'group intent busy'}:
+                    if admitted or str(error) not in {'group POST fence busy', 'group intent busy', 'account POST fence busy'}:
                         raise
                 # Queue latency is not a failed POST. The group runtime deadline,
                 # durable Stop and revision checks above bound this paced wait.

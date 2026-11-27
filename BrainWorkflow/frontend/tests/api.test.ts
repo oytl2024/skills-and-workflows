@@ -13,6 +13,23 @@ class FakeEvents {
 afterEach(() => vi.useRealTimers());
 
 describe('application transport', () => {
+  it('switches task read transports and scopes Stop without blocking a new Start', async () => {
+    const snapshot = { ...fixtureSnapshot(), task_mode: 1 as const, start_mode: 'new' as const,
+      selected_task_id: 'ALL_LARGE_D1_first', allowed_actions: { start: true, stop: true }, tasks: [] };
+    const fetcher = vi.fn().mockImplementation((url, init) => Promise.resolve({ ok: true, json: async () =>
+      init?.method === 'POST' ? { command_id: JSON.parse(init.body).command_id, status: 'accepted' } :
+        { ...snapshot, sequence: fetcher.mock.calls.length, selected_task_id: String(url).includes('second') ? 'ALL_LARGE_D1_second' : snapshot.selected_task_id } }));
+    const client = new ApplicationClient({ fetcher, eventSource: null, storage: null });
+    client.start();
+    await vi.waitFor(() => expect(client.getState().snapshot).not.toBeNull());
+    client.selectTask('ALL_LARGE_D1_second');
+    await vi.waitFor(() => expect(client.getState().snapshot?.selected_task_id).toBe('ALL_LARGE_D1_second'));
+    await client.command('stop');
+    const sent = fetcher.mock.calls.filter(([, init]) => init?.method === 'POST');
+    expect(JSON.parse(sent[0][1].body).task_id).toBe('ALL_LARGE_D1_second');
+    expect(fetcher.mock.calls.some(([url]) => String(url).includes('task_id=ALL_LARGE_D1_second'))).toBe(true);
+    client.dispose();
+  });
   it('accepts local preparation without platform counts and validates optional tool telemetry', () => {
     const tool_progress = { stage: 'retrieving', operation: 'fields', queries: 3, validations: 1, returned_bytes: 500,
       max_queries: 64, max_validations: 24, max_returned_bytes: 1048576, activity_at: '2026-11-24T01:02:03+00:00' };

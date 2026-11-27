@@ -4,6 +4,24 @@ This is the implemented new preplanned desktop path, not permission to execute i
 Older frozen runs retain their original contracts. An installed app opening or an
 accepted HTTP command does not prove research or a model call has started.
 
+## Independent Task Entry
+
+New `independent_tasks_version=1` entry:
+`console_api.submit_command -> research_task_console.start_task -> research_tasks.create_task`
+immediately creates a scope-named task/card, then reuses existing Start/group
+drivers through task-local Console paths. Short physical keys isolate intent,
+active pointers and runs; full identities remain sealed. Jobs/command receipts
+remain canonical. View selection never changes a global active task.
+
+Daily accounting, simulation reservations, account cooldown and POST capacity
+resolve to one workspace root. Stop/terminal state fence late submissions without
+refunds or resolving unknown POSTs. The old global previous-task veto is not used
+to create new tasks. `complete_preparation/refresh_task` observe owning outcomes;
+`finish_task -> research_task_report.publish_report` writes one terminal MD at
+`machine/researchreport/<task_id>.md`. No automatic research maintenance chat.
+Knowledge-summary readers consume reports in memory; new-mode Orchestrator
+exports stay local, without duplicate raw or machine JSONL research products.
+
 ## Independent Owners
 
 | Concern | Owner | Input -> output |
@@ -42,8 +60,9 @@ paths and finite setting grids. `repair_search` retains the existing persistent
 receipts, comparison, rollback, dedup and batch execution. New fields and late
 model formulas are not Repair. Invalid recipes return planning diagnostics.
 Syntax is nested named calls/kwargs, literals, unary +/- and binary +,-,*,/;
-not complete BRAIN language. Unknown signatures produce per-call diagnostics,
-not a global resource gate. Audited current context:104 visible operators,8 typed;
+not complete BRAIN language. Frozen technical-exploration mode allows unknown
+signatures with warnings/type-unknown, not a fabricated type proof. Known technical
+conflicts still produce diagnostics. Audited earlier context:104 visible operators,8 typed;
 the107 identity ledger rows are not executable signature coverage.
 
 Task-local diagnostics retain32 bounded records (<=64KB), hashes/counters and
@@ -144,7 +163,7 @@ dates, not just the human summary. These changes preserve independent validation
 policies. Current acceptance/deployment status belongs to root todo.md; source
 changes or targeted tests alone never prove a running app has the fix.
 
-Catalog visibility is not feature-DSL support: VECTOR/GROUP remain visible, while
-the current structured feature compiler needs a MATRIX starting field per lane.
-Insufficient distinct starting fields must be reported, not silently converted,
-duplicated or worked around by reducing the requested parallelism.
+The legacy feature-DSL entry required a MATRIX starting field. This is not the
+new AST-mode admission contract: VECTOR reductions and GROUP inputs may be used
+through compatible or explicitly uncertain named calls. No silent type coercion,
+fabricated signature or reduced requested parallelism is implied.

@@ -7,6 +7,7 @@
   "delay": 1,
   "instrument_type": "EQUITY",
   "mode": "plan-only",
+  "independent_tasks_version": 1,
   "batch_size": 30,
   "max_simulation_budget": 30,
   "live_api_enabled": false,

@@ -42,7 +42,7 @@ function validPreparation(value: unknown): value is Preparation {
       (Number.isSafeInteger(p.requests_used) && p.requests_used! >= 0 && Number.isSafeInteger(p.request_limit) && p.request_limit! >= 0)) &&
     (t === undefined || (!!t && typeof t === 'object' && !Array.isArray(t) &&
       ['retrieving', 'validating', 'planning'].includes(t.stage) &&
-      ['fields', 'operators', 'templates', 'experience', 'source', 'validate'].includes(t.operation) &&
+      ['contract', 'resources', 'fields', 'operators', 'templates', 'experience', 'source', 'compile', 'validate'].includes(t.operation) &&
       bounded(t.queries, t.max_queries) && bounded(t.validations, t.max_validations) && bounded(t.returned_bytes, t.max_returned_bytes) &&
       typeof t.activity_at === 'string' && Number.isFinite(Date.parse(t.activity_at)))) &&
     (p.scope === undefined || validScope(p.scope)) && (p.field_count === undefined || (Number.isSafeInteger(p.field_count) && p.field_count >= 0)) &&
@@ -66,6 +66,11 @@ function validNode(value: unknown, depth = 0): value is ExperimentNode {
 // Input: unknown JSON. Output: validated v1 snapshot or Error; never supplies missing research facts.
 export function parseSnapshot(value: unknown): ApplicationSnapshot {
   const s = value as ApplicationSnapshot | null;
+  if (s?.task_mode !== undefined && (s.task_mode !== 1 || !Array.isArray(s.tasks) ||
+    !s.tasks.every(t => t && typeof t.task_id === 'string' && typeof t.status === 'string' && typeof t.reason === 'string' &&
+      typeof t.report_path === 'string') || !(s.selected_task_id === null || typeof s.selected_task_id === 'string'))) {
+    throw new Error('任务状态格式不正确');
+  }
   if (!s || s.schema_version !== 1 || typeof s.server_epoch !== 'string' || !s.server_epoch ||
     !Number.isSafeInteger(s.sequence) || s.sequence < 0 || !['string', 'number'].includes(typeof s.request_revision) ||
     !(s.evidence_at === null || typeof s.evidence_at === 'string') ||
@@ -126,6 +131,24 @@ export class ApplicationClient {
   private refreshPromise: Promise<void> | null = null;
   private controller: AbortController | null = null;
   private fixtureMode = false;
+  private selectedTaskId: string | null = null;
+
+  // Input: task ID. Output: void; switch read-only HTTP/SSE scope without changing research intent.
+  selectTask(taskId: string): void {
+    if (this.fixtureMode || this.selectedTaskId === taskId) return;
+    this.selectedTaskId = taskId;
+    this.stream?.close();
+    this.stream = null;
+    this.controller?.abort();
+    const restart = (): void => { void this.refresh(); this.connect(); };
+    if (this.refreshPromise) void this.refreshPromise.finally(restart);
+    else restart();
+  }
+
+  // Input: local endpoint. Output: task-scoped URL for the selected view, not a server-global selection.
+  private scopedUrl(url: string): string {
+    return this.selectedTaskId ? `${url}?task_id=${encodeURIComponent(this.selectedTaskId)}` : url;
+  }
 
   // Input: local transport/storage adapters (ClientOptions). Output: inert client; start() activates reads only.
   constructor(options: ClientOptions = {}) {
@@ -209,19 +232,22 @@ export class ApplicationClient {
     if (this.fixtureMode || !this.running) return;
     if (this.refreshPromise) return this.refreshPromise;
     const startedAt = this.state.snapshot;
+    const taskId = this.selectedTaskId;
     const controller = new AbortController();
     this.controller = controller;
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     this.refreshPromise = (async () => {
       try {
-        const response = await this.fetcher(SNAPSHOT_URL, { signal: controller.signal, cache: 'no-store', credentials: 'same-origin' });
+        const response = await this.fetcher(this.scopedUrl(SNAPSHOT_URL), { signal: controller.signal, cache: 'no-store', credentials: 'same-origin' });
         if (!response.ok) throw new Error('状态读取失败');
         const snapshot = parseSnapshot(await response.json());
+        if (taskId !== this.selectedTaskId) return;
         if (!this.running || controller.signal.aborted) return;
         if (this.state.snapshot !== startedAt && this.state.snapshot?.server_epoch !== snapshot.server_epoch) return;
         this.accept(snapshot);
         if (this.state.connection !== 'live') this.update({ connection: 'polling', error: '' });
       } catch (error) {
+        if (taskId !== this.selectedTaskId) return;
         if (this.running) {
           this.update({ connection: 'offline', error: error instanceof Error ? error.message : '无法读取最新状态，正在自动重试；上次证据已保留。' });
           this.ensurePolling();
@@ -239,7 +265,7 @@ export class ApplicationClient {
   private connect(): void {
     if (!this.running || !this.eventsFactory) { this.ensurePolling(); return; }
     try {
-      const stream = this.eventsFactory(EVENTS_URL);
+      const stream = this.eventsFactory(this.scopedUrl(EVENTS_URL));
       this.stream = stream;
       this.lastEvent = Date.now();
       const receive = (event: Event): void => {
@@ -290,7 +316,7 @@ export class ApplicationClient {
   async command(action: Action, optionId?: string, selectedScope?: ResearchScope): Promise<void> {
     const snapshot = this.state.snapshot;
     if (!snapshot || this.fixtureMode || !snapshot.allowed_actions[action]) return;
-    const blocked = this.state.commands.some(c => c.group_id === snapshot.group.group_id &&
+    const blocked = snapshot.task_mode === 1 ? this.state.commands.some(c => c.status === 'pending') : this.state.commands.some(c => c.group_id === snapshot.group.group_id &&
       (action === 'start' || c.action === 'stop') && (['pending', 'unknown'].includes(c.status) ||
         (['accepted', 'queued', 'running'].includes(c.status) && c.expected_revision === snapshot.request_revision)));
     if (blocked || (action === 'start' && !['live', 'polling'].includes(this.state.connection))) return;
@@ -301,6 +327,7 @@ export class ApplicationClient {
       c.region === selectedScope.region && c.delay === selectedScope.delay && c.universe === selectedScope.universe))) return;
     const command_id = crypto.randomUUID();
     const tracked: TrackedCommand = { command_id, action, status: 'pending', expected_revision: snapshot.request_revision, group_id: snapshot.group.group_id };
+    if (snapshot.task_mode === 1 && snapshot.selected_task_id) tracked.task_id = snapshot.selected_task_id;
     this.update({ commands: [...this.state.commands.slice(-19), tracked] });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -309,11 +336,13 @@ export class ApplicationClient {
         method: 'POST', signal: controller.signal, credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ command_id, action, expected_revision: snapshot.request_revision,
+          ...(snapshot.task_mode === 1 && snapshot.selected_task_id ? { task_id: snapshot.selected_task_id } : {}),
           ...(action === 'start' && newResearch && optionId ? { selected_option_id: optionId } : {}),
           ...(manualStart && selectedScope ? { selected_scope: { region: selectedScope.region, delay: selectedScope.delay, universe: selectedScope.universe } } : {}) }),
       });
       const reply = parseReply(await response.json(), command_id);
       this.update({ commands: this.state.commands.map(c => c.command_id === command_id && c.status === 'pending' ? { ...c, ...reply } : c) });
+      if (snapshot.task_mode === 1 && action === 'start' && reply.task_id) this.selectTask(reply.task_id);
       void this.refresh();
     } catch {
       this.update({ commands: this.state.commands.map(c => c.command_id === command_id && c.status === 'pending' ?

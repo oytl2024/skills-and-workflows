@@ -26,6 +26,7 @@ class RetrievalDesktopTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(json.loads(output.read_text(encoding='utf-8'))['learn_rendering_ready'])
             self.assertTrue(json.loads(output.read_text(encoding='utf-8'))['expression_tools_ready'])
+            self.assertTrue(json.loads(output.read_text(encoding='utf-8'))['independent_tasks_ready'])
 
     def test_generic_plan_uses_native_query_client_and_seals_repair(self):
         """Input: frozen query client/source owner. Output: complete generic plan and persisted AST Repair, no actual model/API."""
