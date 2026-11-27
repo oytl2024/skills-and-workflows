@@ -13,10 +13,15 @@ class RetrievalStartTests(unittest.TestCase):
         from wqb.preplanned_start import prepare_preplanned_start
         from wqb.retrieval_research_planning import query_design_task
         config=deepcopy(self.config)
+        self.fixture.add_lane(1)
+        config['parallel_workflows']=2
         config['expression_tool_version']=1
         config['research_policy']['expression_tool_version']=1
         calls=[]
         def model(directory,brief):
+            from wqb.retrieval_research_planning import authenticated_design_task
+            self.assertEqual(authenticated_design_task(directory)['brief'], brief,
+                'Each lane must receive the exact JSON-persisted contract, including exclusions')
             number=int(directory.name.rsplit('-',1)[1])
             source=self.fixture.resources[number]['field_rows'][0]
             node=dict(kind='field',dataset_id=source['dataset_id'],field_id=source['field_id'])

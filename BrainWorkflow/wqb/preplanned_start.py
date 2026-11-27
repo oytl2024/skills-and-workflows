@@ -617,7 +617,7 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
                         if designed['status'] != 'completed':
                             raise ValueError('retrieval design blocked: ' + designed.get('reason', 'unknown'))
                         resource = designed['resources']
-                        chosen = sorted((row['dataset_id'], row['field_id']) for row in resource['field_rows'])
+                        chosen = sorted([row['dataset_id'], row['field_id']] for row in resource['field_rows'])
                         if chosen in excluded:
                             raise ValueError('parallel retrieval designs selected duplicate data')
                         excluded.append(chosen)

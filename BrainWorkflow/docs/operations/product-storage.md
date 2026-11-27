@@ -2,6 +2,11 @@
 
 ## Nov27 Installation Audit
 
+Live acceptance repair:build20261127-104456-1350 supersedes the earlier bundle
+below after Git sync;same literal installed/BrainWorkflow target and installer
+previous-only cleanup,no research/knowledge/profile deletion.21 retrieval cases
+and2 native tests pass,including exact persisted two-lane brief equality.
+
 After verified Git sync, the existing desktop installer replaces only
 `BrainWorkflow/output/desktop-application/installed/BrainWorkflow` with the
 accepted `20261127-101517-9885/dist space 中文/BrainWorkflow` bundle. Installer
