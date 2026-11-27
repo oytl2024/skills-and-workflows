@@ -10,6 +10,9 @@ acceptance revision before retiring its temporary `.previous` bundle. This is
 reproducible public product output, not research/session evidence. Preserve the
 accepted build and current installation. No other deletion in this update;
 knowledge, runs, credentials/profiles and previously rejected paths are excluded.
+Completed after verified source commit/push bc71dda: installer replaced the bundle
+and removed only its audited temporary previous copy. Loaded revision53aa5d5
+matches accepted build; no historical outputs or research evidence were deleted.
 
 Approved Nov24: fresh-start product, not historical mission recovery.
 Keep raw platform/community facts, compiled machine resources and wiki experience,

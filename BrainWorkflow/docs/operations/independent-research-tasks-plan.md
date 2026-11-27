@@ -1,6 +1,6 @@
 # Independent Research Tasks And Single Reports
 
-Status: source and native acceptance complete; installation verification pending.
+Status: installed; loaded revision and task-mode snapshot verified 2026-11-27.
 Date: 2026-11-26 (Asia/Shanghai).
 Rules: outer brain/AGENTS.md. Handoff: outer brain/todo.md.
 
@@ -162,6 +162,11 @@ first native build is superseded, not reused by relabeling its acceptance.
 Post-review build20261127-101517-9885 passed9 native EXE tests; source revision
 53aa5d5dde10d7ca581cf9a5902618dae63158dd5eb6bb8a21166b4d5ec41803.
 No live research, WQB, submission or old-run reconciliation performed.
+Installed after source commit/push bc71dda and verified remote equality.
+Local health matches revision53aa5d5; snapshot task_mode1,zero tasks,Start enabled,
+Stop disabled,all four options startable. Native acceptance is offline,not proof
+of live-platform end-to-end success. Script-host launch was policy rejected;
+installed EXE launched directly; outer VBS entry not freshly exercised here.
 
 - Singleton callbacks/locks accidentally targeting the latest rather than owner.
 - Command retries creating duplicate tasks or deliberate Starts deduplicated away.
