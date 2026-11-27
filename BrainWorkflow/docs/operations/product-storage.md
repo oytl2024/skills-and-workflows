@@ -139,6 +139,8 @@ profiles or runtime safety evidence. Exact deletion candidates relative to brain
 - knowledge/raw (137 files, approximately349.87MiB)
 - knowledge/wiki (9 files, approximately0.03MiB)
 - knowledge/machine (41 files, approximately301.28MiB before state migration)
+- knowledge/.data_capture_compile.lock.guard (obsolete capture guard)
+- knowledge/.data_capture_compile.d9b716d94d019fb07b8af6fd6cbabbec.lock.guard (obsolete capture guard)
 
 No links/junctions were found in the audited knowledge tree. A filename audit of
 raw found no credential/password/token/cookie/session/.env targets. Exclude
@@ -165,3 +167,25 @@ is explicitly authorized after migration,not falsely described as Git-recoverabl
 At audit time no directory has been deleted;record final measured bytes and
 post-cleanup validation separately below. Environment-policy-rejected paths
 elsewhere remain protected and are not retried by switching tools.
+
+### Verified Outcome
+
+The recursive deletion command was rejected before execution. No alternate
+deletion tool/language was used. The human then confirmed manual removal of
+knowledge/raw, knowledge/wiki and knowledge/machine;filesystem inspection verified
+all three absent. The two obsolete .data_capture_compile guard files remain
+policy-blocked (not active resources);do not claim they were removed.
+
+Active knowledge totals2,059,383bytes (about1.96MiB),including preserved Obsidian
+configuration,four reports and the research Skill. The former active vault was
+approximately651MiB. No entire inventory was archived or recreated elsewhere.
+Only necessary small Console choices/decisions and candidate revision state moved
+to runs. Budget,dedup,unknown POSTs,Stop and existing terminal task identities
+were not cleared or renewed.
+
+Source d03b2a2ebf1356b13bb1310d060da31f8a0240ca was pushed and remote equality
+verified before deployment/retirement. Installed build20261127-214454-9864 loaded
+source revision6008a485d3430dbc48340bbe1ca1aa19c3cccf067446d9bf5f62bec84ef38fff.
+After physical removal,health,snapshot and report endpoints returnedHTTP200;
+four terminal tasks and four option cards remained visible,Start remained enabled.
+No research model,simulation or Alpha submission was started in this maintenance.

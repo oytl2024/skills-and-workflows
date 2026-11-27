@@ -9,6 +9,16 @@ A task may end with no signal, a technical limitation, an external failure or a
 qualified candidate. An ended task is not a promise of successful research.
 Final Alpha submission still needs separate explicit authorization.
 
+Current entry capability:the general Genius/Osmosis option can use its configured
+scope;Multiplier lets the user select region/delay/universe (including the prior
+ALL/D1/LARGE scope). The migrated Power Pool card still requires a concrete board
+binding;the old Python Alphas competition card is not implemented by this FASTEXPR
+executor. Those choices can create a task that ends with an explicit report,but
+do not claim that all activity objectives are executable or verified. This resource
+migration does not silently replace Python competition research with ordinary
+FASTEXPR Alphas or invent board eligibility. Automatic board selection/Python
+competition support are separate product work,not vault-readiness gates.
+
 New Starts freeze live_mcp_version=1. Historical tasks do not silently acquire
 this contract, new budget or Resume authority. Unknown submissions retain their
 original identities even when the old inventory is retired.

@@ -55,7 +55,9 @@ retirement remains phaseC;the deployed planner has not switched to online MCP.
 - [x] Freeze only used resource fragments/source identities into existing package;
   discard full GET caches after sealing,revalidate completed selected inputs without new reads.
 - [x] Remove new-start dependence on global query index/catalog/old compile lifecycle.
-- [ ] Verify actual scoped workbench Start;preserve failed tasks and unknown submissions.
+- [x] Verify installed controls,actual scoped Start-form preparation,real metadata reads
+  and native no-vault plan/seal transport;preserve failed tasks and unknown submissions.
+- [ ] A fresh live model/simulation mission is research acceptance,not performed here.
 
 ## C: Skill Maintenance And Retirement
 
@@ -64,5 +66,14 @@ retirement remains phaseC;the deployed planner has not switched to online MCP.
   identity without making duplicate copies. Four existing reports and registry references migrated.
 - [x] Make explicit maintenance summarize reports into consolidated Skill guidance;
   read at most the selected report cap,include prior learning,and never append repeated copies.
-- [ ] Audit dependencies/sensitive paths,Git sync,delete approved obsolete knowledge.
-- [ ] Update root module map,operation guide and deployed-version evidence.
+- [x] Audit dependencies/sensitive paths,Git sync,and verify human deletion of raw/wiki/machine.
+  Native deletion was policy-rejected;two obsolete capture guards remain recorded,not bypassed.
+- [x] Update root module map,operation guide and deployed-version evidence.
+
+Delivery:build20261127-214454-9864,native/source identity6008a485d3430dbc48340bbe1ca1aa19c3cccf067446d9bf5f62bec84ef38fff.
+Source syncd03b2a2 verified.28final EXE/document/path checks pass;earlier199
+affected regressions and final27case patch group are scoped evidence,not full-suite
+or live Alpha success.3real metadata GETs passed without simulation/model calls.
+After manual removal:health/snapshot/report HTTP200;active knowledge about1.96MiB.
+Review agent failed on service quota and supplied no approval. Power Pool board
+selection and Python-competition execution remain explicit separate capability gaps.
