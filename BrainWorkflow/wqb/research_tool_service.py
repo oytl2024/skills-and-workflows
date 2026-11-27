@@ -125,7 +125,7 @@ class ToolBudget:
 
 @contextmanager
 def local_tool_service(directory: Path, task: dict, *, check_cancelled=lambda: None):
-    """Input: running task Path/state. Output: owner-only local service lifetime; no platform/model actions."""
+    """Input: running task Path/state. Output: task-owned service lifetime; live mode allows metadata reads, never writes."""
     config = task['identity']['config']
     from wqb.live_research_resources import live_mode, LiveResearchResources
     live_reader = None

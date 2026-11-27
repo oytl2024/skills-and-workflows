@@ -125,18 +125,24 @@ def render_report(task: dict) -> str:
     return '\n\n'.join(lines) + '\n'
 
 
+def report_path(knowledge: Path, task_id: str) -> Path:
+    """Input: knowledge Path and safe task ID str. Output: canonical MD path or an existing legacy report path."""
+    if not isinstance(task_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]+',task_id):
+        raise ValueError('invalid report task identity')
+    path = _safe(Path(knowledge)/'researchreport'/(task_id+'.md'))
+    legacy = _safe(Path(knowledge)/'machine/researchreport'/(task_id+'.md'))
+    return legacy if not path.exists() and legacy.exists() else path
+
+
 def publish_report(root: Path, task_id: str, knowledge: Path) -> Path:
     """Input: workspace runs Path/task ID/vault Path. Output: one idempotent terminal report Path, without models or raw copies."""
     task = read_task(root, task_id)
     if task['status'] not in TERMINAL:
         raise ValueError('report requires a terminal task')
-    directory = _safe(Path(knowledge) / 'researchreport')
+    path = report_path(knowledge,task_id)
+    directory = path.parent
     directory.mkdir(parents=True, exist_ok=True)
-    path = _safe(directory / (task_id + '.md'))
     with json_lock_transition_guard(Path(task['runs_root']).parent / 'report', 5, .02, 'report publication busy'):
-        legacy = _safe(Path(knowledge) / 'machine/researchreport' / (task_id + '.md'))
-        if not path.exists() and legacy.exists():
-            path = legacy
         if not path.exists():
             body = render_report(task)
             temporary = _safe(directory / ('.' + uuid4().hex + '.tmp'))

@@ -1348,7 +1348,9 @@ def _load_runtime_snapshot(server: Any, paths: ConsolePaths) -> dict[str, Any]:
         # Option Cards are one small artifact, not a cold knowledge-ledger compilation.
         option_path = existing_decision_artifact_path(paths.knowledge_root, 'research_option_cards.jsonl')
         from wqb.console_api import MAX_ARTIFACT_BYTES, _safe
-        _safe(paths.knowledge_root, option_path)
+        from wqb.research_skill_resources import skill_knowledge
+        owner = decision_artifacts_root(paths.knowledge_root) if skill_knowledge(paths.knowledge_root) else paths.knowledge_root
+        _safe(owner, option_path)
         if option_path.exists() and option_path.stat().st_size > MAX_ARTIFACT_BYTES:
             raise ValueError('Option Cards exceed application read limit')
         state['option_cards'] = _option_rows(paths)
@@ -1643,7 +1645,8 @@ class ConsoleRequestHandler(BaseHTTPRequestHandler):
             try:
                 task_id = parse_qs(parsed.query).get('task_id', [''])[0]
                 row = read_task(paths.runs_root, task_id)
-                report = _safe(paths.knowledge_root, paths.knowledge_root / 'machine/researchreport' / (task_id + '.md'))
+                from wqb.research_task_report import report_path
+                report = _safe(paths.knowledge_root, report_path(paths.knowledge_root, task_id))
                 if row.get('report_path') != str(report):
                     raise ValueError('Task has no published report')
                 self._send_json(dict(body=report.read_text(encoding='utf-8')))

@@ -1,4 +1,4 @@
-"""One durable pre-execution design task with bounded local knowledge tools."""
+"""One durable pre-execution design task with bounded task-owned research tools."""
 from copy import deepcopy
 from datetime import datetime, timezone
 import argparse
@@ -642,7 +642,7 @@ def emit_query_result(value: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Input: local query CLI arguments. Output: JSON/exit code; never create a task, compile knowledge or call WQB."""
+    """Input: task query CLI arguments. Output: broker response/exit code; never create tasks or grant write authority."""
     from wqb.research_tool_service import OPERATIONS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['query', 'mcp'])
