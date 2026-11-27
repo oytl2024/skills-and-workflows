@@ -662,6 +662,16 @@ def record_recoverable_network_error(
     response = getattr(err, "response", None)
     status_code = getattr(response, "status_code", None) or "NETWORK_ERROR"
     headers = getattr(response, "headers", {}) or {}
+    response_detail = {}
+    if type(status_code) is int and 400 <= status_code < 500:
+        from wqb.research_task_report import _clean
+        body = getattr(response, 'text', '')
+        if isinstance(body, str) and body:
+            try:
+                diagnostic = json.dumps(_clean(json.loads(body)), ensure_ascii=False)
+            except (ValueError, TypeError):
+                diagnostic = _clean(body)
+            response_detail['response_detail'] = diagnostic[:2000]
     simulation_poll_fields = {}
     if getattr(err, "simulation_poll_timeout", False):
         status_code = "SIMULATION_POLL_TIMEOUT"
@@ -686,6 +696,7 @@ def record_recoverable_network_error(
             "status_code": status_code,
             "recoverable": True,
             "message": str(err),
+            **response_detail,
             **{key: value for key, value in rate_limit_fields.items() if value is not None},
             **{key: value for key, value in simulation_poll_fields.items() if value is not None and value != ""},
             **dict(metadata or {}),
@@ -2738,7 +2749,6 @@ def retry_planned_candidates(
     if uncertain_submission_hashes(recorder.read_jsonl("simulation_events.jsonl")):
         raise RuntimeError("uncertain simulation submission requires platform reconciliation before retry")
     skipped_hashes = submitted_or_terminal_hashes(recorder)
-    settings = build_settings(config)
     payloads: list[dict[str, Any]] = []
     metadata: list[dict[str, Any]] = []
     for item in planned:
@@ -2758,7 +2768,7 @@ def retry_planned_candidates(
             raise ValueError('planned candidate settings are malformed')
         if item.get('template_provenance') and not persisted_settings:
             raise ValueError('scheduled candidate is missing immutable settings')
-        payloads.append(simulation_payload(persisted_settings or settings, expression))
+        payloads.append(simulation_payload(persisted_settings or build_settings(config), expression))
     return submit_candidate_payloads(
         client,
         recorder,

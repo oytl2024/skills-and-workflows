@@ -37,7 +37,7 @@ POSITIVE_CONFIG = frozenset({'request_timeout_seconds', 'base_backoff_seconds', 
 ENUM_CONFIG = {'instrument_type': {'EQUITY'}, 'language': {'FASTEXPR'},
     'pasteurization': {'ON', 'OFF'}, 'nan_handling': {'ON', 'OFF'},
     'unit_handling': {'VERIFY'}, 'neutralization': {'NONE', 'MARKET', 'SECTOR', 'INDUSTRY', 'SUBINDUSTRY'},
-    'ai_executor': {'codex'}}
+    'ai_executor': {'codex'}, 'source_submit_mode': {'multi', 'serial'}}
 TERMINAL = frozenset({'completed', 'completed_with_warnings', 'aborted'})
 # Retain real handles/fences if termination cannot yet be proved. The lane entry
 # stays alive in quarantine; it never acknowledges Stop by simply exiting.
@@ -395,7 +395,7 @@ def run_group_lane(paths, group, run_dir, *, config, step=None) -> dict:
             return cli.field_batch(run_config, field_search=str(metadata.get('field_search', '')),
                 dataset_id=str(metadata.get('dataset_id', '')), template_mode=str(metadata.get('template_mode', 'economic')),
                 workflow_stage=str(metadata.get('workflow_stage', 'scout')), exact_field_id=str(metadata.get('exact_field_id', '')),
-                submit_mode='multi', multi_chunk_sleep_seconds=float(
+                submit_mode=bound.get('source_submit_mode', 'multi'), multi_chunk_sleep_seconds=float(
                     metadata.get('multi_chunk_sleep_seconds') or SOURCE_MULTI_CHUNK_SLEEP_SECONDS))
         def complete(source):
             """Input: existing source path str. Output: existing source summary dict after reconciliation."""
@@ -403,7 +403,7 @@ def run_group_lane(paths, group, run_dir, *, config, step=None) -> dict:
             return cli.summarize_run_dir(source, paths.knowledge_root, cli.source_benchmark_run(bound, Path(source)))
         def retry(source):
             """Input: existing source path str. Output: bounded retry summary dict, preserving identity."""
-            cli.retry_planned(bound, source)
+            cli.retry_planned(bound, source, submit_mode=bound.get('source_submit_mode', 'multi'))
             return cli.summarize_run_dir(source, paths.knowledge_root, cli.source_benchmark_run(bound, Path(source)))
         def step():
             """Input: closed-over lane authority/config. Output: next ordinary workflow step dict."""

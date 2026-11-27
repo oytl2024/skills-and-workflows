@@ -80,6 +80,20 @@ final submission authority. Job state lives under runs/skill_maintenance.
 
 ## Verification Boundary
 
+### Known Batch Rejection Recovery
+
+A multi-simulation HTTP400 without Location is a definitive rejected batch, not
+an unknown accepted POST. research_group records rejected_batch_400;only its
+original lane may consume each child once through the existing single fallback.
+The batch itself,foreign lanes,accepted responses and ambiguous POSTs remain
+blocked. Usage is never refunded. New requests still prefer multisimulation.
+Existing historical misclassified claims require explicit maintenance approval
+and research_batch_recovery evidence checks;ordinary Start never reopens a
+terminal task. Recovery retains the same frozen trees and one final MD report.
+source_submit_mode=serial is a transport-only recovery option,not authority to
+change experiments or budgets. Bounded redacted HTTP4xx response details are
+recorded from the existing response,without extra platform requests.
+
 Scoped tests cover a no-inventory plan -> expression -> tree -> sealed paused
 group, report compatibility and shared safety regressions. Native acceptance uses
 the real EXE transport with offline resource/model doubles. Bounded real metadata

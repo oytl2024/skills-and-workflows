@@ -63,7 +63,7 @@ def render_report(task: dict) -> str:
                     if path.name in POINT_FILES:
                         points.append(dict(source=source, **{key: row[key] for key in POINT_KEYS if key in row}))
                     else:
-                        errors.append(dict(source=source, **{key: row[key] for key in ('code', 'error', 'error_type', 'exception_type', 'message', 'reason', 'stage', 'status', 'timestamp') if key in row}))
+                        errors.append(dict(source=source, **{key: row[key] for key in ('code', 'error', 'error_type', 'exception_type', 'message', 'reason', 'stage', 'status', 'status_code', 'response_detail', 'timestamp') if key in row}))
         elif path.name.startswith('tree-decision-') and path.suffix == '.json':
             try:
                 row = json.loads(path.read_text(encoding='utf-8'))
@@ -143,7 +143,7 @@ def publish_report(root: Path, task_id: str, knowledge: Path) -> Path:
     directory = path.parent
     directory.mkdir(parents=True, exist_ok=True)
     with json_lock_transition_guard(Path(task['runs_root']).parent / 'report', 5, .02, 'report publication busy'):
-        if not path.exists():
+        if not path.exists() or task.get('recovery_generation', 0) > task.get('report_recovery_generation', 0):
             body = render_report(task)
             temporary = _safe(directory / ('.' + uuid4().hex + '.tmp'))
             try:
@@ -151,7 +151,8 @@ def publish_report(root: Path, task_id: str, knowledge: Path) -> Path:
                 os.replace(temporary, path)
             finally:
                 temporary.unlink(missing_ok=True)
-        update_task(root, task_id, report_path=str(path), report_error='')
+        update_task(root, task_id, report_path=str(path), report_error='',
+            report_recovery_generation=task.get('recovery_generation', 0))
     return path
 
 

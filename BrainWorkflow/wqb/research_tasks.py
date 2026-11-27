@@ -116,7 +116,7 @@ def create_task(root: Path, command_id: str, selection: dict) -> dict:
 
 def update_task(root: Path, task_id: str, **changes) -> dict:
     """Input: workspace Path/task ID/mutable state fields. Output: atomically updated task; terminal tasks cannot restart."""
-    if set(changes) - {'status', 'reason', 'report_path', 'job_id', 'group_dir', 'report_error'}:
+    if set(changes) - {'status', 'reason', 'report_path', 'job_id', 'group_dir', 'report_error', 'report_recovery_generation'}:
         raise ValueError('task identity is immutable')
     directory = _directory(root, task_id)
     with json_lock_transition_guard(directory / 'update', 5, .02, 'task update busy'):

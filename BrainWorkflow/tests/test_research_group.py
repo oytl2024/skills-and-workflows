@@ -15,6 +15,35 @@ def plans(count):
 
 
 class ResearchGroupTests(unittest.TestCase):
+    def test_known_batch_400_allows_only_own_single_fallback(self):
+        from types import SimpleNamespace
+        from wqb.research_group import _reserve_identities,record_payload_outcome
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            group=create_group(root,plans(2),self.authority())
+            path=Path(group['group_dir'])
+            ids=['a'*64,'b'*64]
+            self.assertTrue(_reserve_identities(path,'lane-0',ids,submission=True))
+            record_payload_outcome(root/'lane-0',ids,SimpleNamespace(status_code=400,headers={}))
+            self.assertFalse(_reserve_identities(path,'lane-0',ids,submission=True))
+            self.assertFalse(_reserve_identities(path,'lane-1',[ids[0]],submission=True))
+            self.assertTrue(_reserve_identities(path,'lane-0',[ids[0]],submission=True))
+            self.assertFalse(_reserve_identities(path,'lane-0',[ids[0]],submission=True))
+            self.assertTrue(_reserve_identities(path,'lane-0',[ids[1]],submission=True))
+
+    def test_ambiguous_or_single_rejections_do_not_enable_fallback(self):
+        from types import SimpleNamespace
+        from wqb.research_group import _reserve_identities,record_payload_outcome
+        for status,count,headers in [(500,2,{}),(202,2,{}),(400,1,{}),(400,2,{'Location':'/simulations/accepted'})]:
+            with self.subTest(status=status,count=count,headers=headers),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                group=create_group(root,plans(1),self.authority())
+                path=Path(group['group_dir'])
+                ids=['a'*64,'b'*64][:count]
+                self.assertTrue(_reserve_identities(path,'lane-0',ids,submission=True))
+                record_payload_outcome(root/'lane-0',ids,SimpleNamespace(status_code=status,headers=headers))
+                self.assertFalse(_reserve_identities(path,'lane-0',[ids[0]],submission=True))
+
     def test_paused_group_blocks_existing_submission_boundary(self):
         from wqb.runtime_control import CONTROL_ENV, RuntimePaused, check_submission_allowed
         with tempfile.TemporaryDirectory() as tmp:

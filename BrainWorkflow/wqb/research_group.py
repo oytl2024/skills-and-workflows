@@ -319,8 +319,12 @@ def _reserve_identities(group: Path, run_id: str, identities: list[str], *, subm
         owner = dict(group_id=group.name, run_id=run_id)
         for identity in identities:
             prior = claims.get(identity)
+            single_fallback = (submission and len(identities) == 1 and prior is not None
+                and prior.get('submission_status') == 'rejected_batch_400'
+                and prior.get('status_code') == 400 and not prior.get('progress_url'))
             if prior is not None and (any(prior.get(k) != v for k, v in owner.items())
-                    or submission and prior.get('submission_status') not in (None, 'not_sent', 'rejected_429')):
+                    or submission and not single_fallback
+                    and prior.get('submission_status') not in (None, 'not_sent', 'rejected_429')):
                 return False
         for identity in identities:
             claims[identity] = {**claims.get(identity, {}), **owner}
@@ -360,7 +364,9 @@ def record_payload_outcome(run: Path, identities: list[str], response) -> None:
             if response is None:
                 claims[identity]['submission_status'] = 'not_sent'
             else:
-                status = ('rejected_429' if response.status_code == 429 else
+                status = ('rejected_batch_400' if response.status_code == 400 and len(identities) > 1
+                          and not response.headers.get('Location') else
+                          'rejected_429' if response.status_code == 429 else
                           'unknown' if response.status_code >= 500 else 'sent')
                 claims[identity].update(submission_status=status, status_code=response.status_code,
                                        progress_url=response.headers.get('Location', ''))

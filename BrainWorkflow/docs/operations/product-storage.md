@@ -189,3 +189,16 @@ source revision6008a485d3430dbc48340bbe1ca1aa19c3cccf067446d9bf5f62bec84ef38fff.
 After physical removal,health,snapshot and report endpoints returnedHTTP200;
 four terminal tasks and four option cards remained visible,Start remained enabled.
 No research model,simulation or Alpha submission was started in this maintenance.
+
+## Batch Rejection Patch Installation Audit (2026-11-27)
+
+The next installed bundle is build20261127-224716-8598. Installation may replace
+only output/desktop-application/installed/BrainWorkflow,temporarily rename that
+exact contained bundle to BrainWorkflow.previous,and remove the previous bundle
+after verified copy/swap. These reproducible binaries are not source knowledge,
+browser profiles,credentials or research evidence. Source Git push/equality and
+native acceptance must precede replacement;the installer rejects links and live
+application processes. No broad output/runs/knowledge cleanup is authorized by
+this installation. Retain the two frozen trees and all submission/accounting
+evidence:actual recovery established an invalid platform REGULAR scope,not a
+successful simulation. Scope rebinding still requires user selection.
