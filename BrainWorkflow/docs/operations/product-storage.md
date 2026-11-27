@@ -10,6 +10,9 @@ the working mcp-v1 probe or application. Its path must resolve inside product
 output with no links or unexpected user data before removal after Git sync.
 Keep working mcp-v1,verified wheel,compact probe evidence,knowledge and runs.
 This does not authorize raw/wiki/machine retirement before consumer migration.
+Source d0bdca0 synced before installation;installed sourcebc8bafeb verified via
+local health. Only installer.previous retired. Unused SDK2 trial deletion was
+tool-policy rejected and remains pending;no alternative deletion was attempted.
 
 Receipt transport repair:build20261127-111401-6560 is the current target after
 Git sync,using the same installed bundle/previous-only cleanup boundary. No
