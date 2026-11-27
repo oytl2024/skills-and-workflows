@@ -18,7 +18,8 @@ from uuid import uuid4
 from wqb.daily_simulation_budget import DAILY_SIMULATION_LIMIT, activate_daily_policy
 from wqb.exploration_eligibility import validate_operational_exploration
 from wqb.lockfile import json_lock_transition_guard
-from wqb.research_group import _digest, _guard, _read, read_group, discover_group_lane, resume_group
+from wqb.research_group import (_digest, _guard, _read, read_group, discover_group_lane,
+    resume_group, MAX_SCIENTIFIC_MANIFEST_BYTES)
 from wqb.runtime_control import (_write, read_runtime_control, request_runtime_state,
     update_runtime_status, has_runtime_authority, utc_now)
 from wqb.source_run_lock import read_source_run_lock
@@ -97,7 +98,7 @@ def _prepared(paths, group: Path) -> tuple[dict, list]:
         run = _safe(root / lane['run_id'])
         for name in ('run_manifest.json', 'run_state.json', 'runtime_control.json', 'runtime_status.json'):
             _safe(run / name)
-        manifest = _read(run / 'run_manifest.json')
+        manifest = _read(run / 'run_manifest.json', max_bytes=MAX_SCIENTIFIC_MANIFEST_BYTES)
         discovery = discover_group_lane(root, run)
         if discovery.state is None or discovery.diagnostics:
             raise ValueError('prepared lane state is inconsistent')
@@ -123,7 +124,7 @@ def _read_only_retired(run: Path) -> bool:
         return False
     if boundary.get('status') != 'retired' or boundary.get('read_only') is not True:
         raise ValueError('damaged retirement evidence cannot permit a new group')
-    manifest = _read(_safe(run / 'run_manifest.json'))
+    manifest = _read(_safe(run / 'run_manifest.json'), max_bytes=MAX_SCIENTIFIC_MANIFEST_BYTES)
     state = _read(_safe(run / 'run_state.json'))
     if (manifest.get('run_id') != run.name or state.get('run_id') != run.name
             or _safe(state.get('run_dir', '')) != run):

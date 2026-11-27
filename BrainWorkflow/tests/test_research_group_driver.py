@@ -94,6 +94,21 @@ class ResearchGroupDriverTests(unittest.TestCase):
         from wqb.research_group_driver import initialize_group_runtime
         initialize_group_runtime(self.paths, group)
 
+    def test_scientific_manifest_does_not_use_small_coordination_record_limit(self):
+        """Input: valid prepared manifest above 2MB. Output: initialized lane; ordinary coordination reads stay bounded."""
+        from wqb.research_group_driver import initialize_group_runtime
+        from wqb.research_group import _read
+        group = self.prepared()
+        run = self.paths.run_root / group['lanes'][0]['run_id']
+        path = run / 'run_manifest.json'
+        manifest = json.loads(path.read_text(encoding='utf-8'))
+        manifest['planning_notes'] = 'Source-backed scientific context. ' * 70000
+        _write(path, manifest)
+        with self.assertRaisesRegex(ValueError, 'size'):
+            _read(path)
+        result = initialize_group_runtime(self.paths, group)
+        self.assertEqual(result['desired_state'], 'paused')
+
     def test_initialize_n_lanes_paused_idempotent_and_shared_daily(self):
         from wqb.research_group_driver import initialize_group_runtime
         for count in (1, 2, 4):
@@ -656,7 +671,7 @@ class ResearchGroupDriverTests(unittest.TestCase):
                 child.returncode = 0
         read_record = driver._read
         raced = False
-        def read(path):
+        def read(path, **kwargs):
             """Input: JSON Path. Output: dict; publish once during a read using only the injected clock."""
             nonlocal raced
             if (mode in {'read-race', 'future-read'} and path == job / 'network_current.json'
@@ -666,7 +681,7 @@ class ResearchGroupDriverTests(unittest.TestCase):
                 row = read_record(path)
                 started = clock[0] + (50 if mode == 'future-read' else 0)
                 _write(path, {**row, 'started': started, 'deadline': started + 2})
-            return read_record(path)
+            return read_record(path, **kwargs)
         with patch.object(driver, 'OwnedExecutionTree', return_value=tree), \
                 patch.object(driver, '_read', side_effect=read), \
                 patch('wqb.maintenance_notifications.dispatch_notification', side_effect=lambda r, c, n: c):

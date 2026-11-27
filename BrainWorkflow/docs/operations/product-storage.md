@@ -2,6 +2,11 @@
 
 ## Nov27 Installation Audit
 
+Second live integration repair:build20261127-105918-4954 supersedes the bundle
+below,under the same installer-only audited cleanup. Scientific manifests use
+their own16MB bounded read;coordination records retain2MB. Actual saved two-lane
+scientific context validated locally;real-platform acceptance remains pending.
+
 Live acceptance repair:build20261127-104456-1350 supersedes the earlier bundle
 below after Git sync;same literal installed/BrainWorkflow target and installer
 previous-only cleanup,no research/knowledge/profile deletion.21 retrieval cases

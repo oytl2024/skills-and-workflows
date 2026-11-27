@@ -21,6 +21,7 @@ REVISION = re.compile(r'[a-f0-9]{32}\Z')
 SUBMISSION_WAIT_SECONDS = 30.0
 SUBMISSION_POLL_SECONDS = 0.01
 GROUP_IO_WAIT_SECONDS = 1.0
+MAX_SCIENTIFIC_MANIFEST_BYTES = 16_000_000
 
 
 def _digest(row: dict) -> str:
@@ -28,9 +29,9 @@ def _digest(row: dict) -> str:
     return hashlib.sha256(json.dumps(row, sort_keys=True, allow_nan=False).encode()).hexdigest()
 
 
-def _read(path: Path) -> dict:
+def _read(path: Path, *, max_bytes: int = 2_000_000) -> dict:
     """Input: local JSON Path. Output: dict, rejecting links or malformed records."""
-    if path.is_symlink() or path.is_junction() or path.stat().st_size > 2_000_000:
+    if path.is_symlink() or path.is_junction() or path.stat().st_size > max_bytes:
         raise ValueError('invalid group record path or size')
     deadline = time.monotonic() + GROUP_IO_WAIT_SECONDS
     while True:
