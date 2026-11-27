@@ -1,7 +1,7 @@
 """Pure snapshot binding. Callers validate source provenance before supplying rows.
 
 No vault access, metadata inference, economic evidence promotion, or evaluation.
-Supported grammar: named calls, scalar literals, + - * / and unary +/-. Other
+Supported grammar: named calls, scalar literals, + - * /, unary +/- and single comparisons. Other
 branches fail closed. Availability checks use scope.as_of (timezone-aware ISO).
 """
 
@@ -11,6 +11,7 @@ from datetime import datetime
 import math
 import re
 from string import Formatter
+from wqb.brain_expression_syntax import parse_expression, render_expression
 
 from wqb.semantic_contracts import input_slot_from_dict, operator_definition_from_dict
 from wqb.resource_evidence import (resolve_timing_contract, knowledge_catalog_admission,
@@ -45,8 +46,8 @@ def parse_kernel(skeleton: str, names: set[str], window: int = 20) -> tuple[ast.
         occurrences[token] = occurrences.get(token, 0) + 1
         parts.append(token)
     try:
-        node = ast.parse(''.join(parts), mode='eval').body
-    except SyntaxError as exc:
+        node = parse_expression(''.join(parts))
+    except (SyntaxError, ValueError) as exc:
         raise TemplateBindingError('invalid placeholder or expression syntax') from exc
     if set(tokens.values()) - {'window'} != names:
         raise TemplateBindingError('kernel must consume every declared input slot')
@@ -60,11 +61,14 @@ def parse_kernel(skeleton: str, names: set[str], window: int = 20) -> tuple[ast.
         raise TemplateBindingError('window placeholder requires INTEGER type')
     for item in ast.walk(node):
         if not isinstance(item, (ast.Call, ast.Name, ast.Load, ast.Constant, ast.BinOp, ast.UnaryOp,
-                                 ast.Add, ast.Sub, ast.Mult, ast.Div, ast.USub, ast.UAdd, ast.keyword)):
+                                 ast.Add, ast.Sub, ast.Mult, ast.Div, ast.USub, ast.UAdd, ast.keyword,
+                                 ast.Compare, ast.Gt, ast.GtE, ast.Lt, ast.LtE, ast.Eq, ast.NotEq)):
             raise TemplateBindingError(f'unsupported expression grammar: {type(item).__name__}')
         if isinstance(item, ast.Call) and (not isinstance(item.func, ast.Name) or
                                            not IDENTIFIER.fullmatch(item.func.id)):
             raise TemplateBindingError('only named operator calls are supported')
+        if isinstance(item, ast.Compare) and len(item.ops) != 1:
+            raise TemplateBindingError('local compiler does not support chained comparisons')
     return node, tokens
 
 
@@ -203,10 +207,13 @@ def _legacy_bind(template: dict, rows: list[dict], scope: dict) -> dict:
             item.left, item.right = render(item.left), render(item.right)
         elif isinstance(item, ast.UnaryOp):
             item.operand = render(item.operand)
+        elif isinstance(item, ast.Compare):
+            item.left = render(item.left)
+            item.comparators = [render(value) for value in item.comparators]
         return item
 
     node = render(node)
-    return dict(bound_expression=ast.unparse(ast.fix_missing_locations(node)),
+    return dict(bound_expression=render_expression(node),
                 bindings={'field': dict(field_id=field_id, dataset_id=row.get('dataset_id'))},
                 operator_provenance=[], operator_call_count=sum(isinstance(item, ast.Call) for item in ast.walk(node)))
 
@@ -239,7 +246,7 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
         raise TemplateBindingError('catalog admission requires typed binding and resource version 2')
     if version == 1:
         result = _legacy_bind(template, field_rows, scope)
-        calls = {item.func.id for item in ast.walk(ast.parse(result['bound_expression'], mode='eval'))
+        calls = {item.func.id for item in ast.walk(parse_expression(result['bound_expression']))
                  if isinstance(item, ast.Call)}
         if any(row.get('operator') in calls and isinstance(row.get('definition_basis'), dict)
                and row['definition_basis'].get('rule_id') == 'ts_delta_project_window' for row in operator_rows):
@@ -359,6 +366,15 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
                 raise TemplateBindingError('binary arithmetic requires numeric matrix/scalar types')
             kind = 'UNKNOWN' if 'UNKNOWN' in (left_type, right_type) else 'MATRIX' if 'MATRIX' in (left_type, right_type) else 'FLOAT'
             return ast.BinOp(left=left, op=item.op, right=right), kind
+        if isinstance(item, ast.Compare):
+            left, left_type = render(item.left)
+            right, right_type = render(item.comparators[0])
+            allowed = ('MATRIX', 'INTEGER', 'FLOAT', 'UNKNOWN') if allow_unknown else ('MATRIX', 'INTEGER', 'FLOAT')
+            if left_type not in allowed or right_type not in allowed:
+                raise TemplateBindingError('local comparison support requires numeric matrix/scalar types')
+            kind = ('UNKNOWN' if 'UNKNOWN' in (left_type, right_type) else
+                    'MATRIX' if 'MATRIX' in (left_type, right_type) else 'BOOLEAN')
+            return ast.Compare(left=left, ops=item.ops, comparators=[right]), kind
         if not isinstance(item, ast.Call):
             raise TemplateBindingError('unsupported expression branch')
         name = item.func.id
@@ -432,7 +448,7 @@ def _bind_template(template: dict, field_rows: list[dict], operator_rows: list[d
                                    reduction=copy.deepcopy(slot.reduction))
         if timing.get(slot.name) is not None:
             bindings[slot.name]['timing_receipt'] = timing[slot.name]
-    result = dict(bound_expression=ast.unparse(ast.fix_missing_locations(bound)), bindings=bindings,
+    result = dict(bound_expression=render_expression(bound), bindings=bindings,
                 operator_provenance=provenance, operator_call_count=len(provenance))
     return result
 

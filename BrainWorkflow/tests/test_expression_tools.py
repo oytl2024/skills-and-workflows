@@ -39,6 +39,59 @@ def resources():
 
 
 class ExpressionToolsTests(unittest.TestCase):
+    def test_brain_logical_operator_names_are_not_python_keywords(self):
+        supplied = resources()
+        for name, arity in [('and', 2), ('or', 2), ('not', 1)]:
+            supplied['operator_rows'].append(dict(operator=name, definition=dict(
+                input_types=['MATRIX'] * arity, output_type='MATRIX',
+                parameters=[dict(name='x'+str(i), type='MATRIX', required=True) for i in range(arity)])))
+        node = call('or', call('and', field(), field()), call('not', field()))
+        compiled = self.compile(node, supplied)
+        self.assertTrue(compiled['valid'], compiled)
+        self.assertEqual(compiled['expression'], 'or(and(signal, signal), not(signal))')
+        from wqb.expression_tools import expression_ast
+        self.assertEqual(expression_ast(compiled['expression'], supplied), node)
+
+    def test_boolean_parameter_uses_brain_spelling_and_roundtrips(self):
+        supplied = resources()
+        supplied['operator_rows'].append(dict(operator='add', definition=dict(
+            input_types=['MATRIX', 'MATRIX'], output_type='MATRIX', parameters=[
+                dict(name='x', type='MATRIX', required=True), dict(name='y', type='MATRIX', required=True),
+                dict(name='filter', type='BOOLEAN', required=False, default=False)])))
+        from wqb.expression_tools import expression_ast
+        for value in (True, False):
+            node = call('add', field(), field(), filter=literal(value))
+            compiled = self.compile(node, supplied)
+            self.assertTrue(compiled['valid'], compiled)
+            self.assertEqual(compiled['expression'], 'add(signal, signal, filter='+str(value).lower()+')')
+            self.assertEqual(expression_ast(compiled['expression'], supplied), node)
+
+    def test_comparisons_can_condition_an_experiment(self):
+        from wqb.expression_tools import expression_ast
+        for operator in ('>', '>=', '<', '<=', '==', '!='):
+            comparison = dict(kind='binary', operator=operator, left=field(), right=literal(0))
+            node = call('if_else', comparison, field(), literal(0))
+            compiled = self.compile(node)
+            self.assertTrue(compiled['valid'], compiled)
+            self.assertEqual(compiled['output_type'], 'MATRIX')
+            self.assertEqual(expression_ast(compiled['expression'], resources()), node)
+        vector_comparison = dict(kind='binary', operator='>', left=field('events'), right=literal(0))
+        self.assertFalse(self.compile(vector_comparison)['valid'])
+
+    def test_syntax_translation_preserves_strings_and_rejects_python_branches(self):
+        from wqb.expression_tools import expression_ast
+        supplied = resources()
+        supplied['technical_exploration_version'] = 1
+        text = 'true and(x) False or(not(y)) {window} {not_a_slot}'
+        node = call('new_operator', field(), literal(text))
+        compiled = self.compile(node, supplied)
+        self.assertTrue(compiled['valid'], compiled)
+        self.assertEqual(expression_ast(compiled['expression'], supplied), node)
+        for expression in ('signal.x', 'signal[0]', '[x for x in signal]', 'lambda: signal',
+                           '0 < signal < 1', 'signal and signal'):
+            with self.subTest(expression=expression), self.assertRaises(ValueError):
+                expression_ast(expression, supplied)
+
     def test_unknown_signature_is_explorable_without_claiming_type_proof(self):
         supplied = resources()
         supplied['technical_exploration_version'] = 1

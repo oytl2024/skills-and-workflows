@@ -2,6 +2,15 @@
 
 ## Nov27 Installation Audit
 
+CNHK technical-tool increment:accepted build20261127-154615-6770 replaces only
+installed/BrainWorkflow after verified Git sync and no active owning tasks.
+Installer's previous-only cleanup remains unchanged. Separately,the unused
+output/cnhkmcp-audit/runtime SDK2.3 trial (54.2MiB) is reproducible,not used by
+the working mcp-v1 probe or application. Its path must resolve inside product
+output with no links or unexpected user data before removal after Git sync.
+Keep working mcp-v1,verified wheel,compact probe evidence,knowledge and runs.
+This does not authorize raw/wiki/machine retirement before consumer migration.
+
 Receipt transport repair:build20261127-111401-6560 is the current target after
 Git sync,using the same installed bundle/previous-only cleanup boundary. No
 knowledge,task,accounting or browser-session cleanup is authorized here.

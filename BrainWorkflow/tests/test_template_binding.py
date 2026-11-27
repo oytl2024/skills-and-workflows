@@ -38,6 +38,14 @@ def binding_fixture():
 
 
 class TemplateBindingTests(unittest.TestCase):
+    def test_legacy_comparisons_bind_all_leaves_and_preserve_brain_spelling(self):
+        """Input: legacy logical/comparison template. Output: fully bound BRAIN text without local placeholder names."""
+        row = dict(field_id='signal', dataset_id='d', field_type='MATRIX')
+        result = bind_template(dict(binding_version=1,
+            skeleton='and({field} > 0, not({field} < 0))'), [row], [], {})
+        self.assertEqual(result['bound_expression'], 'and(signal > 0, not(signal < 0))')
+        self.assertNotIn('__binding_slot_', result['bound_expression'])
+
     def test_actual_comparison_missing_cutoff_evidence_rejects_binding(self):
         contract, row, scope, index, texts = named_comparison_fixture()
         contract['premises'].pop(2)

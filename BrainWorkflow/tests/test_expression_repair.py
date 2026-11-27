@@ -20,6 +20,23 @@ def repair_fixture():
 
 
 class ExpressionRepairTests(unittest.TestCase):
+    def test_conditioned_expression_repairs_only_the_planned_window(self):
+        """Input: frozen conditional parent/finite window grid. Output: same condition and fields with changed window only."""
+        from wqb.expression_repair import compile_policy
+        from wqb.repair_search import prepare_search
+        from wqb.cli import simulation_identity_hash
+        parent, resources, recipe = repair_fixture()
+        resources['technical_exploration_version'] = 1
+        parent['expression'] = 'if_else(signal > 0, ts_delta(signal, 22), 0)'
+        parent['expression_hash'] = simulation_identity_hash(parent['expression'], parent['settings'])
+        recipe['rules'] = [dict(edit='parameter', path=['args', 1, 'args', 1], grid=[5, 122],
+            target_metric='fitness', target_direction='increase')]
+        result = prepare_search(Path('.'), parent, [], 8, compile_policy(resources, [recipe]))
+        self.assertEqual(result['status'], 'validated', result)
+        self.assertEqual([row['expression'] for row in result['variants']], [
+            'if_else(signal > 0, ts_delta(signal, 5), 0)',
+            'if_else(signal > 0, ts_delta(signal, 122), 0)'])
+
     def test_frozen_operator_retains_window_constraints(self):
         from wqb.expression_repair import compile_policy
         from wqb.repair_search import prepare_search

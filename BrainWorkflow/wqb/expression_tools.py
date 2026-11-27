@@ -6,6 +6,7 @@ import json
 import math
 
 from wqb.template_binding import bind_technical_template, IDENTIFIER, TemplateBindingError
+from wqb.brain_expression_syntax import render_expression, protect_literal_braces
 
 
 EXPRESSION_TOOL_VERSION = 1
@@ -13,6 +14,7 @@ MAX_AST_NODES = 512
 MAX_AST_DEPTH = 32
 MAX_AST_BYTES = 64000
 BINARY = {'+': ast.Add, '-': ast.Sub, '*': ast.Mult, '/': ast.Div}
+COMPARISONS = {'>': ast.Gt, '>=': ast.GtE, '<': ast.Lt, '<=': ast.LtE, '==': ast.Eq, '!=': ast.NotEq}
 UNARY = {'+': ast.UAdd, '-': ast.USub}
 
 
@@ -32,7 +34,7 @@ def expression_digest(value: object) -> str:
 def expression_ast(expression: str, resources: dict) -> dict:
     """Input: frozen expression string/resource rows. Output: structural AST; parse only, never evaluate Python."""
     from wqb.template_binding import parse_kernel
-    root,_=parse_kernel(expression,set())
+    root,_=parse_kernel(protect_literal_braces(expression),set())
     fields={}
     for row in resources['field_rows']:
         name=row['field_id']
@@ -52,6 +54,9 @@ def expression_ast(expression: str, resources: dict) -> dict:
             return dict(kind='unary',operator=next(k for k,v in UNARY.items() if isinstance(node.op,v)),input=convert(node.operand))
         if isinstance(node,ast.BinOp):
             return dict(kind='binary',operator=next(k for k,v in BINARY.items() if isinstance(node.op,v)),left=convert(node.left),right=convert(node.right))
+        if isinstance(node,ast.Compare) and len(node.ops) == 1:
+            return dict(kind='binary',operator=next(k for k,v in COMPARISONS.items() if isinstance(node.ops[0],v)),
+                left=convert(node.left),right=convert(node.comparators[0]))
         raise ValueError('unsupported expression node or unknown field')
     return convert(root)
 
@@ -110,11 +115,14 @@ def compile_expression(request: dict, resources: dict, scope: dict) -> dict:
             return ast.Call(func=ast.Name(id=name,ctx=ast.Load()),
                 args=[build(value,path+'.args['+str(i)+']',depth+1) for i,value in enumerate(node['args'])],
                 keywords=[ast.keyword(arg=k,value=build(value,path+'.kwargs.'+k,depth+1)) for k,value in node['kwargs'].items()])
-        operators = UNARY if kind == 'unary' else BINARY
+        operators = UNARY if kind == 'unary' else {**BINARY, **COMPARISONS}
         if node['operator'] not in operators:
             fail(path, 'Unsupported arithmetic operator')
         if kind == 'unary':
             return ast.UnaryOp(op=operators[node['operator']](),operand=build(node['input'],path+'.input',depth+1))
+        if node['operator'] in COMPARISONS:
+            return ast.Compare(left=build(node['left'],path+'.left',depth+1),ops=[operators[node['operator']]()],
+                comparators=[build(node['right'],path+'.right',depth+1)])
         return ast.BinOp(left=build(node['left'],path+'.left',depth+1),op=operators[node['operator']](),
             right=build(node['right'],path+'.right',depth+1))
 
@@ -122,7 +130,7 @@ def compile_expression(request: dict, resources: dict, scope: dict) -> dict:
         if len(json.dumps(request,allow_nan=False).encode()) > MAX_AST_BYTES:
             fail('$','Expression input exceeds byte budget','ast_budget')
         node = build(request)
-        skeleton = ast.unparse(ast.fix_missing_locations(node))
+        skeleton = protect_literal_braces(render_expression(node))
         template = dict(binding_version=2,skeleton=skeleton,input_slots=slots)
         exploratory = type(resources.get('technical_exploration_version')) is int and resources['technical_exploration_version'] == 1
         binding = bind_technical_template(template,resources['field_rows'],resources['operator_rows'],scope, allow_unknown=exploratory)
