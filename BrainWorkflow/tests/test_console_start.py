@@ -38,12 +38,16 @@ class OfficialPairedStartTests(unittest.TestCase):
             workspace = Path(tmp)
             config = workspace / 'skills-and-workflows/BrainWorkflow/configs'
             config.mkdir(parents=True)
-            with patch.object(worker, 'execute_start', return_value=dict(status='completed', passed=True)) as execute, redirect_stdout(io.StringIO()):
+            output = io.StringIO()
+            with patch.object(worker, 'execute_start', return_value=dict(status='completed', passed=True,
+                    title='\u81ea\u9009\u8303\u56f4')) as execute, redirect_stdout(output):
                 code = worker.main(['workflow-start', '--workspace-root', str(workspace),
                     '--knowledge-root', str(workspace / 'knowledge'), '--run-dir', str(workspace / 'runs'),
                     '--objective', 'offline', '--selected-option-id', 'option-1', '--selected-region', 'USA',
                     '--selected-delay', '1', '--selected-universe', 'TOP3000', '--start-request-id', 'offline'])
             self.assertEqual(code, 0)
+            wire = output.getvalue().encode('gbk')
+            self.assertEqual(json.loads(wire.decode('utf-8'))['title'], '\u81ea\u9009\u8303\u56f4')
             paths = execute.call_args.args[0]
             self.assertEqual(paths.project_root, workspace)
             self.assertEqual(paths.configuration_root, config.parent)

@@ -810,7 +810,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     paths = default_console_paths(args.knowledge_root, args.run_dir, project_root=args.workspace_root)
     result = execute_start(paths, vars(args), args.start_request_id)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(result, ensure_ascii=True, indent=2))
     return 0 if result.get("status") == "completed" and result.get("passed") is True else 2
 
 

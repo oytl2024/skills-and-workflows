@@ -2,6 +2,10 @@
 
 ## Nov27 Installation Audit
 
+Receipt transport repair:build20261127-111401-6560 is the current target after
+Git sync,using the same installed bundle/previous-only cleanup boundary. No
+knowledge,task,accounting or browser-session cleanup is authorized here.
+
 Second live integration repair:build20261127-105918-4954 supersedes the bundle
 below,under the same installer-only audited cleanup. Scientific manifests use
 their own16MB bounded read;coordination records retain2MB. Actual saved two-lane
