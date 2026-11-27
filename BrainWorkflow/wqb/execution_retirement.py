@@ -661,14 +661,16 @@ def _candidate_records(run: Path, package: dict, state: dict, checked: list, rec
            ('candidate_gate', 'user_approval', 'approved_queue')) or not approvals or not queue:
         raise ValueError('candidate_approval_or_preservation_incomplete')
     knowledge = Path(package['manifest']['knowledge_root']).absolute()
-    _read(knowledge, 'machine/candidate_evidence/self_pool_revision', refs, optional=True)
+    from wqb.candidate_evidence import candidate_evidence_root
+    evidence = candidate_evidence_root(knowledge)
+    _read(evidence, 'self_pool_revision', refs, optional=True)
     result = []
     for row in qualified:
         if not any(value.get('platform_alpha_id') == row['alpha_id']
                    and value.get('expression_hash') == row['expression_hash'] for value in gate):
             raise ValueError('candidate_qualified_result_not_recorded_at_gate')
-        relative = 'machine/candidate_evidence/' + hashlib.sha256(row['alpha_id'].encode()).hexdigest()+'.json'
-        cache = _read(knowledge, relative, refs)
+        relative = hashlib.sha256(row['alpha_id'].encode()).hexdigest()+'.json'
+        cache = _read(evidence, relative, refs)
         unsigned = {key: value for key, value in cache.items() if key != 'integrity_sha256'}
         verified = _verified_payload(row['alpha_id'], cache.get('alpha_detail'), cache.get('check_response'))
         identity = dict(alpha_id=row['alpha_id'], expression=row['expression'], settings=row['settings'])
@@ -685,7 +687,7 @@ def _candidate_records(run: Path, package: dict, state: dict, checked: list, rec
                 or not 0 <= before < end <= before + MAX_CANDIDATE_EVIDENCE_MAX_AGE_SECONDS):
             raise ValueError('candidate_cache_historical_times_invalid: ' + row['alpha_id'])
         result.append(dict(alpha_id=row['alpha_id'], expression_hash=row['expression_hash'],
-                           record=cache, source_ref=refs[str(knowledge / relative)], eligibility_revalidated=False))
+                           record=cache, source_ref=refs[str(evidence / relative)], eligibility_revalidated=False))
     return result
 
 

@@ -133,6 +133,16 @@ def _resource_certificate(run: Path, knowledge_root: Path, resources: dict, scop
     if direct_knowledge_enabled(resources) != direct_knowledge_enabled(policy):
         raise ValueError('DIRECT resources require matching frozen new-start policy')
     vault = Path(owner['knowledge_root'])
+    from wqb.live_research_resources import live_mode, verify_resources
+    if live_mode(resources) != live_mode(policy):
+        raise ValueError('live resource mode differs from owning Start')
+    if live_mode(policy):
+        verify_resources(resources, scope)
+        certificate = dict(schema_version=EXPLORATION_VERSION, kind='exploration_resources',
+            owning_run=owner, policy=policy, scope=deepcopy(scope), resources_sha256=_digest(resources),
+            source_index_sha256=_digest(resources['source_index']), sources=deepcopy(resources['source_index']))
+        certificate['content_sha256'] = _digest(certificate)
+        return certificate
     canonical = machine_resource_path(vault, 'source_index')
     index = _safe(vault, canonical.relative_to(vault).as_posix())
     if index.stat().st_size > MAX_INDEX_BYTES:

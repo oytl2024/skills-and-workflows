@@ -45,16 +45,24 @@ retirement remains phaseC;the deployed planner has not switched to online MCP.
 
 ## B: Live Read-Only Planner Resources
 
-- [ ] Resolve CNHK entry/dependency issues without credential persistence or broad tool exposure.
-- [ ] Expose scoped read-only tools plus existing compile/validate tools to planning.
-- [ ] Freeze only used resource responses and source identities into existing package.
-- [ ] Remove new-start dependence on global query index/catalog/old compile lifecycle.
+- [x] User selected compatible read-only interfaces through WQBClient, not upstream production execution.
+- [x] Implement isolated LiveResearchResources: six GET/OPTIONS interfaces, exact scope,
+  encoded filters, explicit bounded pages, provenance, cancellation and task-local cache.
+  Its request cap counts logical reads; underlying WQB transport attempts/retries remain separate.
+- [x] Implement bounded Skill/report Markdown reader with link/path containment.
+- [x] Connect these readers to the existing task-owned MCP broker and planner resolver.
+- [x] Expose scoped read-only tools plus existing compile/validate tools to planning.
+- [x] Freeze only used resource fragments/source identities into existing package;
+  discard full GET caches after sealing,revalidate completed selected inputs without new reads.
+- [x] Remove new-start dependence on global query index/catalog/old compile lifecycle.
 - [ ] Verify actual scoped workbench Start;preserve failed tasks and unknown submissions.
 
 ## C: Skill Maintenance And Retirement
 
-- [ ] Migrate useful existing experiences into Skill references,without catalog certification.
-- [ ] Write new reports to knowledge/researchreport,retain old report readers until migration.
-- [ ] Make explicit maintenance summarize reports into Skill change proposals.
+- [x] Migrate useful existing experiences into Skill references,without catalog certification.
+- [x] Write new reports to knowledge/researchreport,retain legacy report reader/publication
+  identity without making duplicate copies. Four existing reports and registry references migrated.
+- [x] Make explicit maintenance summarize reports into consolidated Skill guidance;
+  read at most the selected report cap,include prior learning,and never append repeated copies.
 - [ ] Audit dependencies/sensitive paths,Git sync,delete approved obsolete knowledge.
 - [ ] Update root module map,operation guide and deployed-version evidence.

@@ -7,6 +7,22 @@ from unittest.mock import patch
 
 
 class ResearchMCPTests(unittest.TestCase):
+    def test_cli_accepts_the_shared_live_resource_operation(self):
+        from wqb.retrieval_research_planning import main
+        with patch('wqb.retrieval_research_planning.query_design_task', return_value=dict(items=[])) as query, \
+                patch('wqb.retrieval_research_planning.emit_query_result'):
+            self.assertEqual(main(['query','--task-dir','task','--operation','get_datafields','--arguments','{}']),0)
+        query.assert_called_once_with(Path('task'),'get_datafields',{})
+
+    def test_live_tools_have_only_named_reads_skill_and_local_construction(self):
+        from wqb.research_mcp import task_tools
+        tools = task_tools(dict(identity=dict(config=dict(live_mcp_version=1))))
+        names = {row['name'] for row in tools}
+        self.assertEqual(names, {'query','get_datafields','get_datasets','get_operators','get_documentations',
+            'get_documentation_page','get_platform_setting_options','read_research_skill'})
+        self.assertEqual(tools[0]['inputSchema']['properties']['operation']['enum'], ['contract','compile','validate'])
+        self.assertTrue(all(row['annotations']['readOnlyHint'] for row in tools))
+
     def test_protocol_preserves_scope_budget_and_validation_diagnostics(self):
         from wqb.research_mcp import serve
         requests = [dict(jsonrpc='2.0', id=1, method='initialize', params=dict(protocolVersion='2025-06-18')),

@@ -89,6 +89,9 @@ def engineering_lessons_wiki_path(knowledge_root: str | Path) -> Path:
 
 def decision_artifacts_root(knowledge_root: str | Path) -> Path:
     """Input: knowledge root. Output: canonical decision directory. Locate active Console and workflow decisions."""
+    from wqb.research_skill_resources import skill_knowledge
+    if skill_knowledge(Path(knowledge_root)):
+        return Path(knowledge_root).parent / 'runs/decisions'
     return Path(knowledge_root) / DECISION_ARTIFACTS_ROOT
 
 

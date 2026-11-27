@@ -494,6 +494,19 @@ def _research_record_summary(run_dir: Path | None) -> dict[str, Any]:
 
 def _load_cold_console_state(paths: ConsolePaths) -> dict[str, Any]:
     """Input: ConsolePaths. Output: dict. Compile knowledge summaries outside the runtime path."""
+    from wqb.research_skill_resources import skill_knowledge
+    if skill_knowledge(paths.knowledge_root):
+        from wqb.multiplier_scope import read_scope_catalog
+        try:
+            scopes = read_scope_catalog(paths.knowledge_root)['scopes']
+        except (OSError,ValueError,KeyError):
+            scopes = []
+        return dict(knowledge_maintenance=dict(mode='research_skill'), semantic_compile={}, delivery_gate={},
+            freshness=dict(mode='live_mcp', issues=[]), knowledge_contracts=dict(mode='research_skill',issue_count=0),
+            data_coverage=dict(mode='live_mcp'), data_authority=dict(mode='live_mcp'), semantic_ledgers=dict(mode='live_mcp'),
+            startable_scopes=scopes, option_cards=_read_jsonl(existing_decision_artifact_path(
+                paths.knowledge_root,'research_option_cards.jsonl')), schedule={},proposals=[],proposal_counts={},ai_checkpoints=[],
+            milestone=_milestone_summary(paths.milestone_path))
     proposal_dir = existing_decision_artifact_path(
         paths.knowledge_root,
         "workflow_change_proposals.jsonl",

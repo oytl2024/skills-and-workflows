@@ -130,3 +130,38 @@ following exact test directories' workspace/runtime/desktop/webview2:
 - packaged-smoke-20261123-140145-2732
 - packaged-smoke-20261124-153058-12976
 - packaged-smoke-20261124-154256-23120
+
+## Nov27 Live-MCP Knowledge Retirement
+
+Explicit human approval: remove migrated obsolete knowledge, not sensitive
+profiles or runtime safety evidence. Exact deletion candidates relative to brain:
+
+- knowledge/raw (137 files, approximately349.87MiB)
+- knowledge/wiki (9 files, approximately0.03MiB)
+- knowledge/machine (41 files, approximately301.28MiB before state migration)
+
+No links/junctions were found in the audited knowledge tree. A filename audit of
+raw found no credential/password/token/cookie/session/.env targets. Exclude
+knowledge/.obsidian, knowledge/skills and knowledge/researchreport, all credentials
+and app/browser profiles, runs and unknown request/accounting state. Do not use
+wildcards or delete the knowledge root.
+
+Before deletion: preserve four terminal reports under knowledge/researchreport
+with matching byte hashes;move necessary Console decisions to runs/decisions,
+candidate revision state to runs/candidate_evidence,settings choices to
+runs/console_resources/platform_scopes.json;update report registry references.
+Useful nine-page wiki methods are distilled in the research Skill's
+references/legacy-lessons.md,including missing/unknown evidence limitations.
+
+Dependency replacement:live_mcp_version1 Start retrieves bounded platform facts;
+existing compiler/tree/certificates seal selected fragments without global
+inventories. Post-seal execution uses its package and dynamic safety state.
+Skill maintenance does not recreate retired inventories. Legacy readers stay for
+history;retired source inventories do not grant old-run Resume authority.
+
+Public code/tests/docs require verified commit/push/equality before deletion.
+Private knowledge is NOT Git-backed or uploaded for backup;its permanent deletion
+is explicitly authorized after migration,not falsely described as Git-recoverable.
+At audit time no directory has been deleted;record final measured bytes and
+post-cleanup validation separately below. Environment-policy-rejected paths
+elsewhere remain protected and are not retried by switching tools.

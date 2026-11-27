@@ -16,6 +16,20 @@ NATIVE_TIMEOUT_SECONDS = 30
 
 @unittest.skipUnless(DESKTOP_EXE, 'set WQB_TEST_DESKTOP_EXE for packaged query acceptance')
 class RetrievalDesktopTests(unittest.TestCase):
+    def test_native_live_resources_build_and_seal_without_old_knowledge(self):
+        """Input: frozen EXE client. Output: scoped mock-platform plan/Skill/AST/package proof through native transport."""
+        from tests.test_live_research_planning import LiveResearchPlanningTests
+        host = LiveResearchPlanningTests()
+        def native(directory, operation, arguments):
+            """Input: owned task Path/op/JSON dict. Output: real packaged client's quota-accounted response."""
+            reply = subprocess.run([DESKTOP_EXE,'--worker-module','wqb.retrieval_research_planning',
+                'query','--task-dir',str(directory),'--operation',operation,'--arguments',json.dumps(arguments)],
+                capture_output=True,timeout=30)
+            self.assertEqual(reply.returncode,0,reply.stderr)
+            return json.loads(reply.stdout)
+        with patch('wqb.retrieval_research_planning.query_design_task',side_effect=native):
+            host.test_one_plan_compiles_and_seals_without_raw_machine_or_wiki()
+
     def test_packaged_self_test_checks_runtime_learn_rendering(self):
         """Input: frozen EXE. Output: runtime rendering proven inside package, not delegated to source owner."""
         import tempfile

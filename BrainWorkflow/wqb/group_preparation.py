@@ -44,13 +44,23 @@ def prepare_group_lanes(paths, resources: list[dict], scope: dict, selected_opti
     if any(not rows for rows in field_sets) or len({_digest({'fields': rows}) for rows in field_sets}) != len(resources):
         raise ValueError('parallel lanes require distinct sourced data selections')
     rule_path = benchmark_rules_path_for_knowledge(paths.knowledge_root)
-    rules = load_benchmark_rules(rule_path)
+    from wqb.live_research_resources import live_mode
+    live = all(live_mode(resource) for resource in resources)
+    if any(live_mode(resource) for resource in resources) and not live:
+        raise ValueError('mixed live and legacy resources')
+    if live:
+        from wqb.benchmark_rules import default_benchmark_rules
+        rules = default_benchmark_rules()
+    else:
+        rules = load_benchmark_rules(rule_path)
     if not rules:
         raise ValueError('group preparation requires existing benchmark rules')
     policy = dict(paired_scout=True, exploration_scout=True, exploration_policy_version=1,
                   preplanned_tree_version=GROUP_POLICY_VERSION, deterministic_repair=True,
                   plan_depth=plan_depth, initial_hypotheses=initial_hypotheses,
                   parallel_workflows=len(resources), seed_selection_limit=8)
+    if live:
+        policy['live_mcp_version'] = 1
     if execution_package_version is not None:
         from wqb.execution_package import package_enabled
         policy['execution_package_version'] = execution_package_version
@@ -81,7 +91,7 @@ def prepare_group_lanes(paths, resources: list[dict], scope: dict, selected_opti
         snapshot = dict(artifact_binding_version=START_SNAPSHOT_VERSION, selected_option=deepcopy(selected_option),
             selected_scope=deepcopy(scope), research_policy=deepcopy(policy),
             tree_comparison_policy=deepcopy(TREE_COMPARISON_POLICY),
-            benchmark_rulebook=dict(path=rule_path.relative_to(paths.knowledge_root).as_posix(),
+            benchmark_rulebook=dict(path='script/default-benchmark-rules-v1' if live else rule_path.relative_to(paths.knowledge_root).as_posix(),
                 sha256=benchmark_rulebook_digest(rules), rules=[benchmark_rule_to_dict(rule) for rule in rules]))
         manifest = dict(run_id=run.name, knowledge_root=str(Path(paths.knowledge_root).resolve()),
                         selected_option_id=selected_option['option_id'], selected_scope=scope,

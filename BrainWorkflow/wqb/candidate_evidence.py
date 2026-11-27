@@ -94,7 +94,14 @@ def _cache_path(client, alpha_id: str) -> Path | None:
     if not isinstance(root, (str, Path)) or not Path(root).is_absolute() or not Path(root).is_dir():
         return None
     key = hashlib.sha256(alpha_id.encode("utf-8")).hexdigest()
-    return Path(root) / "machine" / "candidate_evidence" / f"{key}.json"
+    return candidate_evidence_root(Path(root)) / f"{key}.json"
+
+
+def candidate_evidence_root(knowledge_root: Path) -> Path:
+    """Input: knowledge Path. Output: runtime evidence directory for Skill mode, legacy directory otherwise."""
+    from wqb.research_skill_resources import skill_knowledge
+    root = Path(knowledge_root)
+    return root.parent / 'runs/candidate_evidence' if skill_knowledge(root) else root / 'machine/candidate_evidence'
 
 
 def _cache_options(client, alpha_id: str) -> tuple[Path, float] | None:
@@ -140,7 +147,7 @@ def invalidate_self_pool(knowledge_root: Path, cause: str) -> None:
     """Input: vault Path, stable cause str. Output: None. Invalidate all prior SELF eligibility once per cause."""
     if not isinstance(cause, str) or not cause.strip():
         raise ValueError('SELF pool invalidation requires a cause')
-    path = Path(knowledge_root) / 'machine/candidate_evidence' / SELF_POOL_REVISION_FILENAME
+    path = candidate_evidence_root(Path(knowledge_root)) / SELF_POOL_REVISION_FILENAME
     with json_lock_transition_guard(path, EVIDENCE_LOCK_TIMEOUT_SECONDS, EVIDENCE_LOCK_SLEEP_SECONDS,
                                     'candidate SELF pool is busy'):
         try:

@@ -19,7 +19,8 @@
     "expression_tool_version": 1,
     "execution_package_version": 1,
     "multiplier_scope_version": 1,
-    "direct_knowledge_version": 1
+    "direct_knowledge_version": 1,
+    "live_mcp_version": 1
   },
   "lanes": [
     "knowledge-readiness",

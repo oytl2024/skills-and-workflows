@@ -124,6 +124,21 @@ def read_scope_catalog(root: Path) -> dict:
     """Input: vault Path. Output: source-recompiled settings choices with original age; no network or data-field admission gate."""
     from wqb.console_api import _read, _safe
     root = Path(root).absolute()
+    from wqb.research_skill_resources import skill_knowledge
+    if skill_knowledge(root):
+        path = root.parent / 'runs/console_resources/platform_scopes.json'
+        if path.is_symlink() or path.is_junction() or path.stat().st_size > MAX_SETTINGS_BYTES:
+            raise ValueError('invalid Console settings snapshot')
+        value = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(value.get('scopes'),list) or not 1 <= len(value['scopes']) <= MAX_SCOPES:
+            raise ValueError('invalid Console scope choices')
+        for choice in value['scopes']:
+            _token(choice['region'])
+            _token(choice['universe'])
+            if type(choice['delay']) is not int or choice['delay'] < 0:
+                raise ValueError('invalid Console delay choice')
+        captured = _capture_time(value['captured_at'])
+        return dict(value, stale=(datetime.now(timezone.utc)-captured).total_seconds() > KNOWLEDGE_MAX_AGE_DAYS*86400)
     receipt = _read(root, CATALOG_PATH)
     relative = receipt.get('source_path')
     if not isinstance(relative, str) or not re.fullmatch(r'raw/platform/learn/\d{4}-\d{2}-\d{2}/multiplier-scope-options-[0-9a-f]{64}\.md', relative):

@@ -20,6 +20,7 @@ MAX_TOOL_ARGUMENT_BYTES = 64_000
 MAX_SELECTION = 30
 MAX_HISTORY_SELECTION = 12
 MAX_CONTRACT_CHARS = 8000
+LIVE_RESPONSES_PATH = 'runtime/retrieval_research_planning/resources.json'
 CONTRACT_SECTIONS = ('overview', 'composition_contract', 'tool_contracts', 'output_schema')
 LOCK_SECONDS = 5.0
 LOCK_POLL_SECONDS = 0.05
@@ -27,7 +28,7 @@ CONFIG_KEYS = ('instrument_type', 'region', 'delay', 'universe', 'decay', 'neutr
     'truncation', 'pasteurization', 'unit_handling', 'nan_handling', 'language',
     'measurement_period', 'research_policy', 'repair_search_policy', 'direct_knowledge_version',
     'retrieval_excluded_selections', 'retrieval_owner', 'retrieval_max_queries',
-    'retrieval_max_validations', 'retrieval_max_returned_bytes', 'expression_tool_version', 'independent_tasks_version')
+    'retrieval_max_validations', 'retrieval_max_returned_bytes', 'expression_tool_version', 'independent_tasks_version', 'live_mcp_version')
 TOOL_CONTRACTS = {
     'compile': dict(arguments=dict(expression='structural AST object, not a formula string'),
         purpose='New expression-tool mode: build/type-check a scoped expression and return its receipt/diagnostics.'),
@@ -85,12 +86,23 @@ def design_schema(*, expression_tool: bool = False) -> dict:
 
 def _generation(root: Path, config: dict) -> str:
     """Input: vault Path/config dict. Output: prepared or validated read-only catalog generation str."""
+    from wqb.live_research_resources import live_mode
+    if live_mode(config):
+        return _digest(dict(mode='live_mcp_v1', knowledge_root=str(Path(root).absolute())))
     from wqb.research_query_index import prepare_query_index, validate_query_generation
     if config.get('retrieval_catalog_generation'):
         token = config['retrieval_catalog_generation']
         validate_query_generation(root, token)
         return token
     return prepare_query_index(root)['generation']
+
+
+def _validate_generation(task: dict) -> None:
+    """Input: saved task dict. Output: None; live tasks do not depend on a global catalog generation."""
+    from wqb.live_research_resources import live_mode
+    if not live_mode(task['identity'].get('config', {})):
+        from wqb.research_query_index import validate_query_generation
+        validate_query_generation(Path(task['identity']['knowledge_root']), task['identity']['generation'])
 
 
 def _save(directory: Path, task: dict) -> None:
@@ -122,7 +134,7 @@ def authenticated_design_task(directory: Path) -> dict:
     if task['status'] != 'running':
         raise ValueError('query requires the owning running design task')
     identity = task['identity']
-    validate_query_generation(Path(identity['knowledge_root']), identity['generation'])
+    _validate_generation(task)
     owner = identity['config'].get('retrieval_owner')
     if owner:
         from wqb.console_start import read_start_request, PREPARING_STATUSES, _source_intent
@@ -185,7 +197,8 @@ def _attach_cited_sources(root: Path, resources: dict, refs: list[dict]) -> dict
     return result
 
 
-def _resolved_context(task: dict, selection: list[tuple[str, str]], refs: list[dict] | None = None) -> tuple[dict, dict, dict]:
+def _resolved_context(task: dict, selection: list[tuple[str, str]], refs: list[dict] | None = None,
+                      operator_names: set | None = None) -> tuple[dict, dict, dict]:
     """Input: authenticated task/selected pairs. Output: actual resource, annotation context and finite Repair policy."""
     from wqb.generator import build_settings
     from wqb.research_resource_catalog import read_selected_catalog_resources
@@ -195,7 +208,23 @@ def _resolved_context(task: dict, selection: list[tuple[str, str]], refs: list[d
     config = identity['config']
     from wqb.direct_knowledge import direct_knowledge_enabled
     direct = direct_knowledge_enabled(config)
-    resources, diagnostics = read_selected_catalog_resources(Path(identity['knowledge_root']),
+    from wqb.live_research_resources import live_mode, selected_resources
+    if live_mode(config):
+        if task.get('status') == 'completed':
+            from wqb.live_research_resources import verify_resources
+            resources = deepcopy(task['result']['resources'])
+            verify_resources(resources,identity['scope'])
+            if {(row['dataset_id'],row['field_id']) for row in resources['field_rows']} != set(selection):
+                raise ValueError('completed live selection changed')
+        else:
+            saved = json.loads(_safe(Path(identity['task_directory']), LIVE_RESPONSES_PATH).read_text(encoding='utf-8'))
+            if saved['input_sha256'] != task['input_sha256']:
+                raise ValueError('live resource owner changed')
+            resources = selected_resources(saved['responses'], selection, identity['scope'],
+                build_settings({**config, **{key: identity['scope'][key] for key in ('instrument_type','region','delay','universe')}}),
+                operators=operator_names)
+    else:
+        resources, diagnostics = read_selected_catalog_resources(Path(identity['knowledge_root']),
         identity['scope'], selection, generation=identity['generation'], settings=build_settings(
             {**config, **{key: identity['scope'][key] for key in ('instrument_type', 'region', 'delay', 'universe')}}),
         **(dict(direct_knowledge_version=1) if direct else {}))
@@ -204,7 +233,7 @@ def _resolved_context(task: dict, selection: list[tuple[str, str]], refs: list[d
         resources['expression_tool_version']=1
         if config.get('independent_tasks_version') == 1:
             resources['technical_exploration_version']=1
-    if refs:
+    if refs and not live_mode(config):
         resources = _attach_cited_sources(Path(identity['knowledge_root']), resources, refs)
     repair = _repair_policy(resources, config.get('repair_search_policy'))
     manifest = dict(start_snapshot=dict(repair_search_policy=repair))
@@ -218,6 +247,9 @@ def _selected_history(task: dict, selected: list) -> dict:
         raise ValueError('invalid bounded history selection')
     if not selected:
         return dict(schema_version=1, groups=[])
+    from wqb.live_research_resources import live_mode
+    if live_mode(task['identity'].get('config', {})):
+        raise ValueError('live-MCP history is read through Skill/report tools; history_selection must be empty')
     from wqb.research_queries import _read
     from wqb.research_query_index import validate_query_generation
     root = Path(task['identity']['knowledge_root'])
@@ -252,7 +284,7 @@ def _resolve_answer(task: dict, answer: dict) -> dict:
     from wqb.research_query_index import validate_query_generation
     identity = task['identity']
     root = Path(identity['knowledge_root'])
-    validate_query_generation(root, identity['generation'])
+    _validate_generation(task)
     _check_schema(task['brief']['output_schema'], answer)
     if not answer['designs'] or not answer['tree']['nodes']:
         raise ValueError('model_returned_no_plan: ' + answer['summary'][:1000])
@@ -260,7 +292,8 @@ def _resolve_answer(task: dict, answer: dict) -> dict:
     generic=expression_mode(identity['config'])
     if generic:
         answer=dict(answer,selection=selected_fields(answer['designs']))
-    resources, annotation, repair = _resolved_context(task, _identities(answer), [] if generic else _design_source_refs(answer['designs']))
+    resources, annotation, repair = _resolved_context(task, _identities(answer), [] if generic else _design_source_refs(answer['designs']),
+        operator_names=_operator_names(answer['designs']) if generic else None)
     if generic:
         from wqb.preplanned_start import _repair_policy
         from wqb.initial_research_planning import _annotation_context
@@ -291,9 +324,28 @@ def _resolve_answer(task: dict, answer: dict) -> dict:
         for arm in item['compiled']['experiment']['arms'] for b in arm['binding']['bindings'].values())
     if used != set(_identities(answer)):
         raise ValueError('final selection must contain exactly the fields used by the tree')
-    validate_query_generation(root, identity['generation'])
+    _validate_generation(task)
     return dict(resources=resources, answer=actual_answer, repair_search_policy=repair,
                 selected_context=selected_context)
+
+
+def _operator_names(value) -> set:
+    """Input: structural designs/recipes. Output: operator-name set, including finite Repair wrappers."""
+    found = set()
+    def visit(node, depth=0):
+        """Input: JSON subtree/depth int. Output: None; bounded collection, never expression execution."""
+        if depth > 64:
+            raise ValueError('design resource traversal exceeds depth budget')
+        if isinstance(node, dict):
+            if node.get('kind') == 'call' and isinstance(node.get('operator'), str):
+                found.add(node['operator'])
+            for item in node.values():
+                visit(item, depth + 1)
+        elif isinstance(node, list):
+            for item in node:
+                visit(item, depth + 1)
+    visit(value)
+    return found
 
 
 def prepare_retrieval_design(directory: Path, knowledge: Path, scope: dict, option: dict,
@@ -319,6 +371,15 @@ def prepare_retrieval_design(directory: Path, knowledge: Path, scope: dict, opti
     identity = dict(schema_version=1, knowledge_root=str(knowledge), scope=deepcopy(scope),
         objective=deepcopy(option), generation=generation, policy=policy, config=selected_config,
         design_contract=contract)
+    from wqb.live_research_resources import live_mode, RESOURCE_TOOLS
+    if live_mode(config):
+        identity['task_directory'] = str(directory)
+        contract['tools'] = {key: deepcopy(value) for key,value in TOOL_CONTRACTS.items() if key in ('contract','compile','validate')}
+        contract['tools']['skill'] = dict(arguments=dict(path='optional skills/brain-research/*.md or researchreport/*.md',
+            start='character offset', length='1..8000', offset='discovery offset', limit='1..50'), purpose='Read research methods and prior report evidence.')
+        for name in RESOURCE_TOOLS:
+            contract['tools'][name] = dict(arguments=('page_id for documentation page; search,dataset_id,limit,offset for fields; '
+                'search,limit,offset for datasets; otherwise empty object'), purpose='Bounded live read through WQBClient; scope is fixed by the task.')
     expected = _digest(identity)
     with json_lock_transition_guard(directory / 'retrieval_guard', LOCK_SECONDS, LOCK_POLL_SECONDS,
                                     'retrieval planning task busy'):
@@ -337,8 +398,8 @@ def prepare_retrieval_design(directory: Path, knowledge: Path, scope: dict, opti
         brief = dict(schema_version=1, objective=option, scope=scope, generation=generation,
             plan_depth=policy['plan_depth'], max_width=policy['initial_hypotheses'],
             measurement_period=config['measurement_period'], output_schema=deepcopy(contract['output_schema']),
-            tools=['contract', 'fields', 'operators', 'templates', 'experience', 'resources', 'source', 'compile', 'validate'],
-            tool_contracts=deepcopy(TOOL_CONTRACTS),
+            tools=list(contract['tools']),
+            tool_contracts=deepcopy(contract['tools']),
             tool_limits=deepcopy(limits),
             excluded_selections=deepcopy(config.get('retrieval_excluded_selections', [])),
             composition_contract=COMPOSITION_CONTRACT if generic else initial.__doc__,
@@ -352,7 +413,7 @@ def prepare_retrieval_design(directory: Path, knowledge: Path, scope: dict, opti
         _save(directory, task)
     try:
         from wqb.research_tool_service import local_tool_service
-        with local_tool_service(directory, task):
+        with local_tool_service(directory, task, check_cancelled=check_cancelled):
             answer = model_runner(deepcopy(brief))
     except Exception as error:
         task.update(status='unknown', reason='model_outcome_unknown: ' + type(error).__name__ + ': ' + str(error)[:500])
@@ -402,7 +463,7 @@ def _task_contract(task: dict, arguments: dict) -> dict:
         scope=deepcopy(brief['scope']), generation=task['identity']['generation'], authority='planning_contract_only')
 
 
-def _query_design_task_local(directory: Path, operation: str, arguments: dict) -> dict:
+def _query_design_task_local(directory: Path, operation: str, arguments: dict, *, live_reader=None) -> dict:
     """Input: running task Path/op/JSON arguments. Output: bounded read-only knowledge or offline validation result."""
     task = authenticated_design_task(directory)
     if operation == 'contract':
@@ -413,6 +474,22 @@ def _query_design_task_local(directory: Path, operation: str, arguments: dict) -
             or len(json.dumps(arguments, ensure_ascii=False).encode()) > MAX_TOOL_ARGUMENT_BYTES):
         raise ValueError('oversized or invalid local query arguments')
     identity = task['identity']
+    from wqb.live_research_resources import live_mode, RESOURCE_TOOLS
+    if live_mode(identity['config']):
+        if operation in RESOURCE_TOOLS:
+            if live_reader is None:
+                raise ValueError('live resources require the task-owned broker')
+            result = live_reader.query(operation, arguments)
+            _write(_safe(directory, LIVE_RESPONSES_PATH), dict(input_sha256=task['input_sha256'],
+                responses=list(live_reader.cache.values())))
+            if 'items' in result:
+                result = {key:value for key,value in result.items() if key != 'payload'}
+            return result
+        if operation == 'skill':
+            from wqb.research_skill_resources import query_skill
+            return query_skill(Path(identity['knowledge_root']), arguments)
+        if operation not in ('compile','validate'):
+            raise ValueError('live planning reads only platform resource tools and research Skill')
     if operation == 'compile':
         from wqb.expression_planning import expression_mode, selected_fields
         from wqb.expression_tools import compile_expression
@@ -420,7 +497,8 @@ def _query_design_task_local(directory: Path, operation: str, arguments: dict) -
             if not expression_mode(identity['config']) or set(arguments) != {'expression'}:
                 raise ValueError('compile requires expression_tool_version1 and expression argument')
             fields=selected_fields([dict(baseline=arguments['expression'])])
-            resources,context,_=_resolved_context(task,_identities(dict(selection=fields)))
+            resources,context,_=_resolved_context(task,_identities(dict(selection=fields)),
+                operator_names=_operator_names(arguments['expression']))
             result=compile_expression(arguments['expression'],resources,identity['scope'])
             return dict(result,annotation_context=context,authority='offline_only')
         except (ValueError,TypeError,KeyError,OSError) as error:
@@ -565,11 +643,11 @@ def emit_query_result(value: dict) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     """Input: local query CLI arguments. Output: JSON/exit code; never create a task, compile knowledge or call WQB."""
+    from wqb.research_tool_service import OPERATIONS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['query', 'mcp'])
     parser.add_argument('--task-dir', required=True, type=Path)
-    parser.add_argument('--operation',
-                        choices=['contract', 'fields', 'operators', 'templates', 'experience', 'resources', 'source', 'compile', 'validate'])
+    parser.add_argument('--operation', choices=sorted(OPERATIONS))
     parser.add_argument('--arguments', default='{}')
     args = parser.parse_args(argv)
     if args.command == 'query' and args.operation is None:

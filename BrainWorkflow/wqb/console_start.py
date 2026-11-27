@@ -32,11 +32,11 @@ START_CONFIG_FIELDS = (
     'request_timeout_seconds', 'max_retries', 'base_backoff_seconds', 'max_alphas_per_round',
     'max_rounds', 'runtime_max_steps', 'runtime_no_progress_limit', 'max_runtime_seconds',
     'max_recoveries', 'live_api_enabled', 'parallel_workflows', 'plan_depth', 'initial_hypotheses',
-    'retrieval_max_queries', 'retrieval_max_validations', 'retrieval_max_returned_bytes', 'expression_tool_version', 'independent_tasks_version',
+    'retrieval_max_queries', 'retrieval_max_validations', 'retrieval_max_returned_bytes', 'expression_tool_version', 'independent_tasks_version', 'live_mcp_version',
 )
 START_POLICY_FIELDS = ('preplanned_tree_version', 'paired_scout', 'exploration_scout',
     'exploration_policy_version', 'parallel_workflows', 'plan_depth', 'initial_hypotheses',
-    'execution_package_version', 'multiplier_scope_version', 'retrieval_design_version', 'direct_knowledge_version', 'expression_tool_version')
+    'execution_package_version', 'multiplier_scope_version', 'retrieval_design_version', 'direct_knowledge_version', 'expression_tool_version', 'live_mcp_version')
 
 
 def load_start_config(paths) -> dict:
@@ -63,6 +63,10 @@ def load_start_config(paths) -> dict:
     if type(version) is not int or version not in (0, 1):
         raise ValueError('preplanned_tree_version must be integer 0 or 1')
     clean['research_policy'] = {key: policy[key] for key in START_POLICY_FIELDS if key in policy}
+    from wqb.live_research_resources import live_mode
+    if live_mode(config):
+        clean['live_mcp_version'] = 1
+        clean['research_policy']['live_mcp_version'] = 1
     from wqb.expression_planning import expression_mode
     if expression_mode(dict(config,research_policy=policy)):
         clean['expression_tool_version']=1
@@ -627,6 +631,11 @@ def _prepare_multiplier_start(paths, original: dict) -> dict:
 
     try:
         check_cancelled(force=True)
+        from wqb.live_research_resources import live_mode
+        if live_mode(original['preplanned_config']):
+            progress(dict(stage='planning', status='completed', field_source='live_mcp',
+                warning='The planning task retrieves scoped resources directly; no inventory capture/compile.'))
+            return read_start_request(paths.runs_root)
         if original['preplanned_config'].get('direct_knowledge_version') == 1:
             from wqb.research_query_index import prepare_query_index, query_fields
             generation = prepare_query_index(paths.knowledge_root)['generation']

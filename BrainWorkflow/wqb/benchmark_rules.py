@@ -158,6 +158,7 @@ def _is_accepted_start_snapshot_rulebook_path(path_value: Any) -> bool:
     if not isinstance(path_value, str):
         return False
     accepted = {
+        'script/default-benchmark-rules-v1',
         BENCHMARK_RULES_PATH.as_posix(),
         *(path.as_posix() for path in LEGACY_START_SNAPSHOT_BENCHMARK_RULES_PATHS),
     }

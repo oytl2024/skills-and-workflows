@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from wqb.runtime_control import _write
 from wqb.semantic_compilation import _safe
+from wqb.live_research_resources import RESOURCE_TOOLS
 
 
 BROKER_PATH = 'runtime/retrieval_research_planning/broker.json'
@@ -27,6 +28,7 @@ DEFAULT_MAX_VALIDATIONS = 24
 DEFAULT_MAX_RETURNED_BYTES = 1_048_576
 CLIENT_WAIT_SECONDS = 30
 OPERATIONS = {'contract', 'fields', 'operators', 'templates', 'experience', 'source', 'resources', 'compile', 'validate'}
+OPERATIONS = OPERATIONS | set(RESOURCE_TOOLS) | {'skill'}
 
 
 def record_tool_diagnostic(directory: Path, operation: str, arguments: dict,
@@ -122,9 +124,15 @@ class ToolBudget:
 
 
 @contextmanager
-def local_tool_service(directory: Path, task: dict):
+def local_tool_service(directory: Path, task: dict, *, check_cancelled=lambda: None):
     """Input: running task Path/state. Output: owner-only local service lifetime; no platform/model actions."""
     config = task['identity']['config']
+    from wqb.live_research_resources import live_mode, LiveResearchResources
+    live_reader = None
+    if live_mode(config):
+        from wqb.client import WQBClient
+        live_reader = LiveResearchResources(WQBClient(timeout_seconds=12, max_retries=0),
+            task['identity']['scope'], check_cancelled=check_cancelled)
     budget = ToolBudget(tool_limits(config))
     token = task['input_sha256']
     family = 'AF_PIPE' if os.name == 'nt' else 'AF_INET'
@@ -169,7 +177,8 @@ def local_tool_service(directory: Path, task: dict):
                         activity_at=datetime.now(timezone.utc).isoformat(), **budget.snapshot())
                     _write(_safe(directory, PROGRESS_PATH), progress)
                     result = budget.execute(operation, request['arguments'],
-                        lambda op, args: _query_design_task_local(directory, op, args))
+                        lambda op, args: _query_design_task_local(directory, op, args,
+                            **({'live_reader': live_reader} if live_reader is not None else {})))
                     response = dict(result=result)
                 except Exception as error:
                     response = dict(error=type(error).__name__, message=str(error)[:1000])

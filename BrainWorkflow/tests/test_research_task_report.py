@@ -26,12 +26,30 @@ class ResearchTaskReportTests(unittest.TestCase):
             self.assertFalse((root / 'knowledge/raw/research').exists())
             update_task(root / 'runs', task['task_id'], status='failed', reason='Unknown signature')
             path = publish_report(root / 'runs', task['task_id'], root / 'knowledge')
+            self.assertEqual(path.parent, root / 'knowledge/researchreport')
             body = path.read_text(encoding='utf-8')
             self.assertIn('Economic hypothesis retained', body)
             self.assertNotIn('omit this', body)
             rows = load_research_record_ledger(root / 'knowledge')
             self.assertEqual([row['run_id'] for row in rows], [task['task_id']])
             self.assertEqual(rows[0]['final_state'], 'failed')
+
+    def test_legacy_report_remains_readable_without_duplicate_publication(self):
+        from wqb.research_tasks import create_task, update_task
+        from wqb.research_task_report import publish_report, load_report_records
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            knowledge = root / 'knowledge'
+            task = create_task(root / 'runs', 'one', dict(scope={}))
+            update_task(root / 'runs', task['task_id'], status='failed', reason='Ended')
+            path = publish_report(root / 'runs', task['task_id'], knowledge)
+            legacy = knowledge / 'machine/researchreport' / path.name
+            legacy.parent.mkdir(parents=True)
+            path.replace(legacy)
+            update_task(root / 'runs', task['task_id'], report_path=str(legacy))
+            self.assertEqual(publish_report(root / 'runs', task['task_id'], knowledge), legacy)
+            self.assertEqual(len(load_report_records(knowledge)), 1)
+            self.assertFalse(path.exists())
 
     def test_terminal_report_contains_every_point_and_error_once(self):
         from wqb.research_tasks import create_task, task_runs_root, update_task

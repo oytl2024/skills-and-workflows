@@ -156,6 +156,10 @@ def run_knowledge_maintenance(
 ) -> dict[str, Any]:
     """Input: knowledge root and compile settings. Output: maintenance report. Run compile, cleanup, and health verification."""
     generated = generated_at or _now()
+    from wqb.research_skill_resources import skill_knowledge
+    if skill_knowledge(Path(knowledge_root)):
+        from wqb.research_skill_maintenance import maintain_skill
+        return maintain_skill(Path(knowledge_root),max_reports=min(max_case_reports,20))
     from wqb.knowledge_paths import current_only_knowledge
     if current_only_knowledge(knowledge_root):
         return _maintain_current_product(Path(knowledge_root), generated, max_case_reports)

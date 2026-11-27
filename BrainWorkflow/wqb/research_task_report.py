@@ -130,10 +130,13 @@ def publish_report(root: Path, task_id: str, knowledge: Path) -> Path:
     task = read_task(root, task_id)
     if task['status'] not in TERMINAL:
         raise ValueError('report requires a terminal task')
-    directory = _safe(Path(knowledge) / 'machine/researchreport')
+    directory = _safe(Path(knowledge) / 'researchreport')
     directory.mkdir(parents=True, exist_ok=True)
     path = _safe(directory / (task_id + '.md'))
     with json_lock_transition_guard(Path(task['runs_root']).parent / 'report', 5, .02, 'report publication busy'):
+        legacy = _safe(Path(knowledge) / 'machine/researchreport' / (task_id + '.md'))
+        if not path.exists() and legacy.exists():
+            path = legacy
         if not path.exists():
             body = render_report(task)
             temporary = _safe(directory / ('.' + uuid4().hex + '.tmp'))
@@ -146,13 +149,21 @@ def publish_report(root: Path, task_id: str, knowledge: Path) -> Path:
     return path
 
 
-def load_report_records(knowledge: Path) -> list[dict]:
+def load_report_records(knowledge: Path, *, max_reports: int | None = None) -> list[dict]:
     """Input: vault Path. Output: in-memory research rows for existing summary readers; no duplicate ledger writes."""
-    directory = _safe(Path(knowledge) / 'machine/researchreport')
-    if not directory.exists():
-        return []
+    directories = [_safe(Path(knowledge) / name) for name in ('researchreport', 'machine/researchreport')]
+    paths = {}
+    for directory in directories:
+        if directory.exists():
+            for path in sorted(directory.glob('*.md')):
+                paths.setdefault(path.stem, path)
     rows = []
-    for path in sorted(directory.glob('*.md')):
+    selected = list(paths.values())
+    if max_reports is not None:
+        if type(max_reports) is not int or max_reports <= 0:
+            raise ValueError('report limit must be positive')
+        selected = sorted(selected,key=lambda path:path.stat().st_mtime_ns)[-max_reports:]
+    for path in selected:
         _safe(path)
         text = path.read_text(encoding='utf-8')
         if not text.startswith('<!-- research-task-report:v1 -->'):

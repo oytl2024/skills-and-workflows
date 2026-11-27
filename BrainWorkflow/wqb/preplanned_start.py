@@ -170,6 +170,12 @@ def _catalog_field_sources(root: Path, row: dict, scope: dict, texts: dict, inde
 
 def _validate_resource(root: Path, resource: dict, scope: dict, ledger: list[dict], index: dict) -> dict:
     """Input: vault/resource/scope/canonical ledger/index. Output: validated copied compiler resources dict."""
+    from wqb.live_research_resources import live_mode, verify_resources
+    if live_mode(resource):
+        from wqb.hypothesis_template_compiler import _settings
+        verify_resources(resource, scope)
+        _settings(resource['settings'], scope)
+        return deepcopy(resource)
     if resource.get('expression_tool_version') == 1:
         from wqb.hypothesis_template_compiler import _settings
         _settings(resource['settings'],scope)
@@ -567,6 +573,9 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
         identity = dict(knowledge_root=str(root), selected_option=selected_option, authority=authority,
                         scope=scope, measurement_period=period, policy=policy, settings=settings,
                         repair_search_policy=supplied_repair)
+        from wqb.live_research_resources import live_mode
+        if live_mode(config):
+            identity['live_mcp_version'] = 1
         if retrieval:
             identity['retrieval_design_version'] = retrieval
         if generic:
@@ -673,16 +682,21 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
             for lane_index, (lane, resource) in enumerate(zip(group['lanes'], state['resources'])):
                 check()
                 _unchanged_group(state)
-                if retrieval:
+                from wqb.live_research_resources import live_mode
+                if live_mode(resource):
+                    origin = state['retrieval_tasks'][lane_index]
+                    ledger, source_index = [], {}
+                elif retrieval:
                     from wqb.research_query_index import read_field_rows
                     origin = state['retrieval_tasks'][lane_index]
                     ledger = read_field_rows(root, origin['generation'], scope,
                         [(row['dataset_id'], row['field_id']) for row in resource['field_rows']])
+                    source_index = {r['path']: r for r in _audit_resource_rows(machine_resource_path(root, 'source_index'), root)}
                 else:
                     ledger = list(_audit_resource_rows(machine_resource_path(root, 'data_ledger'), root))
+                    source_index = {r['path']: r for r in _audit_resource_rows(machine_resource_path(root, 'source_index'), root)}
                 _validate_resource(root, resource, scope,
-                    ledger,
-                    {r['path']: r for r in _audit_resource_rows(machine_resource_path(root, 'source_index'), root)})
+                    ledger, source_index)
                 run = runs / lane['run_id']
                 if _repair_policy(resource, supplied_repair, rulebook=default_rulebook) != state['repair_policies'][lane_index]:
                     raise ValueError('frozen initial Repair rules or traits changed')
@@ -736,6 +750,10 @@ def prepare_preplanned_start(paths, selected_option: dict, authority: dict, conf
                 _load(runs / lane['run_id'])
             result['warnings'].extend(REPAIR_DIAGNOSTICS)
             result.update(status='completed', reason='', group=completed)
+            if live_mode(config):
+                from wqb.retrieval_research_planning import LIVE_RESPONSES_PATH
+                for origin in state['retrieval_tasks']:
+                    _safe(Path(origin['task_dir']),LIVE_RESPONSES_PATH).unlink(missing_ok=True)
             return result
     except (OSError, ValueError, TypeError, KeyError, RuntimeError, TimeoutError) as error:
         result['reason'] = 'preplanned_start_blocked:' + str(error)
